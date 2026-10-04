@@ -29,7 +29,6 @@ import {
   listPostingsByOrder,
   type ProductionWipPostingRow,
 } from '../../read/projections/production_wip_ledger.js';
-import { getInventoryValuation } from '../../read/projections/inventory_valuation.js';
 import { getBackflushShortfall } from '../../read/projections/production_wip_ledger.js';
 import { resolveMaterialRequirements } from '../../production/material-staging.js';
 import { isLocationDescendantOf } from '../../compliance/production-material.js';
@@ -550,21 +549,6 @@ const issueMaterialBase: RouteHandler = async (req, res, params) => {
         },
       );
     }
-    // WIP_COST_UNRESOLVED pre-check (the seam re-checks under lock).
-    const valuation = await getInventoryValuation(stage.component_sku);
-    if (!valuation || valuation.running_average_cost === null) {
-      throw new AppError(
-        409,
-        'WIP_COST_UNRESOLVED',
-        'No priced valuation basis exists for the issued component',
-        {
-          production_order_id: orderId,
-          stage_id: stage.stage_id,
-          component_sku: stage.component_sku,
-        },
-      );
-    }
-
     const persisted = await persistEvent(
       {
         stream_type: 'production',
@@ -692,20 +676,6 @@ const recordConfirmationBase: RouteHandler = async (req, res, params) => {
         { production_order_id: orderId, shortfall_lines: shortfallLines },
       );
     }
-    // WIP_COST_UNRESOLVED pre-check per backflush SKU (the seam re-checks under lock, resolved
-    // before the drain so a missing valuation never follows a stock movement).
-    for (const sku of skuGroups.keys()) {
-      const valuation = await getInventoryValuation(sku);
-      if (!valuation || valuation.running_average_cost === null) {
-        throw new AppError(
-          409,
-          'WIP_COST_UNRESOLVED',
-          'No priced valuation basis exists for the backflushed component',
-          { production_order_id: orderId, component_sku: sku },
-        );
-      }
-    }
-
     const persisted = await persistEvent(
       {
         stream_type: 'production',

@@ -293,3 +293,32 @@ describe('Story 1.12 session: active session registry', () => {
     assert.equal(getActiveSession(), null);
   });
 });
+
+describe('session display name (simulated pilot 2026-09-23)', () => {
+  // Shown in the header when bootstrap refuses the account's site, instead of a made-up person.
+  it('prefers the token profile name, then the username, then the email', async () => {
+    const named = new EdgeSession({
+      config: OIDC,
+      manager: new FakeManager({
+        user: { ...live, profile: { name: 'Asha Rao', email: 'accounts@example.org' } },
+      }),
+    });
+    assert.equal(await named.getDisplayName(), 'Asha Rao');
+    const emailOnly = new EdgeSession({
+      config: OIDC,
+      manager: new FakeManager({ user: { ...live, profile: { email: 'accounts@example.org' } } }),
+    });
+    assert.equal(await emailOnly.getDisplayName(), 'accounts@example.org');
+  });
+
+  it('is null with no signed-in user or in local mode', async () => {
+    assert.equal(
+      await new EdgeSession({ config: OIDC, manager: new FakeManager() }).getDisplayName(),
+      null,
+    );
+    assert.equal(
+      await new EdgeSession({ config: { mode: 'local', devSubject: 'raman' } }).getDisplayName(),
+      null,
+    );
+  });
+});

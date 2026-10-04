@@ -23,6 +23,11 @@ export interface IndentCaptureInput {
   /** UJ-IND-01 instrumentation: form_opened and local_commit client timestamps. */
   formOpenedAt?: string;
   localCommitAt?: string;
+  /**
+   * Story 8.9 (D15): the damage report this indent replaces. The report carries this indent's id as
+   * `replacement_indent_id`; the server refuses a mismatched pairing (DAMAGE_REPLACEMENT_LINK_INVALID).
+   */
+  damageReportId?: string;
 }
 
 export function createIndentRaisedEvent(input: IndentCaptureInput): EdgeEventRecord {
@@ -54,6 +59,7 @@ export function createIndentRaisedEvent(input: IndentCaptureInput): EdgeEventRec
             : {}),
         },
       ],
+      ...(input.damageReportId ? { damage_report_id: input.damageReportId } : {}),
       ...(input.formOpenedAt && input.localCommitAt
         ? {
             capture_metrics: {

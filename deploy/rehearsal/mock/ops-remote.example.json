@@ -1,0 +1,12 @@
+{
+  "api_base": "https://ims-staging.example.org",
+  "token_url": "https://sso.example.org/realms/ims/protocol/openid-connect/token",
+  "client_id": "ims-rehearsal-password-grant",
+  "scope": "openid",
+  "site_code": "CMF-ALIGARH",
+  "site_id": "00000000-0000-0000-0000-000000000000",
+  "default_password_env": "OPS_PW",
+  "actors": {
+    "compliance": { "email": "finance.controller@example.org", "password_env": "OPS_PW_FINANCE" }
+  }
+}

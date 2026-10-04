@@ -1,9 +1,16 @@
 import type { RouteHandler } from '../../middleware/error.js';
-import { sendJson, sendRequestError } from '../../middleware/error.js';
+import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import { getAuthContext } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
+import {
+  requireRole,
+  permittedLocationsForModule,
+  EMPLOYEE_MODULE,
+} from '../../middleware/rbac.js';
 import { getItemBySku } from '../../read/projections/item_master.js';
-import { getStockBalancesBySku } from '../../read/projections/stock_balance.js';
+import {
+  getStockBalancesBySku,
+  getRequestableStockBySku,
+} from '../../read/projections/stock_balance.js';
 import type { StockBalance } from '../../read/projections/stock_balance.js';
 import { listAgreements } from '../../read/projections/ownership_agreement.js';
 
@@ -196,3 +203,71 @@ export const getStockHandler: RouteHandler = requireRole({
   module: 'inventory',
   functionScope: 'read',
 })(getStockBase);
+
+/**
+ * GET /api/v1/stock/:sku/availability (Story 1.15, AC 2, D4): whether an item can be requested and
+ * from where, for anyone holding the employee base role or inventory read. A separate route from
+ * the detail above so no quantity, valuation, class or owner field can leak by being added there.
+ * Location scope is the union of the caller's employee and inventory locations.
+ */
+const getStockAvailabilityBase: RouteHandler = async (req, res, params) => {
+  const sku = params['sku'];
+  if (!sku || !SKU_REGEX.test(sku)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku path parameter must be 1-64 URL-safe characters',
+    );
+    return;
+  }
+  const item = await getItemBySku(sku);
+  if (!item) {
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ITEM_NOT_FOUND',
+      `No item master record exists for sku "${sku}"`,
+      { sku },
+    );
+    return;
+  }
+
+  // Code review 2026-09-27: fail closed on a missing auth context, matching every other
+  // per-caller filter in this diff (assertIndentReadAccess, listIndentsBase); requireRole always
+  // 401s before this handler runs, so this is unreachable today, but a silent "no filter applied"
+  // branch here would answer every location's availability if that ever changed.
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+
+  let rows = await getRequestableStockBySku(sku);
+  const employee = permittedLocationsForModule(authContext.roles, EMPLOYEE_MODULE);
+  const inventory = permittedLocationsForModule(authContext.roles, 'inventory');
+  if (!employee.wildcard && !inventory.wildcard) {
+    rows = rows.filter(
+      (row) => employee.locations.has(row.location_id) || inventory.locations.has(row.location_id),
+    );
+  }
+
+  const locations = rows
+    .map((row) => ({
+      location_id: row.location_id,
+      location_code: row.location_code ?? row.location_id,
+      in_stock: row.in_stock,
+    }))
+    .sort((a, b) => a.location_code.localeCompare(b.location_code, 'en', { sensitivity: 'base' }));
+
+  sendJson(res, 200, {
+    sku,
+    uom: item.uom,
+    in_stock: locations.some((l) => l.in_stock),
+    locations,
+  });
+};
+
+export const getStockAvailabilityHandler: RouteHandler = requireRole({
+  module: [EMPLOYEE_MODULE, 'inventory'],
+  functionScope: 'read',
+})(getStockAvailabilityBase);

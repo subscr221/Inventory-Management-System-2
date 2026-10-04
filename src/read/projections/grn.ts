@@ -9,9 +9,14 @@ import { getPool } from '../../config/db.js';
  */
 export interface Grn {
   grn_id: string;
-  correlation_id: string;
-  po_ref_ext: string;
-  source_document: 'PO' | 'ASN';
+  /**
+   * The weighbridge binding token. Null only on a ticketless JOBWORK_CHALLAN receipt (Pilot Ruling
+   * B): the gate-dwell view joins on this column, so a caller-chosen id is never stored in it.
+   */
+  correlation_id: string | null;
+  /** Null only on a JOBWORK_CHALLAN receipt (Pilot Ruling B): customer material has no purchase order. */
+  po_ref_ext: string | null;
+  source_document: 'PO' | 'ASN' | 'JOBWORK_CHALLAN';
   source_ref_ext: string | null;
   site_id: string;
   site_code_ext: string;
@@ -38,9 +43,9 @@ export interface Grn {
 
 export interface InsertGrnHeaderInput {
   grn_id: string;
-  correlation_id: string;
-  po_ref_ext: string;
-  source_document: 'PO' | 'ASN';
+  correlation_id: string | null;
+  po_ref_ext: string | null;
+  source_document: Grn['source_document'];
   source_ref_ext?: string | null;
   site_id: string;
   site_code_ext: string;
@@ -75,8 +80,8 @@ const GRN_COLUMNS = `grn_id, correlation_id, po_ref_ext, source_document, source
 function mapRow(row: Record<string, unknown>): Grn {
   return {
     grn_id: row['grn_id'] as string,
-    correlation_id: row['correlation_id'] as string,
-    po_ref_ext: row['po_ref_ext'] as string,
+    correlation_id: (row['correlation_id'] as string | null) ?? null,
+    po_ref_ext: (row['po_ref_ext'] as string | null) ?? null,
     source_document: row['source_document'] as Grn['source_document'],
     source_ref_ext: (row['source_ref_ext'] as string | null) ?? null,
     site_id: row['site_id'] as string,

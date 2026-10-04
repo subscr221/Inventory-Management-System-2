@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warehouse Floor Tasks</title>
+<style>
+/*
+  KEY SCREEN: Warehouse floor tasks - picker (directed pick), dispatch clerk (pack station, shipping
+  documents, IRN block, dispatch) and unloading supervisor (gate/unloading exceptions inbox)
+  Governing spine sections:
+    EXPERIENCE.md
+      - Key Flows > Picking (system-directed bin sequence, scan bin then lot, qty, short pick),
+        Pack and dispatch (scan into package, weight, shipping documents, dispatch),
+        Unloading exceptions (vehicle not matched to PO, receipt over tolerance, unlisted supplier)
+      - Component Patterns: scan-anything bar, task inbox, directed-step card, qty stepper,
+        reason tiles, blocked-state card with next steps, sync badge
+      - State Patterns: captured-pending-sync (offline), hold-blocked (QC hold), wrong-lot blocked,
+        IRN-blocked, empty inbox
+    DESIGN.md
+      - Density by input (addendum 2026-09-25, every role on every device): ONE frame + device
+        switcher. Handheld 390x800 and Tablet 820x1180 (55%) and Desktop touch = touch-roomy
+        (primary >=56px, secondary >=48px); Desktop 1280x800 (70%) = compact (30-36px controls).
+        Nav: Handheld bottom bar, Tablet icon rail, Desktop and Desktop touch dark sidebar.
+      - Accent token family: theme A Ledger Blue (--accent, --accent-strong, --accent-soft,
+        --on-accent, --accent-on-dark) exactly as in color-themes-1.html; dark bar #1B2230
+  Decision source: .memlog.md (2026-09-25). Look and mechanics match key-stores.html.
+  This mock loads nothing from the network; Lato falls back to Segoe UI / Roboto / system-ui.
+*/
+:root{
+  --side:#1B2230; --side-hover:#252E3F; --side-text:#C9D1DD; --side-muted:#8C97A8;
+  --bg:#F4F6F9; --surface:#FFFFFF; --border:#DDE2E9; --text:#1C2430; --text-muted:#566173;
+  --ok:#1E7A3C; --ok-bg:#E6F4EA; --warn:#8A5300; --warn-bg:#FFF3DC;
+  --err:#B3261E; --err-bg:#FCE8E6; --info:#1F5FAD; --info-bg:#E7F0FB;
+  --off:#4A5568; --off-bg:#ECEFF3;
+  /* A. Ledger Blue (default for CMF-ALIGARH) */
+  --accent:#1E6BC6; --accent-strong:#1656A3; --accent-soft:#E8F1FC; --on-accent:#FFFFFF; --accent-on-dark:#5AA2F0;
+  --font: Lato, "Segoe UI", Roboto, system-ui, sans-serif;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.4}
+button,input,select{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+button[disabled]{cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.s-top :focus-visible{outline-color:var(--accent-on-dark)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.page{padding:16px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.intro{flex:0 0 100%}
+.intro h1{font-size:22px;margin:0 0 4px}
+.intro p{margin:0;color:var(--text-muted);max-width:920px}
+
+/* ---------- device switcher + ONE frame (addendum 2026-09-25: every role on every device) ---------- */
+.devbar{flex:0 0 100%;display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.devbar .lbl{font-weight:700;font-size:13px}
+.seg{display:inline-flex;border:1px solid #8792A3;border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{border:0;border-right:1px solid #C9D0DA;background:transparent;min-height:40px;padding:0 14px;font-weight:700;font-size:13.5px;color:var(--text);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;line-height:1.15}
+.seg button:last-child{border-right:0}
+.seg button small{font-weight:400;font-size:11.5px;color:var(--text-muted)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg button[aria-pressed="true"] small{color:var(--on-accent)}
+.seg button:focus-visible{outline-offset:-3px}
+.device{display:flex;flex-direction:column;gap:6px}
+.device-label{font-size:13px;font-weight:700}
+.device-label span{font-weight:400;color:var(--text-muted)}
+.fwrap{box-sizing:content-box;overflow:hidden;flex:none;background:#1F2937;border:10px solid #1F2937;border-radius:24px}
+.fwrap.dk{border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+.screen{background:var(--bg);overflow:hidden;display:flex;flex-direction:column;position:relative;transform-origin:0 0}
+.s-tab,.s-desk,.s-dtouch{flex-direction:row}
+
+/* ---------- buttons ---------- */
+.b{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:2px solid transparent;border-radius:var(--radius);font-weight:700;padding:0 12px;text-align:center;line-height:1.15}
+.b-pri{background:var(--accent);color:var(--on-accent)}
+.b-pri:hover{background:var(--accent-strong)}
+.b-pri[disabled]{background:#E3E7ED;color:var(--text-muted);border-color:#C9D0DA}
+.b-sec{background:var(--surface);color:var(--accent-strong);border-color:var(--accent)}
+.b-sec:hover{background:var(--accent-soft)}
+.b-sec[disabled]{color:var(--text-muted);border-color:#C9D0DA;background:#F4F6F9}
+.b-plain{background:var(--surface);color:var(--text);border-color:#B9C1CC}
+.b-ghost{background:transparent;color:var(--accent-strong);text-decoration:underline;text-underline-offset:2px}
+.b-full{width:100%}
+.touch{font-size:16px}
+.touch .b{min-height:56px;font-size:17px}
+.touch .b-sec,.touch .b-plain,.touch .b-ghost{min-height:48px;font-size:16px}
+.icon{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;flex:none}
+
+/* ---------- touch top bar and bottom nav ---------- */
+.s-top{height:48px;flex:none;background:var(--side);color:#fff;display:flex;align-items:center;gap:8px;padding:0 12px}
+.s-top b{font-size:16px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-top b small{font-weight:400;color:var(--side-text);font-size:13px}
+.ready{width:10px;height:10px;border-radius:50%;background:#3DD68C;box-shadow:0 0 0 3px rgba(61,214,140,.25);flex:none}
+.sync{font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;background:#2E3850;color:#E6EAF0;white-space:nowrap}
+.sync .d{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:#9AA5B6}
+.sync.on .d{background:#3DD68C}
+.bnav{height:64px;flex:none;display:flex;background:var(--surface);border-top:1px solid var(--border)}
+.bnav button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-muted);font-size:13px;font-weight:700;position:relative;min-height:56px}
+.bnav svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9}
+.bnav button[aria-current="page"]{color:var(--accent)}
+.bnav button[aria-current="page"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+.bnav .cnt{position:absolute;top:6px;left:calc(50% + 8px);background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+
+/* ---------- scan-anything bar ---------- */
+.scanbar{flex:none;background:var(--surface);border-bottom:1px solid var(--border);padding:8px 10px}
+.scanbar form{display:flex;gap:8px;align-items:stretch}
+.scanbar .fld{flex:1;display:flex;align-items:center;gap:8px;border:2px solid #8792A3;border-radius:var(--radius);padding:0 10px;background:#FAFBFC;min-width:0}
+.scanbar .fld:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.scanbar input{border:0;background:transparent;flex:1;min-width:0;outline:none;height:52px;font-size:16px}
+.scanbar .hint{font-size:12.5px;color:var(--text-muted);margin:4px 2px 0}
+
+/* ---------- task inbox ---------- */
+.inbox{flex:1;overflow:auto;overflow-x:hidden;padding:4px 10px 12px;min-height:0}
+.grp h3{display:flex;align-items:center;gap:8px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:12px 2px 6px}
+.grp h3 .cnt{background:var(--accent);color:var(--on-accent);border-radius:999px;padding:0 8px;font-size:12px;letter-spacing:0}
+.grp h3 .cnt.zero{background:var(--off-bg);color:var(--off)}
+.grp ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.task{width:100%;display:flex;gap:10px;align-items:center;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;min-height:64px}
+.task:hover{border-color:var(--accent)}
+.task[aria-current="true"]{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+.task .tx{flex:1;min-width:0}
+.task b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task .m{display:block;font-size:13px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task .go{color:var(--accent);font-weight:900;font-size:20px}
+.task .ic{width:36px;height:36px;border-radius:8px;display:grid;place-items:center;flex:none}
+.ic.warn{background:var(--warn-bg);color:var(--warn)}
+.ic.err{background:var(--err-bg);color:var(--err)}
+.ic.info{background:var(--info-bg);color:var(--info)}
+.empty-g{font-size:13px;color:var(--text-muted);padding:6px 2px}
+.emptyst{margin:28px 8px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px}
+.emptyst .ring{width:64px;height:64px;border-radius:50%;background:var(--ok-bg);color:var(--ok);display:grid;place-items:center}
+.emptyst .ring .icon{width:30px;height:30px}
+.emptyst h3{margin:0;font-size:17px}
+.emptyst p{margin:0;font-size:13.5px;color:var(--text-muted);max-width:280px}
+.pill{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.p-ok{background:var(--ok-bg);color:var(--ok)}
+.p-warn{background:var(--warn-bg);color:var(--warn)}
+.p-err{background:var(--err-bg);color:var(--err)}
+.p-info{background:var(--info-bg);color:var(--info)}
+.p-off{background:var(--off-bg);color:var(--off)}
+
+/* ---------- panes ---------- */
+.fill{flex:1;display:flex;flex-direction:column;min-height:0;min-width:0}
+.two{flex:1;display:flex;min-height:0}
+.two .lp{width:330px;flex:none;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;background:var(--bg)}
+.two .rp{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--surface)}
+
+/* ---------- task view (head / body / pinned foot) ---------- */
+.acc{flex:1;display:flex;flex-direction:column;min-height:0;background:var(--surface)}
+.acc-head{flex:none;display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);background:var(--surface)}
+.acc-head .tx{flex:1;min-width:0}
+.acc-head b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-head .m{display:block;font-size:12.5px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.backbtn{flex:none;width:48px;min-height:48px;border:1px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);display:grid;place-items:center;color:var(--text)}
+.acc-body{flex:1;overflow:auto;overflow-x:hidden;padding:10px;display:flex;flex-direction:column;gap:10px;min-height:0;background:var(--bg)}
+.acc-foot{flex:none;padding:8px 10px 10px;border-top:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;gap:6px}
+.acc-foot .row{flex-wrap:nowrap}
+.todo{font-size:13px;color:var(--text-muted);display:flex;justify-content:space-between;gap:8px}
+.todo b{color:var(--text)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px}
+.card.done{border-color:#9FCDAE;box-shadow:inset 3px 0 0 var(--ok)}
+.card h4{margin:0;font-size:15px}
+.m{font-size:13px;color:var(--text-muted)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row>.b{flex:1}
+.gap{margin-top:8px}
+.kind{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);font-weight:700}
+.mono{font-family:Consolas,monospace}
+
+/* progress */
+.prog{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700}
+.prog ol{list-style:none;margin:0;padding:0;display:flex;gap:4px;flex:1}
+.prog li{flex:1;height:8px;border-radius:4px;background:#DDE2E9}
+.prog li.d{background:var(--ok)}
+.prog li.sh{background:var(--warn)}
+.prog li.c{background:var(--accent)}
+
+/* directed step card */
+.direct{border:2px solid var(--accent);border-radius:var(--radius);background:var(--surface);padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.direct .go{font-size:14px;color:var(--text-muted)}
+.direct .bin{font-family:Consolas,monospace;font-size:30px;font-weight:900;color:var(--accent-strong);letter-spacing:.02em;line-height:1.1}
+.direct .what{font-size:17px;font-weight:700}
+.direct .lot{font-size:14px}
+.direct .lot b{font-family:Consolas,monospace}
+.steps{list-style:none;margin:0;padding:0;display:flex;gap:4px}
+.steps li{flex:1;font-size:12px;font-weight:700;padding:4px 6px;border-radius:6px;background:var(--off-bg);color:var(--off);text-align:center;white-space:nowrap}
+.steps li.d{background:var(--ok-bg);color:var(--ok)}
+.steps li.c{background:var(--accent);color:var(--on-accent)}
+
+/* blocked / alert card */
+.alert{border-radius:var(--radius);padding:10px 12px;display:flex;gap:10px;align-items:flex-start;border:2px solid}
+.alert.err{background:var(--err-bg);border-color:#E59C96;color:var(--text)}
+.alert.hold{background:var(--warn-bg);border-color:#E8C27A}
+.alert .icon{width:24px;height:24px;margin-top:1px}
+.alert.err .icon{color:var(--err)}
+.alert.hold .icon{color:var(--warn)}
+.alert b.t{display:block;font-size:16px}
+.alert.err b.t{color:var(--err)}
+.alert.hold b.t{color:var(--warn)}
+.alert p{margin:4px 0 0;font-size:13.5px}
+.alert ol{margin:6px 0 0;padding-left:18px;font-size:13.5px}
+.alert ol li{margin-bottom:3px}
+
+/* qty stepper and reason tiles */
+.qty{display:flex;align-items:stretch;gap:6px}
+.qty label{display:flex;align-items:center;font-weight:700;font-size:15px;min-width:56px}
+.qty .stp{width:52px;min-height:52px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-size:24px;font-weight:900;color:var(--text)}
+.qty .stp[disabled]{color:#B9C1CC}
+.qty input{width:76px;min-height:52px;border:2px solid #8792A3;border-radius:var(--radius);text-align:center;font-size:22px;font-weight:700;background:#fff;color:var(--text)}
+.qty input:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.qty .of{display:flex;align-items:center;font-size:15px;color:var(--text-muted);white-space:nowrap}
+.ev{padding:8px;border-radius:8px;background:var(--warn-bg);border:1px solid #E8C27A;display:flex;flex-direction:column;gap:8px}
+.ev .lbl{font-size:13.5px;font-weight:700;color:var(--warn)}
+.ev .note{font-size:12.5px;color:var(--text)}
+.txt{min-height:48px;border:2px solid #8792A3;border-radius:var(--radius);padding:0 10px;background:#fff;font-size:15px;width:100%}
+.txt:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.tile{min-height:48px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-weight:700;font-size:14px;padding:4px 10px;text-align:left;line-height:1.2;color:var(--text)}
+.tile[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong);box-shadow:inset 0 0 0 1px var(--accent)}
+
+/* upcoming lines */
+.lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.lines li{display:flex;gap:8px;align-items:center;font-size:13.5px;padding:6px 8px;border-radius:8px;background:var(--surface);border:1px solid var(--border)}
+.lines li .n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:900;background:var(--off-bg);color:var(--off);flex:none}
+.lines li.d .n{background:var(--ok-bg);color:var(--ok)}
+.lines li.c{border-color:var(--accent);background:var(--accent-soft)}
+.lines li.c .n{background:var(--accent);color:var(--on-accent)}
+.lines li .tx{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lines li .mono{font-size:12.5px;color:var(--text-muted)}
+
+/* candidate options (PO / vendor match) */
+.opts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.opt{width:100%;min-height:56px;text-align:left;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);padding:6px 10px;display:flex;gap:10px;align-items:center}
+.opt .rad{width:20px;height:20px;border-radius:50%;border:2px solid #8792A3;flex:none;display:grid;place-items:center}
+.opt[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.opt[aria-pressed="true"] .rad{border-color:var(--accent)}
+.opt[aria-pressed="true"] .rad::after{content:"";width:10px;height:10px;border-radius:50%;background:var(--accent)}
+.opt .tx{flex:1;min-width:0}
+.opt b{display:block;font-size:14.5px}
+.opt small{display:block;font-size:12.5px;color:var(--text-muted)}
+.facts{width:100%;border-collapse:collapse;font-size:13.5px}
+.facts td{padding:5px 2px;border-bottom:1px solid #EDF0F4;vertical-align:top}
+.facts td:first-child{color:var(--text-muted);width:42%}
+.facts .num{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+.band{display:flex;height:18px;border-radius:5px;overflow:hidden;border:1px solid var(--border)}
+.band span{display:block}
+.band .o{background:var(--ok)}
+.band .t{background:#7DBF93}
+.band .x{background:repeating-linear-gradient(45deg,var(--err) 0 4px,#E59C96 4px 8px)}
+.bandkey{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--text-muted)}
+.bandkey i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.paper{width:40px;height:52px;background:#fdf6e3;border:1px solid #d6c9a8;border-radius:3px;padding:4px;transform:rotate(-2deg);box-shadow:0 1px 3px rgba(0,0,0,.2);flex:none;overflow:hidden}
+.paper i{display:block;height:3px;background:#cdbf9c;margin:4px 0;border-radius:1px}
+.paper i.s{width:60%}
+
+/* pack */
+.pkg{display:flex;gap:10px;align-items:center}
+.carton{width:52px;height:44px;flex:none;border-radius:4px;background:linear-gradient(#C89B61,#B5854B);border:1px solid #8C6434;position:relative}
+.carton::after{content:"";position:absolute;left:45%;right:45%;top:0;bottom:0;background:#E8D2A8}
+.items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.items li{display:flex;gap:8px;align-items:center;font-size:13.5px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+.items li .tx{flex:1;min-width:0}
+.items li .tx span{display:block;font-size:12px;color:var(--text-muted)}
+.wt{display:flex;gap:6px;align-items:stretch}
+.wt label{display:flex;align-items:center;font-weight:700;font-size:15px}
+.wt input{width:96px;min-height:48px;border:2px solid #8792A3;border-radius:var(--radius);text-align:center;font-size:20px;font-weight:700;background:#fff}
+.wt input:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.wt .b{flex:1}
+.docs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.docs li{display:flex;gap:8px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--surface);font-size:13.5px}
+.docs li .tx{flex:1;min-width:0}
+.docs li .tx span{display:block;font-size:12px;color:var(--text-muted)}
+
+/* done */
+.donev{flex:1;overflow:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:10px;min-height:0;background:var(--surface)}
+.donehead{display:flex;gap:12px;align-items:center}
+.check{width:52px;height:52px;border-radius:50%;border:5px solid var(--ok);display:grid;place-items:center;font-size:28px;color:var(--ok);flex:none;font-weight:900}
+.donehead h2{margin:0;font-size:20px}
+.sheet{flex:1;overflow:auto;overflow-x:hidden;padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--surface);min-height:0}
+.sheet h2{margin:0;font-size:18px}
+.stat{display:flex;gap:8px}
+.stat div{flex:1;border:1px solid var(--border);border-radius:var(--radius);padding:8px;text-align:center}
+.stat b{display:block;font-size:22px}
+.stat span{font-size:12px;color:var(--text-muted)}
+
+/* ---------- tablet icon rail ---------- */
+.rail{width:84px;flex:none;background:var(--side);display:flex;flex-direction:column;padding:0 0 8px}
+.rail .mark{height:48px;display:grid;place-items:center;border-bottom:1px solid #2A3345;margin-bottom:6px}
+.rail .mark span{width:30px;height:30px;border-radius:7px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-weight:900;font-size:12px}
+.rail button{min-height:68px;border:0;border-left:3px solid transparent;background:none;color:var(--side-text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:13px;font-weight:700;position:relative}
+.rail button:hover{background:var(--side-hover)}
+.rail svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.9}
+.rail button[aria-current="page"]{color:#fff;border-left-color:var(--accent-on-dark);background:var(--side-hover)}
+.rail button[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.rail .cnt{position:absolute;top:6px;right:12px;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+.rail :focus-visible{outline-color:var(--accent-on-dark);outline-offset:-3px}
+.s-tab .two .lp{width:300px}
+
+/* ---------- desktop shell (same as key-stores.html) ---------- */
+.side{width:208px;flex:none;background:var(--side);color:var(--side-text);display:flex;flex-direction:column}
+.side :focus-visible{outline-color:var(--accent-on-dark)}
+.brand{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;font-weight:900;font-size:15px;border-bottom:1px solid #2A3345}
+.brand .mark{width:26px;height:26px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:12px}
+.side nav{padding:8px 0;flex:1}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 16px 0 13px;border:0;border-left:3px solid transparent;background:transparent;color:var(--side-text);text-align:left;font-size:13px}
+.nav-item:hover{background:var(--side-hover)}
+.nav-item svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.nav-item[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff;font-weight:700}
+.nav-item[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 7px;font-weight:700}
+.side-foot{padding:12px 16px;border-top:1px solid #2A3345;font-size:12px;color:var(--side-muted)}
+.dmain{flex:1;display:flex;flex-direction:column;min-width:0}
+.dtop{height:52px;flex:none;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 16px}
+.search{flex:1;max-width:420px;display:flex;align-items:center;gap:8px;height:34px;border:1px solid var(--border);border-radius:6px;padding:0 10px;background:#FAFBFC}
+.search input{border:0;background:transparent;flex:1;min-width:0;outline:none}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.site{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-weight:700}
+.avatar{width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);display:grid;place-items:center;font-weight:900;font-size:12px;flex:none}
+.spacer{flex:1}
+.dsync{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--off-bg);color:var(--off);white-space:nowrap}
+.dsync.on{background:var(--ok-bg);color:var(--ok)}
+.dcontent{flex:1;display:flex;min-height:0}
+.dlist{width:360px;flex:none;border-right:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;min-height:0}
+.dlist .lhd{padding:12px 12px 0;display:flex;align-items:center;gap:8px}
+.dlist .lhd h2{margin:0;font-size:16px}
+.ddetail{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;background:var(--surface)}
+.usb{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:var(--text-muted);white-space:nowrap}
+/* desktop touch: desktop layout, touch-roomy density */
+.touch .nav-item{height:52px;font-size:15px}
+.touch .nav-item svg{width:20px;height:20px}
+.touch .dtop{height:64px}
+.touch .search,.touch .site{height:48px}
+.touch .dtop .b{min-height:48px;font-size:16px}
+.touch .avatar{width:40px;height:40px}
+.s-dtouch .dlist{width:380px}
+.s-dtouch .acc-foot{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-end}
+.s-dtouch .acc-foot .todo{flex:0 0 100%}
+.s-dtouch .acc-foot>.b,.s-dtouch .acc-foot>.row{flex:1 1 0;min-width:0}
+.s-dtouch .acc-body .b-full,.s-dtouch .donev .b-full,.s-dtouch .sheet .b-full{width:auto;align-self:flex-start;padding:0 20px}
+
+/* ---------- scan fallbacks (camera / type it) ---------- */
+.camb{flex:none;width:52px;padding:0}
+.alts{flex-wrap:nowrap}
+
+/* ---------- compact density (desktop, fine pointer) ---------- */
+.compact{font-size:13px}
+.compact .acc-foot .b{white-space:nowrap}
+.sidep{flex:1 1 320px;max-width:560px}
+.compact .b{min-height:34px;height:auto;border-width:1px;border-radius:6px;font-size:13px;padding:0 12px}
+.compact .b-sec,.compact .b-plain,.compact .b-ghost{min-height:34px}
+.compact .icon{width:15px;height:15px}
+.compact .scanbar{padding:10px 12px}
+.compact .scanbar .fld{border-width:1px;border-radius:6px}
+.compact .scanbar input{height:32px;font-size:13px}
+.compact .inbox{padding:0 12px 12px}
+.compact .task{min-height:44px;padding:6px 10px;border-radius:6px}
+.compact .task b{font-size:13px}
+.compact .task .m{font-size:12px}
+.compact .task .ic{width:28px;height:28px}
+.compact .acc-head{padding:10px 20px}
+.compact .acc-head b{font-size:14px}
+.compact .acc-body{padding:12px 20px;gap:8px}
+.compact .acc-foot{flex-direction:row;align-items:center;justify-content:flex-end;padding:10px 20px;gap:8px}
+.compact .acc-foot .todo{flex:1;justify-content:flex-start;gap:16px}
+.compact .acc-foot .b,.compact .acc-foot .row>.b{width:auto;flex:none}
+.compact .acc-foot .row{flex:none}
+.compact .acc-body .b-full,.compact .donev .b-full,.compact .sheet .b-full{width:auto;align-self:flex-start}
+.compact .sheet,.compact .donev{padding:16px 20px}
+.compact .card{border-radius:6px;padding:8px 12px}
+.compact .card h4{font-size:14px}
+.compact .direct{padding:8px 12px;border-width:1px;flex-direction:row;flex-wrap:wrap;align-items:baseline;column-gap:14px;row-gap:4px}
+.compact .direct .bin{font-size:22px}
+.compact .direct .what{font-size:15px}
+.compact .steps{max-width:460px}
+.compact .qty .stp,.compact .qty input,.compact .backbtn,.compact .txt,.compact .wt input{min-height:32px;height:32px;border-width:1px;border-radius:6px}
+.compact .qty .stp{width:32px;font-size:16px}
+.compact .qty input{width:70px;font-size:14px}
+.compact .qty label,.compact .wt label{min-width:56px;font-size:13px}
+.compact .wt input{width:80px;font-size:14px}
+.compact .backbtn{width:32px}
+.compact .tiles{grid-template-columns:repeat(4,auto);justify-content:start}
+.compact .tile{min-height:30px;border-width:1px;border-radius:6px;font-size:12.5px;padding:3px 10px}
+.compact .txt{font-size:13px}
+.compact .opt{min-height:40px;border-width:1px;border-radius:6px;padding:4px 10px}
+.compact .opts{max-width:560px}
+.compact .alert{border-width:1px;border-radius:6px;padding:8px 12px}
+.compact .alert b.t{font-size:14px}
+.compact .check{width:40px;height:40px;border-width:4px;font-size:20px}
+.compact .donehead h2{font-size:17px}
+.compact .ev{max-width:620px}
+.compact .camb{width:34px}
+
+/* ---------- side panels ---------- */
+.sidep{width:320px;display:flex;flex-direction:column;gap:16px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.panel h2{font-size:15px;margin:0 0 8px}
+.panel h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:10px 0 6px}
+.panel .b{width:100%;margin-bottom:8px;min-height:44px;font-size:14px}
+.roles{display:flex;flex-direction:column;gap:6px}
+.roles .b{margin:0;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;text-align:left;padding:6px 12px}
+.roles .b[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.roles .b small{font-weight:400;display:block;font-size:12px}
+.legend{margin:0;padding-left:18px;font-size:13px}
+.legend li{margin-bottom:6px}
+.ltag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--border);background:#F4F6F9}
+.ltag.as{background:var(--warn-bg);color:var(--warn);border-color:#E8C27A}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="intro">
+    <h1>Warehouse floor tasks - picking, pack and dispatch, unloading exceptions</h1>
+    <p>Every role works on every device class: the role decides what is shown, the device class decides how. Pick a device class below and a role in Demo controls: picker (Imran Khan), dispatch clerk (Sanjay Mishra) or unloading supervisor (Mahesh Tyagi). Switching device mid-task keeps the current step. Every role gets the same always-on-top Scan anything bar and task inbox as stores.</p>
+  </div>
+
+  <div class="devbar">
+    <span class="lbl" id="dev-h">Device class</span>
+    <div class="seg" role="group" aria-labelledby="dev-h">
+      <button type="button" data-dev="hand" aria-pressed="true">Handheld<small>scanner or phone</small></button>
+      <button type="button" data-dev="tab" aria-pressed="false">Tablet<small>finger</small></button>
+      <button type="button" data-dev="desk" aria-pressed="false">Desktop<small>mouse</small></button>
+      <button type="button" data-dev="dtouch" aria-pressed="false">Desktop touch<small>touchscreen PC</small></button>
+    </div>
+  </div>
+
+  <div class="device">
+    <div class="device-label" id="dev-cap">Handheld</div>
+    <div class="fwrap" id="fwrap"><div class="screen touch" id="f-main"></div></div>
+  </div>
+
+  <div class="sidep">
+    <section class="panel" aria-labelledby="demo-h">
+      <h2 id="demo-h">Demo controls</h2>
+      <h3 id="role-h">Role</h3>
+      <div class="roles" role="group" aria-labelledby="role-h">
+        <button class="b b-sec" data-demo="role" data-r="pick">Picker<small>warehouse_operator - Imran Khan</small></button>
+        <button class="b b-sec" data-demo="role" data-r="pack">Dispatch clerk<small>dispatch_clerk - Sanjay Mishra</small></button>
+        <button class="b b-sec" data-demo="role" data-r="unl">Unloading supervisor<small>unloading_supervisor - Mahesh Tyagi</small></button>
+      </div>
+      <h3>Scans and states</h3>
+      <div id="demo-role"></div>
+      <button class="b b-sec" data-demo="empty" id="empty-btn">Empty inbox (now: off)</button>
+      <button class="b b-sec" data-demo="offline" id="off-btn">Toggle offline (now: offline)</button>
+      <button class="b b-ghost" data-demo="reset">Reset</button>
+      <div class="sr" aria-live="polite" id="live"></div>
+    </section>
+    <section class="panel" aria-labelledby="leg-h">
+      <h2 id="leg-h">Legend - decisions and assumptions</h2>
+      <ol class="legend">
+        <li><span class="ltag">DECISION</span> Every role on every device: picker, dispatch clerk and unloading supervisor each work on Handheld, Tablet, Desktop and Desktop touch. The role decides what is shown; the device class decides how. There are no shared machine terminals.</li>
+        <li><span class="ltag">DECISION</span> Handheld (scanner or phone, finger): touch-roomy, primary 56px pinned at the bottom, secondary 48px, bottom nav (Tasks, Scan, Stock, More), one column; a task opens as its own page with a back button.</li>
+        <li><span class="ltag">DECISION</span> Tablet (finger): touch-roomy, icon rail on the left, task list and task detail side by side.</li>
+        <li><span class="ltag">DECISION</span> Desktop (mouse): compact 30-36px controls, dark sidebar #1B2230, top bar with search, site switcher CMF-ALIGARH and + New, list and detail side by side.</li>
+        <li><span class="ltag">DECISION</span> Desktop touch (touchscreen PC): the desktop layout with touch-roomy controls.</li>
+        <li><span class="ltag">DECISION</span> Scanning: the "Scanner ready" hardware indicator shows only on Handheld. Every scan also offers the camera (Handheld and Tablet) and always "Type it"; Desktop shows "USB scanner or type".</li>
+        <li><span class="ltag">DECISION</span> Switching device keeps the current step (one shared state).</li>
+        <li><span class="ltag">DECISION</span> Accent A Ledger Blue #1E6BC6 with its five-token family, same as stores.</li>
+        <li><span class="ltag">DECISION</span> Pilot roles grouped into the Warehouse floor tasks surface: warehouse_operator (picker), dispatch_clerk and unloading_supervisor exceptions.</li>
+        <li><span class="ltag">DECISION</span> Scan anything bar plus task inbox, the stores home pattern, reused here as the shared floor pattern.</li>
+        <li><span class="ltag">DECISION</span> Racks and bins carry barcode or QR labels, so the bin scan confirms the picker is at the right place.</li>
+        <li><span class="ltag">DECISION</span> Problem stock is not issuable: a lot on QC hold is blocked at scan with "On hold - awaiting QC".</li>
+        <li><span class="ltag">DECISION</span> Report damage is universal: the short-pick reason "Damaged" places the units on hold and sends them to QC. The picker reports and QC and finance decide.</li>
+        <li><span class="ltag">DECISION</span> Excess at receipt (pilot): accept up to ordered x (1 + tolerance) minus already received; the rest is "Excess - returned with vehicle" and not posted. "Hold for buyer decision" is post-pilot. 5% is a mock value.</li>
+        <li><span class="ltag">DECISION</span> Unlisted supplier is allowed at the gate and flagged for matching to the vendor master later. The truck is never blocked.</li>
+        <li><span class="ltag">DECISION</span> Offline-first: every capture shows "Captured - pending sync" until synced.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Picking, packing and dispatch layouts were not elicited with the user. They are drafted from roles and epics and need review.</li>
+        <li><span class="ltag as">ASSUMPTION</span> System-directed bin sequence, one line at a time: scan bin, then scan lot, then confirm qty. The system picks the lot (FEFO/FIFO).</li>
+        <li><span class="ltag as">ASSUMPTION</span> Short-pick reasons: Bin empty; Less in bin than shown; Damaged - report; Other (one line required).</li>
+        <li><span class="ltag as">ASSUMPTION</span> Pack flow: scan each picked lot into the package, weight is required (scale read or typed), then "Generate shipping documents" (invoice with IRN, e-way bill, packing list).</li>
+        <li><span class="ltag as">ASSUMPTION</span> Missing IRN blocks dispatch. Billing is notified automatically; the clerk can park the package at bay D-02 and check again. The IRN check needs the network.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Unloading exceptions arrive from gate and unloading. Each has one resolve action: match to PO, accept within band and return excess, or match to vendor. Unresolved cases go to procurement (Kavita Singh).</li>
+        <li><span class="ltag as">ASSUMPTION</span> After an exception is resolved, the delivery moves to the stores inbox for acceptance into the inspection bay.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Typical desk use: the unloading supervisor resolves exceptions at a desk PC, and the dispatch clerk packs at a pack-station PC with a USB scanner (keyboard-wedge, types into the focused scan field). These are examples, not device limits.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Tablet camera is the tablet's scan method; "Camera" is simulated here as a successful scan of the expected label.</li>
+      </ol>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){
+  var ICON={
+    scan:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>',
+    back:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
+    truck:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/></svg>',
+    alert:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>',
+    lock:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+    ban:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/></svg>',
+    list:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1"/></svg>',
+    box:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>',
+    scale:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 20l2-9h8l2 9M12 11V5M9 5h6"/></svg>',
+    doc:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7"/></svg>',
+    ok:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>',
+    user:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></svg>',
+    cam:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    key:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h1M10 10h1M14 10h1M18 10h0M7 14h10"/></svg>'
+  };
+  /* device classes: ONE frame, switched (addendum 2026-09-25) */
+  var DEV={
+    hand:{w:390,h:800,s:1,name:'Handheld',note:'scanner or phone - 390 x 800 - finger, touch-roomy, bottom nav'},
+    tab:{w:820,h:1180,s:.55,name:'Tablet',note:'820 x 1180 shown at 55% - finger, touch-roomy, icon rail, list and detail'},
+    desk:{w:1280,h:800,s:.7,name:'Desktop',note:'1280 x 800 shown at 70% - mouse, compact, dark sidebar'},
+    dtouch:{w:1280,h:800,s:.7,name:'Desktop touch',note:'touchscreen PC - 1280 x 800 shown at 70% - desktop layout, touch-roomy'}
+  };
+  var dev='hand';
+  function isDesk(){return dev==='desk'||dev==='dtouch';}
+  var ROLES={
+    pick:{title:'Picking',who:'Imran Khan',ini:'IK'},
+    pack:{title:'Dispatch',who:'Sanjay Mishra',ini:'SM'},
+    unl:{title:'Unloading',who:'Mahesh Tyagi',ini:'MT'}
+  };
+  var PL={id:'PICK-2026-0233',so:'SO-2026-1182',cust:'Kisan Agro Equipments, Mathura',station:'P-01'};
+  var LINES=[
+    {item:'Hex Bolt M16x60',qty:40,uom:'nos',bin:'R-C1-12',lot:'L-2609-104'},
+    {item:'MS Plate 10mm IS2062',qty:4,uom:'nos',bin:'R-A1-02',lot:'L-2609-088'},
+    {item:'Bearing 6205-2RS',qty:6,uom:'nos',bin:'R-B3-04',lot:'L-2609-117'},
+    {item:'V-Belt B-52',qty:2,uom:'nos',bin:'R-D2-03',lot:'L-2609-090'},
+    {item:'Grease EP2 1 kg tin',qty:3,uom:'tins',bin:'R-E1-01',lot:'L-2609-076'}
+  ];
+  var WRONG='L-2609-098', HOLD='L-2609-121', HOLDQC='QC-2026-0318';
+  var SHORT=['Bin empty','Less in bin than shown','Damaged - report','Other'];
+  var INV='INV-2026-0877', PKG='PKG-2026-0412', VEH='UP81 CT 7710';
+  var EX={
+    e1:{kind:'Vehicle not matched to any PO',title:'UP81 BT 2290 · Aligarh Castings Pvt Ltd',m:'Challan DC-7781 · at unloading bay U-2 since 08:05',ic:'err',
+      opts:[['PO-CMF-2026-04822','Pump housing CI - 150 nos open · due 26 Sep'],['PO-CMF-2026-04790','Impeller casting - 80 nos open · due 30 Sep']]},
+    e2:{kind:'Receipt over tolerance',title:'PO-CMF-2026-04817 · Hex Bolt M16x60',m:'Shree Balaji Steels · UP81 AT 4521 · counted 560 of 500',ic:'warn'},
+    e3:{kind:'Unlisted supplier - match to vendor',title:'Challan 4471 · Verma Traders (unlisted)',m:'UP80 CT 1180 · flagged at gate by Ramesh Yadav 07:40',ic:'warn',
+      opts:[['V-00412 · Verma Trading Co.','Aligarh · GSTIN 09AAKFV4412M1Z3 · 1 open PO'],['V-00873 · Verma Traders & Sons','Hathras · GSTIN 09AAGFV0873Q1Z8 · no open PO']]}
+  };
+  var BAND={ord:500,tol:0.05,recv:0,counted:560};
+  var S, syncT=null;
+  function fresh(role){
+    return {role:role||'pick',view:'inbox',task:null,offline:true,pending:0,empty:false,scanq:'',msg:'',
+      pk:{cur:2,step:'bin',qty:6,short:false,reason:'',note:'',err:null,
+        res:[{got:40,reason:''},{got:4,reason:''},null,null,null]},
+      pa:{scanned:[true,true,false,false,false],wt:'',stage:'pack',irn:false,checked:'',parked:false},
+      ex:{e1:{sel:null,done:''},e2:{done:''},e3:{sel:null,done:''}}};
+  }
+  S=fresh();
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function say(t){var l=document.getElementById('live');l.textContent='';setTimeout(function(){l.textContent=t;},30);}
+  function capture(){S.pending++;scheduleSync();}
+  function scheduleSync(){
+    clearTimeout(syncT);if(S.offline||!S.pending)return;
+    syncT=setTimeout(function(){S.pending=0;say('All captures synced');renderAll();},1800);
+  }
+  function syncWord(){return S.pending?(S.offline?'Captured - pending sync':'Syncing'):'Synced';}
+
+  /* ---------- chrome ---------- */
+  function syncBadge(){
+    if(S.offline)return '<span class="sync" role="status"><span class="d"></span>'+(S.pending?'Captured - pending sync ('+S.pending+')':'Offline')+'</span>';
+    return '<span class="sync on" role="status"><span class="d"></span>'+(S.pending?'Syncing '+S.pending:'Synced')+'</span>';
+  }
+  function stop(){var R=ROLES[S.role],hw=dev==='hand';
+    return '<div class="s-top">'+(hw?'<span class="ready" aria-hidden="true" title="Scanner ready"></span>':'')+'<b>'+R.title+' <small>· '+R.who+'</small></b>'+(hw?'<span class="sr">Scanner ready</span>':'')+syncBadge()+'</div>';}
+  /* touch nav items shared by the handheld bottom bar and the tablet icon rail */
+  function navBtns(){
+    return '<button data-a="home" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 2h6l1-2h5"/></svg>Tasks'+(total()?'<span class="cnt">'+total()+'</span>':'')+'</button>'+
+      '<button data-a="focusScan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M7 12h10"/></svg>Scan</button>'+
+      '<button data-a="nr" data-what="Stock"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>Stock</button>'+
+      '<button data-a="nr" data-what="More"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>More</button>';
+  }
+  function bnav(){return '<nav class="bnav" aria-label="Floor navigation">'+navBtns()+'</nav>';}
+  function rail(){return '<nav class="rail" aria-label="Floor navigation"><div class="mark"><span aria-hidden="true">IM</span></div>'+navBtns()+'</nav>';}
+  /* desktop dark sidebar: module active by role */
+  var MOD={pick:'Picking',pack:'Dispatch',unl:'Receiving'};
+  var ROLEN={pick:'Picker',pack:'Dispatch clerk',unl:'Unloading supervisor'};
+  function side(){
+    var n=total(),cur=MOD[S.role];
+    var I=[['Dashboard','<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>'],
+      ['Gate','<path d="M3 21V8l9-5 9 5v13"/><path d="M8 21v-8h8v8"/>'],
+      ['Receiving','<path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/>'],
+      ['Stores','<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>'],
+      ['Picking','<path d="M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1"/>'],
+      ['Dispatch','<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7"/>'],
+      ['Indents','<path d="M4 4h16v4H4zM6 8v12h12V8"/>'],
+      ['Reports','<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
+      ['Settings','<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>']];
+    var h='<aside class="side"><div class="brand"><span class="mark" aria-hidden="true">IM</span>IMS</div><nav aria-label="Modules">';
+    I.forEach(function(x){var on=x[0]===cur;h+='<button class="nav-item"'+(on?' aria-current="page" data-a="home"':' data-a="nr" data-what="'+x[0]+'"')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[1]+'</svg>'+x[0]+(on&&n?'<span class="count">'+n+'</span>':'')+'</button>';});
+    return h+'</nav><div class="side-foot">Signed in: '+ROLES[S.role].who+'<br>'+ROLEN[S.role]+'</div></aside>';
+  }
+  function dtop(){
+    var s=S.offline?'<span class="dsync" role="status">'+(S.pending?'Captured - pending sync ('+S.pending+')':'Offline')+'</span>':'<span class="dsync on" role="status">'+(S.pending?'Syncing '+S.pending:'Synced')+'</span>';
+    return '<header class="dtop"><label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#566173" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span class="sr">Search IMS</span><input name="q" placeholder="Search pick list, SO, PO, vehicle"></label>'+
+      '<span class="spacer"></span>'+s+'<button class="site" data-a="nr" data-what="Site switcher" aria-label="Switch site, current CMF-ALIGARH">CMF-ALIGARH <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>'+
+      '<button class="b b-pri" data-a="nr" data-what="+ New">+ New</button><span class="avatar" aria-hidden="true">'+ROLES[S.role].ini+'</span></header>';
+  }
+  var PH={pick:'bin, lot or pick list',pack:'lot, pick list or package',unl:'vehicle, challan or PO'};
+  function phText(){return !isDesk()?PH[S.role].charAt(0).toUpperCase()+PH[S.role].slice(1):(isDesk()?'USB scanner or type ':'Scan or type ')+PH[S.role];}
+  function scanbar(fid){
+    var cam=dev==='hand'||dev==='tab';
+    return '<div class="scanbar"><form data-scan="1" role="search"><label class="fld" for="'+fid+'-scan">'+ICON.scan+
+      '<span class="sr">Scan anything</span><input id="'+fid+'-scan" data-f="scanq" value="'+esc(S.scanq)+'" placeholder="'+phText()+'" autocomplete="off"></label>'+
+      (cam?'<button class="b b-plain camb" type="button" data-a="camAny" aria-label="Scan with camera">'+ICON.cam+'</button>':'')+
+      '<button class="b b-pri" type="submit">Go</button></form>'+
+      (S.msg?'<p class="hint" role="note">'+esc(S.msg)+'</p>':'')+'</div>';
+  }
+  /* scan action + fallbacks. Handheld: trigger scan, Camera, Type it. Tablet: Camera, Type it.
+     Desktop: USB scanner or type. */
+  function scanMain(a,what,cls){
+    var lbl=dev==='tab'?'Camera - scan ':(isDesk()?'USB scan ':'Scan ');
+    return '<button class="b '+cls+'" data-a="'+a+'"'+(dev==='tab'?' data-via="camera"':'')+'>'+(dev==='tab'?ICON.cam:ICON.scan)+lbl+what+'</button>';
+  }
+  function scanAlt(a,what){
+    return (dev==='hand'?'<button class="b b-plain" data-a="'+a+'" data-via="camera">'+ICON.cam+'Camera</button>':'')+
+      '<button class="b b-plain" data-a="typeIt" data-what="'+what+'">'+ICON.key+'Type it</button>';
+  }
+  function howScan(thing){
+    if(dev==='hand')return 'Press the trigger on the '+thing+' label';
+    if(dev==='tab')return 'Point the camera at the '+thing+' label';
+    return '<span class="usb">'+ICON.key+'USB scanner or type the '+thing+'</span>';
+  }
+
+  /* ---------- inbox per role ---------- */
+  function pickDone(){return S.pk.cur>=LINES.length;}
+  function exOpen(){return ['e1','e2','e3'].filter(function(k){return !S.ex[k].done;});}
+  function groups(){
+    if(S.empty)return [];
+    if(S.role==='pick')return [
+      {h:'Pick lists - sales orders',items:pickDone()?[]:[['pk',PL.id+' · '+PL.so,PL.cust+' · '+LINES.length+' lines · '+S.pk.cur+' of '+LINES.length+' picked','info','<span class="pill p-info">In progress</span>']]},
+      {h:'Pick lists - production issue',items:[['o1','PICK-2026-0234 · WO-2026-0551','Production line 2 · 3 lines · needed by 11:30','info','']]},
+      {h:'Moves',items:[]}];
+    if(S.role==='pack'){
+      var st=S.pa.stage;
+      return [
+        {h:'Ready to pack',items:st==='pack'?[['pa',PL.id+' · '+PL.so,PL.cust+' · picked by Imran Khan · station '+PL.station,'info','']]:[]},
+        {h:'Waiting for documents',items:(st==='blocked'?[['pa',PKG+' · '+PL.so,'E-invoice IRN missing'+(S.pa.parked?' · parked at D-02':''),'err','<span class="pill p-err">Cannot dispatch</span>']]:st==='docs'?[['pa',PKG+' · '+PL.so,'Documents ready - confirm dispatch','info','<span class="pill p-ok">Ready</span>']]:[])},
+        {h:'Dispatched today',items:[['o2','PKG-2026-0409 · SO-2026-1176','Ganga Pumps, Agra · UP81 BN 3321 · 09:20','info','']].concat(st==='done'?[['pa',PKG+' · '+PL.so,PL.cust+' · '+VEH+' · '+syncWord(),'info','']]:[])}];
+    }
+    var open=exOpen().map(function(k){var e=EX[k];return [k,e.kind,e.title,e.ic,''];});
+    var done=['e1','e2','e3'].filter(function(k){return S.ex[k].done;}).map(function(k){return [k,EX[k].kind+' - resolved',S.ex[k].done,'info',''];});
+    return [{h:'Exceptions from gate and unloading',items:open,count:true},{h:'Resolved today',items:done}];
+  }
+  function total(){
+    if(S.empty)return 0;
+    if(S.role==='pick')return (pickDone()?0:1)+1;
+    if(S.role==='pack')return S.pa.stage==='done'?0:1;
+    return exOpen().length;
+  }
+  function icFor(k,ic){var i=S.role==='pick'?ICON.list:(S.role==='pack'?ICON.box:(k==='e1'?ICON.truck:(k==='e2'?ICON.alert:ICON.user)));return '<span class="ic '+ic+'" aria-hidden="true">'+i+'</span>';}
+  function inbox(){
+    var G=groups(),h='<div class="inbox">';
+    var any=G.some(function(g){return g.items.length&&g.h.indexOf('today')<0;});
+    if(!any){
+      var what={pick:'No pick lists for you right now. New pick lists appear here on their own.',pack:'Nothing to pack or dispatch. Picked orders appear here when the picker finishes.',unl:'No open exceptions from gate or unloading. New ones appear here as trucks arrive.'}[S.role];
+      h+='<div class="emptyst" role="status"><span class="ring">'+ICON.ok+'</span><h3>All caught up</h3><p>'+what+'</p><p>Scan any bin, lot or vehicle above to look it up.</p></div>';
+    }
+    G.forEach(function(g){
+      if(!any&&!g.items.length)return;
+      if(!any&&g.h.indexOf('today')<0)return;
+      var c=g.items.length;
+      h+='<section class="grp" aria-label="'+g.h+', '+c+'"><h3>'+g.h+' <span class="cnt'+(c?'':' zero')+'">'+c+'</span></h3><ul>';
+      g.items.forEach(function(t){
+        var cur=S.task===t[0]&&S.view!=='inbox';
+        h+='<li><button class="task" data-a="open" data-t="'+t[0]+'"'+(cur?' aria-current="true"':'')+'>'+icFor(t[0],t[3])+'<span class="tx"><b>'+esc(t[1])+'</b><span class="m">'+esc(t[2])+'</span>'+t[4]+'</span><span class="go" aria-hidden="true">&rsaquo;</span></button></li>';
+      });
+      if(!c)h+='<li class="empty-g">Nothing waiting</li>';
+      h+='</ul></section>';
+    });
+    return h+'</div>';
+  }
+
+  /* ---------- picker ---------- */
+  function progress(){
+    var h='<div class="prog"><span>'+(pickDone()?LINES.length:S.pk.cur+1)+' of '+LINES.length+'</span><ol aria-hidden="true">';
+    LINES.forEach(function(_,i){var r=S.pk.res[i];h+='<li class="'+(r?(r.got<LINES[i].qty?'sh':'d'):(i===S.pk.cur?'c':''))+'"></li>';});
+    return h+'</ol></div>';
+  }
+  function isShort(){var P=S.pk;return P.short||P.qty<LINES[P.cur].qty;}
+  function pickReady(){var P=S.pk;if(!isShort())return true;if(!P.reason)return false;return P.reason!=='Other'||P.note.trim().length>0;}
+  function pickView(fid,back){
+    var P=S.pk,L=LINES[P.cur],st=P.step;
+    var h='<div class="acc"><div class="acc-head">'+(back?'<button class="backbtn" data-a="home" aria-label="Back to tasks">'+ICON.back+'</button>':'')+
+      '<div class="tx"><b>'+PL.id+' · '+PL.so+'</b><span class="m">'+PL.cust+' · to pack station '+PL.station+'</span>'+progress()+'</div></div>';
+    h+='<div class="acc-body">';
+    var si=['bin','item','qty'].indexOf(st);
+    h+='<ol class="steps" aria-label="Steps for this line">'+['1 Scan bin','2 Scan lot','3 Confirm qty'].map(function(t,k){return '<li class="'+(k<si?'d':(k===si?'c':''))+'"'+(k===si?' aria-current="step"':'')+'>'+t+'</li>';}).join('')+'</ol>';
+    if(P.err){
+      var hold=P.err.type==='hold';
+      h+='<div class="alert '+(hold?'hold':'err')+'" role="alert">'+(hold?ICON.lock:ICON.ban)+'<div><b class="t">'+esc(P.err.t)+'</b><p>'+P.err.p+'</p></div></div>';
+    }
+    h+='<section class="direct" aria-label="Directed pick, line '+(P.cur+1)+'"><span class="go">'+(st==='bin'?'Go to':'At bin')+'</span><span class="bin">'+L.bin+'</span>'+
+      '<span class="what">Pick '+L.qty+' x '+L.item+'</span><span class="lot">Lot <b>'+L.lot+'</b> <span class="m">- oldest first</span></span>'+
+      (st!=='bin'?'<span class="pill p-ok" style="align-self:flex-start">Bin '+L.bin+' confirmed</span>':'')+
+      (st==='qty'?'<span class="pill p-ok" style="align-self:flex-start">Lot '+L.lot+' confirmed</span>':'')+'</section>';
+    if(st==='qty'){
+      var id=fid+'-pq';
+      h+='<div class="card"><div class="qty"><label for="'+id+'">Picked</label>'+
+        '<button class="stp" data-a="pkDec" aria-label="Decrease picked quantity"'+(P.qty<=0?' disabled':'')+'>-</button>'+
+        '<input id="'+id+'" type="number" inputmode="numeric" min="0" max="'+L.qty+'" data-f="pkqty" value="'+P.qty+'">'+
+        '<button class="stp" data-a="pkInc" aria-label="Increase picked quantity"'+(P.qty>=L.qty?' disabled':'')+'>+</button><span class="of">of '+L.qty+' '+L.uom+'</span></div>';
+      if(isShort()){
+        h+='<div class="ev gap" role="group" aria-label="Short pick reason"><span class="lbl">Short '+(L.qty-P.qty)+' - choose a reason</span><div class="tiles">';
+        SHORT.forEach(function(r,k){h+='<button class="tile" data-a="pkReason" data-k="'+k+'" aria-pressed="'+(P.reason===r)+'">'+r+'</button>';});
+        h+='</div>';
+        if(P.reason==='Damaged - report')h+='<span class="note">The damaged units go on hold and a QC task is raised. You only report; QC and finance decide.</span>';
+        if(P.reason==='Other')h+='<label class="sr" for="'+fid+'-pn">One line: why is this short</label><input class="txt" id="'+fid+'-pn" type="text" data-f="pknote" value="'+esc(P.note)+'" placeholder="One line - why is this short">';
+        h+='</div>';
+      }
+      h+='</div>';
+    }
+    h+='<section aria-label="All lines"><span class="kind">All lines</span><ul class="lines gap">';
+    LINES.forEach(function(x,i){var r=P.res[i];
+      h+='<li class="'+(r?'d':(i===P.cur?'c':''))+'"><span class="n">'+(r?'&#10003;':i+1)+'</span><span class="tx">'+x.qty+' x '+x.item+'</span><span class="mono">'+x.bin+'</span>'+
+        (r&&r.got<x.qty?'<span class="pill p-warn">Short '+(x.qty-r.got)+'</span>':'')+'</li>';});
+    h+='</ul></section></div>';
+    /* pinned footer */
+    h+='<div class="acc-foot">';
+    if(st==='bin'){
+      h+='<div class="todo"><span>Line '+(P.cur+1)+' of '+LINES.length+'</span><span>'+howScan('bin')+'</span></div>'+
+        '<div class="row alts">'+scanAlt('pkBin','bin')+'</div>'+
+        scanMain('pkBin','bin '+L.bin,'b-pri b-full');
+    } else if(st==='item'){
+      h+='<div class="todo"><span>Line '+(P.cur+1)+' of '+LINES.length+'</span><span>'+howScan('lot')+'</span></div>'+
+        '<div class="row alts">'+scanAlt('pkLot','lot')+'</div>'+
+        '<div class="row"><button class="b b-plain" data-a="pkShort" style="flex:0 0 38%">Short pick</button>'+scanMain('pkLot','lot','b-pri')+'</div>';
+    } else {
+      var ok=pickReady(),sh=isShort();
+      h+='<div class="todo"><span>Line '+(P.cur+1)+' of '+LINES.length+'</span><span>'+(ok?'<b>Ready</b>':'Left: <b>'+(P.reason==='Other'?'one line':'short reason')+'</b>')+'</span></div>'+
+        '<div class="row">'+(sh?'':'<button class="b b-plain" data-a="pkShort" style="flex:0 0 38%">Short pick</button>')+
+        '<button class="b b-pri" data-a="pkConfirm"'+(ok?'':' disabled aria-disabled="true"')+'>'+(sh?'Confirm short pick - '+P.qty+' of '+L.qty:'Confirm '+P.qty+' picked')+'</button></div>';
+    }
+    return h+'</div></div>';
+  }
+  function pickDoneView(){
+    var sh=0;S.pk.res.forEach(function(r,i){if(r&&r.got<LINES[i].qty)sh++;});
+    return '<div class="donev"><div class="donehead"><div class="check" aria-hidden="true">&#10003;</div><div><h2>'+(S.pending&&S.offline?'Captured - pending sync':'Pick complete')+'</h2><span class="m">'+PL.id+' · '+PL.so+'</span></div></div>'+
+      '<div class="row"><span class="pill p-ok">'+LINES.length+' lines</span>'+(sh?'<span class="pill p-warn">'+sh+' short</span>':'')+'</div>'+
+      '<div class="card"><h4>Handed to pack station '+PL.station+'</h4><span class="m">Sanjay Mishra (dispatch) sees it in Ready to pack.'+(sh?' Short lines go back to planning for a re-pick.':'')+'</span></div>'+
+      '<p class="m" style="margin:0">'+(S.offline?'Saved on this device. It will sync when the network is back.':'Sent to the server.')+'</p>'+
+      '<button class="b b-pri b-full" data-a="home">Back to tasks</button></div>';
+  }
+
+  /* ---------- dispatch ---------- */
+  function packHead(back){
+    return '<div class="acc-head">'+(back?'<button class="backbtn" data-a="home" aria-label="Back to tasks">'+ICON.back+'</button>':'')+
+      '<div class="tx"><b>'+PKG+' · '+PL.so+'</b><span class="m">'+PL.cust+' · pack station '+PL.station+'</span></div></div>';
+  }
+  function packView(fid,back){
+    var A=S.pa,n=A.scanned.filter(Boolean).length,st=A.stage;
+    var h='<div class="acc">'+packHead(back)+'<div class="acc-body">';
+    if(st==='pack'){
+      h+='<div class="card pkg"><span class="carton" aria-hidden="true"></span><div><h4>Carton 1 of 1 · '+PKG+'</h4><span class="m">From '+PL.id+' · picked by Imran Khan</span></div></div>';
+      h+='<section aria-label="Items to scan into the package"><span class="kind">Scan each item into the package - '+n+' of '+LINES.length+'</span><ul class="items gap">';
+      LINES.forEach(function(x,i){var r=S.pk.res[i],q=r?r.got:x.qty;
+        h+='<li><span class="tx">'+q+' x '+x.item+'<span class="mono">'+x.lot+'</span></span>'+(A.scanned[i]?'<span class="pill p-ok">In package</span>':'<span class="pill p-off">Scan to add</span>')+'</li>';});
+      h+='</ul></section>';
+      if(n<LINES.length)h+=(isDesk()?'<div class="row">':'')+scanMain('paScan','next item ('+LINES[A.scanned.indexOf(false)].lot+')','b-sec b-full')+(isDesk()?'':'<div class="row alts">')+scanAlt('paScan','lot')+'</div>';
+      h+='<div class="card"><div class="wt"><label for="'+fid+'-wt">Weight</label><input id="'+fid+'-wt" type="number" inputmode="decimal" step="0.1" data-f="wt" value="'+esc(A.wt)+'" placeholder="kg"><button class="b b-plain" data-a="paScale">'+ICON.scale+'Read scale</button></div><span class="m">Kilograms, package with packing.</span></div>';
+      var t=[];if(n<LINES.length)t.push((LINES.length-n)+' item'+(LINES.length-n>1?'s':'')+' to scan');if(!A.wt)t.push('weight');
+      h+='</div><div class="acc-foot"><div class="todo"><span>'+n+' of '+LINES.length+' scanned</span><span>'+(t.length?'Left: <b>'+t.join(', ')+'</b>':'<b>Ready</b>')+'</span></div>'+
+        '<button class="b b-pri b-full" data-a="paGen"'+(t.length?' disabled aria-disabled="true"':'')+'>'+ICON.doc+'Generate shipping documents</button></div></div>';
+      return h;
+    }
+    if(st==='blocked'){
+      h+='<div class="alert err" role="alert">'+ICON.ban+'<div><b class="t">E-invoice IRN missing - cannot dispatch</b>'+
+        '<p>Tax invoice '+INV+' has no IRN from the e-invoice portal yet. An e-way bill and dispatch need it.</p>'+
+        '<ol><li>Billing desk has been notified automatically (11:40).</li><li>Keep the package at dispatch bay D-02. Do not load it.</li><li>Tap Check IRN again, or wait: this card updates when the IRN arrives.</li></ol></div></div>';
+      h+='<div class="card"><table class="facts"><caption class="sr">Package summary</caption><tbody><tr><td>Package</td><td class="num">'+PKG+' · '+A.wt+' kg</td></tr><tr><td>Invoice</td><td class="num">'+INV+' · Rs 1,24,500</td></tr><tr><td>IRN</td><td class="num"><span class="pill p-err">Missing</span></td></tr><tr><td>Last checked</td><td class="num">'+(A.checked||'11:40')+'</td></tr></tbody></table></div>';
+      if(A.parked)h+='<span class="pill p-warn" style="align-self:flex-start">Parked at dispatch bay D-02 - '+syncWord()+'</span>';
+      h+='</div><div class="acc-foot">'+(A.parked?'':'<button class="b b-sec b-full" data-a="paPark">Park at dispatch bay D-02</button>')+
+        '<button class="b b-pri b-full" data-a="paCheck">Check IRN again</button></div></div>';
+      return h;
+    }
+    if(st==='docs'){
+      h+='<div class="alert hold" role="status" style="background:var(--ok-bg);border-color:#9FCDAE">'+ICON.ok+'<div><b class="t" style="color:var(--ok)">Shipping documents ready</b><p>IRN received for '+INV+'. Print and hand them to the driver.</p></div></div>';
+      h+='<ul class="docs">'+
+        '<li>'+ICON.doc+'<span class="tx">Tax invoice '+INV+'<span>IRN ...7c21a91f · Rs 1,24,500</span></span><span class="pill p-ok">Ready</span></li>'+
+        '<li>'+ICON.doc+'<span class="tx">E-way bill 3510 2210 8841<span>Valid to 27 Sep, 23:59</span></span><span class="pill p-ok">Ready</span></li>'+
+        '<li>'+ICON.doc+'<span class="tx">Packing list<span>'+PKG+' · 5 lines · '+A.wt+' kg</span></span><span class="pill p-ok">Ready</span></li></ul>';
+      h+='<div class="card"><label class="kind" for="'+fid+'-veh">Vehicle number</label><input class="txt gap mono" id="'+fid+'-veh" data-f="veh" value="'+VEH+'"></div>';
+      h+='</div><div class="acc-foot"><button class="b b-pri b-full" data-a="paDispatch">'+ICON.truck+'Confirm dispatch</button></div></div>';
+      return h;
+    }
+    return '<div class="donev"><div class="donehead"><div class="check" aria-hidden="true">&#10003;</div><div><h2>Dispatched</h2><span class="m">'+PKG+' · '+PL.so+' · '+VEH+' · 11:52</span></div></div>'+
+      '<div class="row"><span class="pill '+(S.pending&&S.offline?'p-warn':'p-ok')+'">'+(S.pending?'Captured - pending sync':'Synced')+'</span><span class="pill p-info">Stock issued from '+PL.station+'</span></div>'+
+      '<p class="m" style="margin:0">'+INV+' and e-way bill 3510 2210 8841 went with the driver. The sales order is marked dispatched.</p>'+
+      '<button class="b b-pri b-full" data-a="home">Back to tasks</button></div>';
+  }
+
+  /* ---------- unloading exceptions ---------- */
+  function exHead(k,back){var e=EX[k];
+    return '<div class="acc-head">'+(back?'<button class="backbtn" data-a="home" aria-label="Back to tasks">'+ICON.back+'</button>':'')+
+      '<div class="tx"><b>'+e.kind+'</b><span class="m">'+e.title+'</span></div></div>';}
+  function exResolved(k){
+    return '<div class="donev"><div class="donehead"><div class="check" aria-hidden="true">&#10003;</div><div><h2>Resolved</h2><span class="m">'+EX[k].kind+'</span></div></div>'+
+      '<div class="card"><h4>'+esc(S.ex[k].done)+'</h4><span class="m">'+(S.pending&&S.offline?'Captured - pending sync. ':'')+'The delivery moves to the stores inbox for acceptance into inspection bay IB-01.</span></div>'+
+      '<button class="b b-pri b-full" data-a="home">Back to exceptions</button></div>';
+  }
+  function exView(fid,back){
+    var k=S.task,E=S.ex[k],e=EX[k];
+    if(E.done)return '<div class="acc">'+exHead(k,back)+exResolved(k)+'</div>';
+    var h='<div class="acc">'+exHead(k,back)+'<div class="acc-body">';
+    if(k==='e1'){
+      h+='<div class="card"><div class="row" style="flex-wrap:nowrap"><div class="paper" role="img" aria-label="Challan photo from the gate"><i></i><i class="s"></i><i></i><i></i></div><table class="facts"><caption class="sr">Vehicle and challan</caption><tbody>'+
+        '<tr><td>Vehicle</td><td class="num mono">UP81 BT 2290</td></tr><tr><td>Supplier</td><td class="num">Aligarh Castings Pvt Ltd</td></tr><tr><td>Challan</td><td class="num">DC-7781 · 120 nos pump housing CI</td></tr></tbody></table></div>'+
+        '<p class="m" style="margin:8px 0 0">No open PO matched the challan number, supplier or ASN. Open POs from this supplier:</p></div>';
+      h+='<ul class="opts" aria-label="Open POs from Aligarh Castings">';
+      e.opts.forEach(function(o){h+='<li><button class="opt" data-a="exSel" data-v="'+o[0]+'" aria-pressed="'+(E.sel===o[0])+'"><span class="rad" aria-hidden="true"></span><span class="tx"><b>'+o[0]+'</b><small>'+o[1]+'</small></span></button></li>';});
+      h+='</ul><button class="b b-ghost" data-a="exProc">No PO fits - hold vehicle, ask procurement (Kavita Singh)</button>';
+      h+='</div><div class="acc-foot"><button class="b b-pri b-full" data-a="exDo"'+(E.sel?'':' disabled aria-disabled="true"')+'>'+(E.sel?'Match to '+E.sel:'Choose a PO to match')+'</button></div></div>';
+      return h;
+    }
+    if(k==='e2'){
+      var cap=Math.floor(BAND.ord*(1+BAND.tol))-BAND.recv,x=BAND.counted-cap,W=BAND.counted;
+      h+='<div class="card"><table class="facts"><caption class="sr">Receipt against PO line</caption><tbody>'+
+        '<tr><td>PO line 20</td><td class="num">Hex Bolt M16x60</td></tr><tr><td>Ordered</td><td class="num">'+BAND.ord+' nos</td></tr><tr><td>Already received</td><td class="num">'+BAND.recv+' nos</td></tr>'+
+        '<tr><td>Tolerance '+Math.round(BAND.tol*100)+'%</td><td class="num">accept up to '+cap+' nos</td></tr><tr><td>Counted at unloading</td><td class="num">'+BAND.counted+' nos</td></tr></tbody></table>'+
+        '<div class="band gap" role="img" aria-label="Ordered '+BAND.ord+', tolerance up to '+cap+', excess '+x+'"><span class="o" style="width:'+(BAND.ord/W*100)+'%"></span><span class="t" style="width:'+((cap-BAND.ord)/W*100)+'%"></span><span class="x" style="width:'+(x/W*100)+'%"></span></div>'+
+        '<div class="bandkey gap"><span><i style="background:var(--ok)"></i>Ordered '+BAND.ord+'</span><span><i style="background:#7DBF93"></i>Tolerance +'+(cap-BAND.ord)+'</span><span><i style="background:var(--err)"></i>Excess '+x+'</span></div></div>';
+      h+='<div class="alert hold" role="note">'+ICON.truck+'<div><b class="t">Excess '+x+' - returned with vehicle</b><p>Only '+cap+' nos are posted. The '+x+' nos go back on UP81 AT 4521 with a reason code; nothing is rejected.</p></div></div>';
+      h+='<button class="b b-sec b-full" disabled aria-disabled="true">Hold excess for buyer decision <span class="pill p-off">Post-pilot</span></button>';
+      h+='</div><div class="acc-foot"><button class="b b-plain b-full" data-a="nr" data-what="Recount">Recount</button><button class="b b-pri b-full" data-a="exDo">Accept '+cap+' - return '+x+' with vehicle</button></div></div>';
+      return h;
+    }
+    h+='<div class="card"><table class="facts"><caption class="sr">Unlisted supplier at gate</caption><tbody><tr><td>Written at gate</td><td class="num">Verma Traders</td></tr><tr><td>Vehicle</td><td class="num mono">UP80 CT 1180</td></tr><tr><td>Challan</td><td class="num">4471 · handwritten, photo attached</td></tr></tbody></table></div>';
+    h+='<label class="kind" for="'+fid+'-vs">Search vendor master</label><input class="txt" id="'+fid+'-vs" data-f="vs" value="Verma" autocomplete="off">';
+    h+='<ul class="opts" aria-label="Closest vendors">';
+    e.opts.forEach(function(o){h+='<li><button class="opt" data-a="exSel" data-v="'+o[0]+'" aria-pressed="'+(E.sel===o[0])+'"><span class="rad" aria-hidden="true"></span><span class="tx"><b>'+o[0]+'</b><small>'+o[1]+'</small></span></button></li>';});
+    h+='</ul><button class="b b-ghost" data-a="exProc">Not in vendor master - send to procurement (Kavita Singh)</button>';
+    h+='</div><div class="acc-foot"><button class="b b-pri b-full" data-a="exDo"'+(E.sel?'':' disabled aria-disabled="true"')+'>'+(E.sel?'Match to '+E.sel.split(' · ')[0]:'Choose a vendor to match')+'</button></div></div>';
+    return h;
+  }
+
+  /* ---------- tablet idle pane ---------- */
+  function nextUp(){
+    var h='<div class="sheet"><span class="kind">Today at CMF-ALIGARH · '+ROLES[S.role].title.toLowerCase()+'</span>';
+    if(S.role==='pick'){
+      h+='<div class="stat"><div><b>'+(pickDone()?1:0)+'</b><span>Lists done</span></div><div><b>'+total()+'</b><span>Open lists</span></div><div><b>'+S.pk.cur+'/'+LINES.length+'</b><span>Lines on '+PL.id.slice(-4)+'</span></div></div>';
+      if(!pickDone()&&!S.empty)h+='<div class="card"><span class="kind">Next up</span><h4 class="gap">'+PL.id+' - continue at line '+(S.pk.cur+1)+'</h4><span class="m">Go to '+LINES[S.pk.cur].bin+' · '+LINES[S.pk.cur].qty+' x '+LINES[S.pk.cur].item+'</span><button class="b b-pri b-full gap" data-a="open" data-t="pk">Continue picking</button></div>';
+    } else if(S.role==='pack'){
+      h+='<div class="stat"><div><b>'+(S.pa.stage==='done'?2:1)+'</b><span>Dispatched</span></div><div><b>'+total()+'</b><span>Open</span></div></div>';
+      if(S.pa.stage!=='done'&&!S.empty)h+='<div class="card"><span class="kind">Next up</span><h4 class="gap">'+PL.id+' · '+PL.so+'</h4><span class="m">'+PL.cust+'</span><button class="b b-pri b-full gap" data-a="open" data-t="pa">Open pack station</button></div>';
+    } else {
+      h+='<div class="stat"><div><b>'+exOpen().length+'</b><span>Open</span></div><div><b>'+(3-exOpen().length)+'</b><span>Resolved</span></div></div>';
+      if(exOpen().length&&!S.empty)h+='<div class="card"><span class="kind">Oldest first</span><h4 class="gap">'+EX[exOpen()[0]].kind+'</h4><span class="m">'+EX[exOpen()[0]].title+'</span><button class="b b-pri b-full gap" data-a="open" data-t="'+exOpen()[0]+'">Resolve</button></div>';
+    }
+    return h+'<p class="m">Pick a task from the list, or scan anything.</p></div>';
+  }
+  function otherSheet(){
+    return '<div class="sheet"><span class="kind">Task</span><h2>'+(S.task==='o1'?'PICK-2026-0234 · WO-2026-0551':'PKG-2026-0409 · SO-2026-1176')+'</h2><p class="pill p-off" style="align-self:flex-start">Not rendered in this mock</p><button class="b b-ghost" data-a="home">Close</button></div>';
+  }
+  function detail(fid,back){
+    switch(S.view){
+      case 'pick':return pickView(fid,back);
+      case 'pickdone':return pickDoneView();
+      case 'pack':return packView(fid,back);
+      case 'ex':return exView(fid,back);
+      case 'other':return otherSheet();
+      default:return nextUp();
+    }
+  }
+  function taskMode(){return S.view==='pick'||(S.view==='pack'&&S.pa.stage!=='done')||(S.view==='ex'&&!S.ex[S.task].done);}
+
+  /* ---------- render ---------- */
+  var LISTH={pick:'Pick lists',pack:'Pack and dispatch',unl:'Unloading exceptions'};
+  function render(el){
+    var fid=el.id,h='';
+    el.className='screen s-'+dev+' '+(dev==='desk'?'compact':'touch');
+    if(isDesk()){
+      h=side()+'<div class="dmain">'+dtop()+'<div class="dcontent"><section class="dlist" aria-label="Task inbox"><div class="lhd"><h2>'+LISTH[S.role]+'</h2></div>'+scanbar(fid)+inbox()+'</section>'+
+        '<section class="ddetail" aria-label="Task detail">'+detail(fid,false)+'</section></div></div>';
+    } else if(dev==='tab'){
+      h=rail()+'<div class="fill">'+stop()+'<div class="two"><section class="lp" aria-label="Task inbox">'+scanbar(fid)+inbox()+'</section><section class="rp" aria-label="Task detail">'+detail(fid,false)+'</section></div></div>';
+    } else {
+      h=stop()+scanbar(fid);
+      if(S.view==='inbox')h+=inbox()+bnav();
+      else if(taskMode())h+=detail(fid,true); /* task mode: action footer replaces the bottom nav */
+      else h+='<div class="fill">'+detail(fid,true)+'</div>'+bnav();
+    }
+    el.innerHTML=h;
+  }
+  var frames=[document.getElementById('f-main')];
+  function applyDev(){
+    var D=DEV[dev],w=document.getElementById('fwrap'),sc=frames[0];
+    w.className='fwrap'+(isDesk()?' dk':'');
+    w.style.width=Math.round(D.w*D.s)+'px';w.style.height=Math.round(D.h*D.s)+'px';
+    sc.style.width=D.w+'px';sc.style.height=D.h+'px';sc.style.transform=D.s===1?'none':'scale('+D.s+')';
+    document.getElementById('dev-cap').innerHTML=D.name+' <span>'+D.note+'</span>';
+    document.querySelectorAll('[data-dev]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.dev===dev));});
+  }
+  function demoRole(){
+    var cl=LINES[Math.min(S.pk.cur,LINES.length-1)];
+    var d={pick:[['bin','Scan bin label '+cl.bin],['lot','Scan lot '+cl.lot+' (directed)'],['wrong','Scan wrong lot '+WRONG],['hold','Scan lot on QC hold '+HOLD]],
+      pack:[['paFill','Scan all items + read scale'],['irn','IRN arrives (now: '+(S.pa.irn?'received':'missing')+')']],
+      unl:[['e1','Open: vehicle not matched'],['e2','Open: receipt over tolerance'],['e3','Open: unlisted supplier']]}[S.role];
+    return d.map(function(x){return '<button class="b b-sec" data-demo="'+x[0]+'">'+x[1]+'</button>';}).join('');
+  }
+  function renderAll(){
+    var a=document.activeElement,fr=null,f=null,act=null,scr={},dm=null;
+    if(a&&a.closest&&a.closest('.screen')){fr=a.closest('.screen').id;f=a.dataset.f;act=a.dataset.a;}
+    if(a&&a.dataset&&a.dataset.demo)dm=a.dataset.demo;
+    frames.forEach(function(el){var b=el.querySelector('.acc-body,.inbox,.donev,.sheet');if(b)scr[el.id]=b.scrollTop;});
+    frames.forEach(render);
+    frames.forEach(function(el){var b=el.querySelector('.acc-body,.inbox,.donev,.sheet');if(b&&scr[el.id])b.scrollTop=scr[el.id];});
+    document.getElementById('demo-role').innerHTML=demoRole();
+    document.querySelectorAll('[data-demo="role"]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.r===S.role));});
+    document.getElementById('empty-btn').textContent='Empty inbox (now: '+(S.empty?'on':'off')+')';
+    document.getElementById('off-btn').textContent='Toggle offline (now: '+(S.offline?'offline':'online')+')';
+    if(fr){var sel=f?'[data-f="'+f+'"]':(act?'[data-a="'+act+'"]':null);var n=sel&&document.querySelector('#'+fr+' '+sel);
+      if(n){n.focus();if(n.tagName==='INPUT'&&n.type==='text'){var l=n.value.length;try{n.setSelectionRange(l,l);}catch(e){}}}}
+    else if(dm&&dm!=='role'){var d=document.querySelector('[data-demo="'+dm+'"]');if(d)d.focus();}
+  }
+
+  /* ---------- picker logic ---------- */
+  function openPick(){S.view='pick';S.task='pk';}
+  function scanBin(code){
+    var P=S.pk,L=LINES[P.cur];
+    if(P.step!=='bin'){P.err=null;say('Bin '+code+' already confirmed. Scan the lot');return;}
+    if(code!==L.bin){P.err={type:'err',t:'Wrong bin - '+code,p:'This line is in <b class="mono">'+L.bin+'</b>. Go there and scan its label.'};say('Wrong bin. Go to '+L.bin);return;}
+    P.err=null;P.step='item';say('Bin '+code+' confirmed. Scan lot '+L.lot);
+  }
+  function scanLot(code){
+    var P=S.pk,L=LINES[P.cur];
+    if(P.step==='bin'){P.err={type:'err',t:'Scan the bin first',p:'Go to <b class="mono">'+L.bin+'</b> and scan the bin label, then the lot.'};say('Scan the bin label first');return;}
+    if(P.step==='qty'){say('Lot already confirmed. Confirm the quantity');return;}
+    if(code===HOLD){P.err={type:'hold',t:'On hold - awaiting QC',p:'Lot <b class="mono">'+HOLD+'</b> is on QC hold ('+HOLDQC+') and cannot be picked. Leave it in the bin and pick lot <b class="mono">'+L.lot+'</b>.'};say('Blocked. Lot '+HOLD+' is on hold, awaiting QC. Pick '+L.lot);return;}
+    if(code!==L.lot){P.err={type:'err',t:'Wrong lot - not picked',p:'You scanned <b class="mono">'+esc(code)+'</b>. This line needs lot <b class="mono">'+L.lot+'</b> (oldest first). Put it back and scan '+L.lot+'.'};say('Wrong lot '+code+'. Scan '+L.lot);return;}
+    P.err=null;P.step='qty';P.qty=L.qty;P.short=false;P.reason='';P.note='';say('Lot '+code+' confirmed. Confirm '+L.qty+' picked');
+  }
+
+  /* ---------- scan-anything resolver ---------- */
+  function resolve(code){
+    var c=code.trim().toUpperCase();S.msg='';
+    if(!c){S.msg='Nothing scanned. '+phText()+'.';return;}
+    if(S.role==='pick'){
+      if(/^PICK-2026-0233$/.test(c)){if(pickDone()){S.view='pickdone';S.task='pk';}else openPick();say('Pick list '+PL.id+' opened');return;}
+      if(/^R-/.test(c)){if(S.view!=='pick'||pickDone()){S.msg='Bin '+c+': lookup is not rendered in this mock. Open a pick list first.';say(S.msg);return;}scanBin(c);return;}
+      if(/^L-/.test(c)){if(S.view!=='pick'||pickDone()){S.msg='Lot '+c+': lookup is not rendered in this mock. Open a pick list first.';say(S.msg);return;}scanLot(c);return;}
+    }
+    if(S.role==='pack'){
+      if(/^PICK-2026-0233$|^PKG-2026-0412$/.test(c)){S.view='pack';S.task='pa';say('Pack station opened');return;}
+      if(/^L-/.test(c)&&S.view==='pack'&&S.pa.stage==='pack'){
+        var i=LINES.map(function(x){return x.lot;}).indexOf(c);
+        if(i<0){S.msg='Lot '+c+' is not on '+PL.id+'. Keep it out of this package.';say(S.msg);return;}
+        if(S.pa.scanned[i]){S.msg='Lot '+c+' is already in the package.';say(S.msg);return;}
+        S.pa.scanned[i]=true;say(LINES[i].item+' added to package');return;
+      }
+    }
+    if(S.role==='unl'){
+      if(/2290|7781|04822/.test(c)){S.view='ex';S.task='e1';say('Vehicle UP81 BT 2290 opened');return;}
+      if(/4521|04817/.test(c)){S.view='ex';S.task='e2';say('Over-tolerance receipt opened');return;}
+      if(/1180|4471/.test(c)){S.view='ex';S.task='e3';say('Unlisted supplier opened');return;}
+    }
+    S.msg='Not recognised: '+code+'. '+phText()+'.';say(S.msg);
+  }
+
+  function act(a,t){
+    var P=S.pk,A=S.pa,L=LINES[P.cur];
+    switch(a){
+      case 'home':S.view='inbox';S.task=null;S.msg='';break;
+      case 'focusScan':S.msg='';renderAll();var inp=t.closest('.screen').querySelector('[data-f="scanq"]');if(inp)inp.focus();return;
+      case 'nr':say((t.dataset.what||'This')+' is not rendered in this mock');return;
+      case 'typeIt':S.msg='Type the '+t.dataset.what+' code in the field above and press Go.';renderAll();
+        var ti=frames[0].querySelector('[data-f="scanq"]');if(ti)ti.focus();say(S.msg);return;
+      case 'camAny':say('Camera opens. Point it at a '+PH[S.role]+' label. Not rendered in this mock');return;
+      case 'open':S.task=t.dataset.t;S.msg='';
+        if(S.task==='pk'){if(pickDone())S.view='pickdone';else{openPick();say('Go to '+L.bin+'. Pick '+L.qty+' x '+L.item);}}
+        else if(S.task==='pa'){S.view='pack';say('Pack station '+PL.station+' opened');}
+        else if(EX[S.task]){S.view='ex';say(EX[S.task].kind);}
+        else{S.view='other';say('Not rendered in this mock');}
+        break;
+      case 'pkBin':scanBin(L.bin);break;
+      case 'pkLot':scanLot(L.lot);break;
+      case 'pkDec':P.qty=Math.max(0,P.qty-1);say('Picked '+P.qty+' of '+L.qty);break;
+      case 'pkInc':P.qty=Math.min(L.qty,P.qty+1);if(P.qty===L.qty){P.short=false;P.reason='';}say('Picked '+P.qty+' of '+L.qty);break;
+      case 'pkShort':P.err=null;if(P.step==='item'){P.step='qty';P.qty=0;}else if(P.qty===L.qty)P.qty=L.qty-1;P.short=true;say('Short pick. Set the quantity found and choose a reason');break;
+      case 'pkReason':P.reason=SHORT[+t.dataset.k];if(P.reason==='Bin empty')P.qty=0;say('Reason: '+P.reason+(P.reason==='Other'?'. One line required':''));break;
+      case 'pkConfirm':
+        if(!pickReady())return;
+        P.res[P.cur]={got:P.qty,reason:isShort()?P.reason:''};capture();
+        say((isShort()?'Short pick recorded: ':'Picked ')+P.qty+' x '+L.item+'. '+syncWord());
+        P.cur++;P.step='bin';P.err=null;P.short=false;P.reason='';P.note='';
+        if(pickDone()){S.view='pickdone';say('Pick complete. Handed to pack station '+PL.station);}
+        else P.qty=LINES[P.cur].qty;
+        break;
+      case 'paScan':var j=A.scanned.indexOf(false);if(j>=0){A.scanned[j]=true;say(LINES[j].item+' added to package');}break;
+      case 'paScale':A.wt='18.4';say('Scale read: 18.4 kg');break;
+      case 'paGen':A.stage=A.irn?'docs':'blocked';if(!A.irn){A.checked='11:40';}
+        say(A.irn?'Shipping documents ready':'Blocked. E-invoice IRN missing - cannot dispatch. Billing notified');break;
+      case 'paCheck':
+        if(S.offline){A.checked='11:44 (offline)';say('Offline - the IRN check needs the network. It will retry when you are back online');break;}
+        if(A.irn){A.stage='docs';say('IRN received. Shipping documents ready');}else{A.checked='11:44';say('Still no IRN. Billing desk already notified');}break;
+      case 'paPark':A.parked=true;capture();say('Parked at dispatch bay D-02. '+syncWord());break;
+      case 'paDispatch':A.stage='done';capture();say('Dispatched on '+VEH+'. '+syncWord());break;
+      case 'exSel':S.ex[S.task].sel=t.dataset.v;say('Selected '+t.dataset.v);break;
+      case 'exProc':say('Sent to procurement, Kavita Singh. Not rendered in this mock');return;
+      case 'exDo':
+        var k=S.task,E=S.ex[k];
+        if(k==='e1'){if(!E.sel)return;E.done='UP81 BT 2290 matched to '+E.sel;}
+        else if(k==='e2'){E.done='Accepted 525 nos within band. Excess 35 - returned with vehicle (not posted)';}
+        else{if(!E.sel)return;E.done='Verma Traders matched to '+E.sel.split(' · ')[0]+' '+E.sel.split(' · ')[1]+'. Open PO PO-CMF-2026-04805 found';}
+        capture();say('Resolved. '+E.done+'. '+syncWord());break;
+    }
+    renderAll();
+  }
+
+  document.addEventListener('click',function(e){
+    var dv=e.target.closest('[data-dev]');
+    if(dv){dev=dv.dataset.dev;applyDev();renderAll();say('Device: '+DEV[dev].name+'. Same step kept');return;}
+    var t=e.target.closest('[data-a]');if(t&&!t.disabled){e.preventDefault();act(t.dataset.a,t);return;}
+    var d=e.target.closest('[data-demo]');if(!d)return;
+    var P=S.pk;
+    switch(d.dataset.demo){
+      case 'role':S.role=d.dataset.r;S.view='inbox';S.task=null;S.msg='';S.scanq='';say('Role: '+ROLES[S.role].title+', '+ROLES[S.role].who);break;
+      case 'bin':if(S.view!=='pick'){if(pickDone()){say('Pick list complete. Reset to try again');break;}openPick();}resolve(LINES[P.cur].bin);break;
+      case 'lot':if(S.view!=='pick'){if(pickDone()){say('Pick list complete. Reset to try again');break;}openPick();}if(P.step==='bin')scanBin(LINES[P.cur].bin);scanLot(LINES[P.cur].lot);break;
+      case 'wrong':case 'hold':if(S.view!=='pick'){if(pickDone()){say('Pick list complete. Reset to try again');break;}openPick();}if(P.step==='bin')scanBin(LINES[P.cur].bin);if(P.step==='qty'){P.step='item';}scanLot(d.dataset.demo==='wrong'?WRONG:HOLD);break;
+      case 'paFill':S.view='pack';S.task='pa';if(S.pa.stage==='pack'){S.pa.scanned=[true,true,true,true,true];S.pa.wt='18.4';}say('All items in package, 18.4 kg. Ready to generate documents');break;
+      case 'irn':S.pa.irn=!S.pa.irn;if(S.pa.irn&&S.pa.stage==='blocked'){S.pa.stage='docs';say('IRN received. Shipping documents ready');}else say(S.pa.irn?'IRN will be present':'IRN missing');break;
+      case 'e1':case 'e2':case 'e3':S.view='ex';S.task=d.dataset.demo;S.msg='';say(EX[S.task].kind);break;
+      case 'empty':S.empty=!S.empty;S.view='inbox';S.task=null;say(S.empty?'Inbox empty: all caught up':'Inbox restored');break;
+      case 'offline':S.offline=!S.offline;say(S.offline?'Offline. Captures stay on the device':'Back online. Syncing');scheduleSync();break;
+      case 'reset':clearTimeout(syncT);S=fresh(S.role);say('Reset');break;
+    }
+    renderAll();
+  });
+  document.addEventListener('submit',function(e){
+    if(!e.target.dataset.scan)return;e.preventDefault();
+    var v=e.target.querySelector('input').value;S.scanq='';resolve(v);renderAll();
+  });
+  document.addEventListener('input',function(e){
+    var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
+    if(f==='scanq'){S.scanq=e.target.value;renderAll();return;}
+    if(f==='pkqty'){var L=LINES[S.pk.cur],v=parseInt(e.target.value.replace(/[^0-9]/g,''),10);S.pk.qty=isNaN(v)?0:Math.min(L.qty,v);renderAll();return;}
+    if(f==='pknote'){S.pk.note=e.target.value;renderAll();return;}
+    if(f==='wt'){S.pa.wt=e.target.value.replace(/[^0-9.]/g,'');renderAll();return;}
+  });
+  applyDev();
+  renderAll();
+})();
+</script>
+</body>
+</html>

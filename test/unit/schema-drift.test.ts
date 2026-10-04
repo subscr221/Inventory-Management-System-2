@@ -2192,6 +2192,36 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 8.9: the damage case (inline two-way pairing CHECKs, no guarded DO blocks: a new table),
+  // its append-only action history, and the photo store (append-only; bytes never rewritten).
+  {
+    canonical: 'read/projections/damage_report.sql',
+    table: 'damage_report',
+    constraints: [] as string[],
+    indexes: [
+      'uq_damage_report_number',
+      'uq_damage_report_source_grn_line',
+      'idx_damage_report_site_status',
+      'idx_damage_report_reporter',
+      'idx_damage_report_held_sku',
+      'idx_damage_report_replacement_indent',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/damage_report.sql',
+    table: 'damage_report_action',
+    constraints: [] as string[],
+    indexes: ['uq_damage_report_action_source_event', 'idx_damage_report_action_report'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/attachment.sql',
+    table: 'attachment',
+    constraints: [] as string[],
+    indexes: ['idx_attachment_uploaded_by'],
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -2546,6 +2576,66 @@ describe('Story 2.1 schema drift guard', () => {
     assert.ok(
       migrateSource.indexOf(clearanceFeedMigration) > migrateSource.indexOf(threeWayMatchMigration),
       'payment_clearance_feed must be appended after three_way_match',
+    );
+  });
+
+  // Pilot Ruling B: grn_jobwork_challan.sql is ALTER-only (no CREATE TABLE), so the table-shaped
+  // EXPECTED entries above cannot see it. A first-boot database built from init-db.sql alone must
+  // end up with the same nullable PO reference / ticket / correlation and the same named CHECKs,
+  // so the whole file is mirrored verbatim and pinned here by name.
+  it('Pilot Ruling B mirrors the job-work challan GRN migration into init-db.sql, after grn and grn_line', () => {
+    const challanSql = read('read/projections/grn_jobwork_challan.sql');
+    for (const constraint of [
+      'chk_grn_source_document',
+      'chk_grn_po_ref_by_source_document',
+      'chk_grn_correlation_by_source_document',
+      'chk_grn_line_po_ref_pair',
+      'chk_grn_line_no_po_job_work_only',
+      'chk_grn_line_no_ticket_job_work_only',
+    ]) {
+      assert.ok(challanSql.includes(constraint), `grn_jobwork_challan.sql missing ${constraint}`);
+    }
+    assert.ok(challanSql.includes("CHECK (source_document IN ('PO', 'ASN', 'JOBWORK_CHALLAN'))"));
+    const mirrorAt = normalizeSql(initDb).indexOf(normalizeSql(challanSql));
+    assert.ok(mirrorAt >= 0, 'init-db.sql does not mirror grn_jobwork_challan.sql verbatim');
+    assert.ok(
+      mirrorAt > normalizeSql(initDb).indexOf('create table if not exists grn_line'),
+      'the mirror must follow the grn and grn_line definitions it alters',
+    );
+    assert.ok(
+      migrateSource.indexOf("'../../read/projections/grn_jobwork_challan.sql'") >
+        migrateSource.indexOf("'../../read/projections/grn_line.sql'"),
+    );
+  });
+
+  // Story 3.11: grn_line_condition.sql is ALTER-only, so it is pinned by name and mirrored verbatim
+  // like the challan migration above.
+  it('Story 3.11 mirrors the GRN line condition migration into init-db.sql, after grn_line', () => {
+    const conditionSql = read('read/projections/grn_line_condition.sql');
+    for (const fragment of [
+      'ADD COLUMN IF NOT EXISTS line_condition TEXT NOT NULL DEFAULT',
+      'ADD COLUMN IF NOT EXISTS reason_code TEXT',
+      'ADD COLUMN IF NOT EXISTS reason_detail TEXT',
+      'ADD COLUMN IF NOT EXISTS reason_note TEXT',
+      'ADD COLUMN IF NOT EXISTS reason_photo_ref TEXT',
+      'chk_grn_line_condition',
+      'chk_grn_line_reason_code',
+      'chk_grn_line_condition_needs_reason',
+      'chk_grn_line_other_evidence',
+    ]) {
+      assert.ok(conditionSql.includes(fragment), `grn_line_condition.sql missing ${fragment}`);
+    }
+    const body = conditionSql.slice(conditionSql.indexOf('ALTER TABLE grn_line ADD COLUMN'));
+    const mirrorAt = normalizeSql(initDb).indexOf(normalizeSql(body));
+    assert.ok(mirrorAt >= 0, 'init-db.sql does not mirror grn_line_condition.sql verbatim');
+    const grnLineAt = normalizeSql(initDb)
+      .toLowerCase()
+      .indexOf('create table if not exists grn_line(');
+    assert.ok(grnLineAt >= 0, 'init-db.sql defines grn_line');
+    assert.ok(mirrorAt > grnLineAt, 'the mirror must follow the grn_line definition it alters');
+    assert.ok(
+      migrateSource.indexOf("'../../read/projections/grn_line_condition.sql'") >
+        migrateSource.indexOf("'../../read/projections/grn_jobwork_challan.sql'"),
     );
   });
 
@@ -3338,10 +3428,60 @@ describe('Story 9.9 event-type registry', () => {
   });
 });
 
+// Story 8.9: the twelve damage-case events on their own 'damage' stream (never 'qc', D2) and the
+// metadata-only photo upload record on 'attachment'. damage.returned_to_stock (code review,
+// 2026-09-28) closes the release loop: the reverse of damage.units_arrived, confirming units
+// physically walked back out of ZONE-QC-HOLD once the case has released them.
+describe('Story 8.9 event-type registry', () => {
+  it('registers every damage event on the damage stream and the upload on attachment', () => {
+    for (const type of [
+      'damage.reported',
+      'damage.units_arrived',
+      'damage.sent_for_external_check',
+      'damage.returned_from_external_check',
+      'damage.returned_to_stock',
+      'damage.inspected',
+      'damage.whole_lot_decided',
+      'damage.key_turned',
+      'damage.key_withdrawn',
+      'damage.disagreed',
+      'damage.escalation_decided',
+      'damage.outcome_recorded',
+    ] as const) {
+      assert.deepStrictEqual(SUPPORTED_EVENT_TYPES[type], {
+        streamType: 'damage',
+        requiresBusinessStream: false,
+      });
+    }
+    assert.deepStrictEqual(SUPPORTED_EVENT_TYPES['attachment.uploaded'], {
+      streamType: 'attachment',
+      requiresBusinessStream: false,
+    });
+    const damageTypes = Object.keys(SUPPORTED_EVENT_TYPES).filter((t) => t.startsWith('damage.'));
+    assert.strictEqual(damageTypes.length, 12);
+  });
+
+  it('mirrors the indent replacement link into init-db.sql', () => {
+    const initDb = read('deploy/compose/init-db.sql');
+    const canonical = read('read/projections/indent_damage_link.sql');
+    for (const statement of [
+      'ALTER TABLE indent ADD COLUMN IF NOT EXISTS damage_report_id UUID;',
+      'CREATE INDEX IF NOT EXISTS idx_indent_damage_report ON indent (damage_report_id) WHERE damage_report_id IS NOT NULL;',
+    ]) {
+      assert.ok(canonical.includes(statement), `canonical missing: ${statement}`);
+      assert.ok(initDb.includes(statement), `init-db.sql missing: ${statement}`);
+    }
+    assert.ok(read('src/events/migrate.ts').includes('indent_damage_link.sql'));
+  });
+});
+
 // Story 1.13 (AD-18): the refused-captures queue events live on the central-only 'sync' stream.
 describe('Story 1.13 event-type registry', () => {
   it('registers the refused-capture record and resolution on the sync stream', () => {
-    for (const type of ['sync.refused_capture_recorded', 'sync.refused_capture_resolved'] as const) {
+    for (const type of [
+      'sync.refused_capture_recorded',
+      'sync.refused_capture_resolved',
+    ] as const) {
       assert.deepStrictEqual(SUPPORTED_EVENT_TYPES[type], {
         streamType: 'sync',
         requiresBusinessStream: false,

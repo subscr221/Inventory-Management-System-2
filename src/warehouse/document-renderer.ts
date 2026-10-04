@@ -20,6 +20,11 @@ async function resolveConsignee(dispatchOrderId: string, client: PoolClient): Pr
   return result.rows[0].ship_to_ext || 'Unknown';
 }
 
+// Pilot B3: a lot-less record prints no lot at all, rather than "Lot: null".
+function lotText(lotNumber: string | null): string {
+  return lotNumber === null ? '' : `  Lot: ${lotNumber}`;
+}
+
 async function resolvePackingLines(
   dispatchOrderId: string,
   client: PoolClient,
@@ -27,7 +32,8 @@ async function resolvePackingLines(
   Array<{
     sku: string;
     packed_qty: string;
-    lot_number: string;
+    /** null for a lot-less record (stock that is not lot-controlled, Pilot B3). */
+    lot_number: string | null;
     lot_expiry: string | null;
   }>
 > {
@@ -35,7 +41,7 @@ async function resolvePackingLines(
     `SELECT pr.sku, pr.packed_qty,
             lm.lot_number, to_char(lm.expiry_date, 'YYYY-MM-DD') AS expiry_date
      FROM packing_record pr
-     JOIN lot_master lm ON lm.lot_id = pr.lot_id
+     LEFT JOIN lot_master lm ON lm.lot_id = pr.lot_id
      WHERE pr.dispatch_order_id = $1
      ORDER BY pr.sku`,
     [dispatchOrderId],
@@ -43,7 +49,7 @@ async function resolvePackingLines(
   return result.rows.map((r: Record<string, unknown>) => ({
     sku: r['sku'] as string,
     packed_qty: String(r['packed_qty']),
-    lot_number: r['lot_number'] as string,
+    lot_number: (r['lot_number'] as string | null) ?? null,
     lot_expiry: r['expiry_date'] ? (r['expiry_date'] as string) : null,
   }));
 }
@@ -84,7 +90,7 @@ Consignee: ${consignee}
 Carrier: TBD (Phase 2 / Epic 15)
 
 Line Items:
-${lines.map((l, i) => `  ${i + 1}. SKU: ${l.sku}  Qty: ${l.packed_qty}  Lot: ${l.lot_number}${l.lot_expiry ? `  Exp: ${l.lot_expiry}` : ''}`).join('\n')}
+${lines.map((l, i) => `  ${i + 1}. SKU: ${l.sku}  Qty: ${l.packed_qty}${lotText(l.lot_number)}${l.lot_expiry ? `  Exp: ${l.lot_expiry}` : ''}`).join('\n')}
 
 Total Cartons: ${totals.totalCartonCount}
 Total Weight: ${totals.totalWeightKg ?? 'N/A'} kg
@@ -113,7 +119,7 @@ SO Number: ${soNumber}
 Ship From: ${shipFrom}
 
 Contents:
-${lines.map((l, i) => `  ${i + 1}. SKU: ${l.sku}  Packed Qty: ${l.packed_qty}  Lot: ${l.lot_number}${l.lot_expiry ? `  Exp: ${l.lot_expiry}` : ''}`).join('\n')}
+${lines.map((l, i) => `  ${i + 1}. SKU: ${l.sku}  Packed Qty: ${l.packed_qty}${lotText(l.lot_number)}${l.lot_expiry ? `  Exp: ${l.lot_expiry}` : ''}`).join('\n')}
 
 Total Cartons: ${totals.totalCartonCount}
 Total Weight: ${totals.totalWeightKg ?? 'N/A'} kg
@@ -154,7 +160,7 @@ Seller: ${shipFrom}
 Buyer: ${consignee}
 
 Line Items:
-${lines.map((l, i) => `  ${i + 1}. SKU: ${l.sku}  Qty: ${l.packed_qty}  Unit Price: TBD  Lot: ${l.lot_number}`).join('\n')}
+${lines.map((l, i) => `  ${i + 1}. SKU: ${l.sku}  Qty: ${l.packed_qty}  Unit Price: TBD${lotText(l.lot_number)}`).join('\n')}
 
 Total Quantity: ${totalQuantity}
 Total Weight: ${totals.totalWeightKg ?? 'N/A'} kg
@@ -179,14 +185,14 @@ export async function renderLabels(dispatchOrderId: string, client: PoolClient):
   const recordResult = await client.query(
     `SELECT pr.sku, lm.lot_number, pr.carton_count
      FROM packing_record pr
-     JOIN lot_master lm ON lm.lot_id = pr.lot_id
+     LEFT JOIN lot_master lm ON lm.lot_id = pr.lot_id
      WHERE pr.dispatch_order_id = $1
      ORDER BY pr.sku, lm.lot_number`,
     [dispatchOrderId],
   );
   const records = recordResult.rows.map((r: Record<string, unknown>) => ({
     sku: r['sku'] as string,
-    lot_number: r['lot_number'] as string,
+    lot_number: (r['lot_number'] as string | null) ?? null,
     carton_count: Number(r['carton_count']),
   }));
 
@@ -198,7 +204,7 @@ export async function renderLabels(dispatchOrderId: string, client: PoolClient):
     for (let i = 1; i <= record.carton_count; i++) {
       cartonNumber += 1;
       labels.push(
-        `[${siteCode}] SO: ${soNumber} | Carton ${cartonNumber}/${totalCartons} | SKU: ${record.sku} | Lot: ${record.lot_number}`,
+        `[${siteCode}] SO: ${soNumber} | Carton ${cartonNumber}/${totalCartons} | SKU: ${record.sku}${record.lot_number === null ? '' : ` | Lot: ${record.lot_number}`}`,
       );
     }
   }

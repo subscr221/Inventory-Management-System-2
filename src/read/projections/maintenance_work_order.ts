@@ -415,8 +415,11 @@ export async function listBreakdownWorkOrdersInPeriod(
           SELECT 1 FROM maintenance_downtime d
            WHERE d.work_order_id = w.work_order_id
              AND d.ended_at IS NOT NULL
-             AND d.ended_at >= ($1::date AT TIME ZONE 'UTC')
-             AND d.ended_at < (($2::date + 1) AT TIME ZONE 'UTC')
+             -- ::timestamp before AT TIME ZONE forces the naive-midnight-as-UTC overload; without
+             -- it Postgres picks the date->timestamptz implicit cast, which applies the session
+             -- timezone (IST) instead of 'UTC' and silently shifts this boundary by the offset.
+             AND d.ended_at >= ($1::date::timestamp AT TIME ZONE 'UTC')
+             AND d.ended_at < (($2::date + 1)::timestamp AT TIME ZONE 'UTC')
         )${assetFilter}
       ORDER BY w.due_date ASC, w.work_order_id ASC`,
     values,

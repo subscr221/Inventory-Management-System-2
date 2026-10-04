@@ -12,7 +12,7 @@ export interface PickLine {
   pick_task_id: string;
   dispatch_order_line_id: string;
   sku: string;
-  directed_lot_id: string;
+  directed_lot_id: string | null;
   confirmed_lot_id: string | null;
   directed_quantity: string;
   confirmed_quantity: string | null;
@@ -34,7 +34,7 @@ export interface CreatePickLineInput {
   pick_task_id: string;
   dispatch_order_line_id: string;
   sku: string;
-  directed_lot_id: string;
+  directed_lot_id: string | null;
   directed_quantity: string;
   location_id: string;
   pick_sequence: number;
@@ -71,7 +71,7 @@ function mapRow(row: Record<string, unknown>): PickLine {
     pick_task_id: row['pick_task_id'] as string,
     dispatch_order_line_id: row['dispatch_order_line_id'] as string,
     sku: row['sku'] as string,
-    directed_lot_id: row['directed_lot_id'] as string,
+    directed_lot_id: (row['directed_lot_id'] as string | null) ?? null,
     confirmed_lot_id: (row['confirmed_lot_id'] as string | null) ?? null,
     directed_quantity: String(row['directed_quantity']),
     confirmed_quantity:
@@ -144,7 +144,7 @@ export async function createPickLine(
  */
 export async function confirmPickLine(
   pickLineId: string,
-  confirmedLotId: string,
+  confirmedLotId: string | null,
   confirmedQuantity: string,
   overrideReason: string | null,
   captureMethod: 'PWA' | 'PAPER',

@@ -12,7 +12,10 @@ import {
   updateCurrentLocation,
 } from '../read/projections/location.js';
 import { getLocationByCode, getLocationById } from '../read/projections/location_register.js';
+import type { LocationRegisterEntry } from '../read/projections/location_register.js';
 import { getLotByNumberAndSku } from '../read/projections/lot_master.js';
+import { applyStockIssue, applyStockReceipt } from '../read/projections/stock_balance.js';
+import { binOfSiteFault, isQuarantineLocation, lotRelocationHold } from './stock-relocation.js';
 
 /** Story 3.5 Task 5: Pre-transaction shape validation for putaway.completed envelope. */
 export function assertPutawayCompletedShape(envelope: PutawayCompletedEnvelope): void {
@@ -69,6 +72,20 @@ export interface ApplyPutawayCompletedInput {
  * Story 3.5 Task 5.3: In-transaction projection apply for putaway.completed + location.override.
  * Handles completion of the putaway task and optionally records an override if the actual location
  * differs from the directed suggestion.
+ *
+ * Pilot B2: completion also MOVES the stock balance from the task's receiving location to the
+ * actual bin. Like applyReplenishmentTaskCompletedProjection it calls applyStockIssue /
+ * applyStockReceipt directly (applyStockBalanceProjection is gated to the 'inventory' stream and
+ * would silently no-op on the 'putaway' stream) inside this same transaction, so the movement, the
+ * task completion and the domain_events insert commit or roll back together and a replay of the
+ * event log reproduces the same balances. A completed task is refused rather than skipped: the
+ * old silent return let persistEvent append a second putaway.completed for a no-op.
+ *
+ * Pilot B2 review: the destination is validated HERE, not in the REST handler, so a direct
+ * POST /events on the putaway stream is refused by the same rule - it must be an active bin of
+ * the task's own site (409 PUTAWAY_DESTINATION_INVALID). A lot under a blocking QC gate may be
+ * relocated, because a relocation is not a consumption, but only into a quarantine bin
+ * (409 PUTAWAY_QC_HOLD_QUARANTINE_REQUIRED otherwise). Both refusals throw before any write.
  */
 export async function applyPutawayCompletedProjection(
   input: ApplyPutawayCompletedInput,
@@ -91,7 +108,12 @@ export async function applyPutawayCompletedProjection(
   }
 
   if (task.status === 'completed') {
-    return;
+    throw new AppError(
+      409,
+      'PUTAWAY_TASK_ALREADY_COMPLETED',
+      `Putaway task ${putawayTaskId} is already completed`,
+      { putaway_task_id: putawayTaskId },
+    );
   }
 
   if (task.status !== 'ready') {
@@ -105,6 +127,7 @@ export async function applyPutawayCompletedProjection(
   // Step 2: Resolve actual location from code or ID
   let resolvedLocationId: string;
   let resolvedLocationCode: string;
+  let destination: LocationRegisterEntry;
 
   if (actualLocationCode) {
     const location = await getLocationByCode(actualLocationCode, client);
@@ -117,6 +140,7 @@ export async function applyPutawayCompletedProjection(
     }
     resolvedLocationId = location.location_id;
     resolvedLocationCode = actualLocationCode;
+    destination = location;
   } else if (actualLocationId) {
     const location = await getLocationById(actualLocationId, client);
     if (!location) {
@@ -128,12 +152,56 @@ export async function applyPutawayCompletedProjection(
     }
     resolvedLocationId = actualLocationId;
     resolvedLocationCode = location.location_code;
+    destination = location;
   } else {
     throw new AppError(
       400,
       'PUTAWAY_LOCATION_REQUIRED',
       'Either actualLocationId or actualLocationCode must be provided',
     );
+  }
+
+  // Step 2b: The destination must be an active bin of the task's own site. Without this a scanned
+  // code from another site, a zone/site row or a retired bin silently took the stock.
+  const destinationFault = binOfSiteFault(destination, task.site_id);
+  if (destinationFault) {
+    throw new AppError(
+      409,
+      'PUTAWAY_DESTINATION_INVALID',
+      `Location ${resolvedLocationCode} cannot take this putaway: the destination must be an active bin of the task's site`,
+      {
+        putaway_task_id: putawayTaskId,
+        location_code: resolvedLocationCode,
+        reason: destinationFault,
+      },
+    );
+  }
+
+  // Step 2c: QC policy (shared with the bin-to-bin move, see stock-relocation.ts). A lot under a
+  // blocking QC gate OR held by hand on lot_master (Pilot G1) may only go to quarantine. A lot-less
+  // task never reaches gated stock (the default drain predicate below still hides it).
+  const moves = task.from_location_id !== resolvedLocationId;
+  let heldLot = false;
+  if (moves && task.lot_id) {
+    const hold = await lotRelocationHold(task.sku, task.lot_id, client);
+    // Review R6: the drain window now hides a lot held by hand too, so both kinds carry the flag.
+    heldLot = hold.qcGated || hold.manuallyHeld;
+    if (
+      (hold.qcGated || hold.manuallyHeld) &&
+      !(await isQuarantineLocation(resolvedLocationId, client))
+    ) {
+      throw new AppError(
+        409,
+        'PUTAWAY_QC_HOLD_QUARANTINE_REQUIRED',
+        `Lot ${task.lot_id} is under QC hold and must be put away into a quarantine bin, not ${resolvedLocationCode}`,
+        {
+          putaway_task_id: putawayTaskId,
+          sku: task.sku,
+          lot_id: task.lot_id,
+          location_code: resolvedLocationCode,
+        },
+      );
+    }
   }
 
   // Step 3: Check if override is needed and reason code is present
@@ -198,7 +266,46 @@ export async function applyPutawayCompletedProjection(
     }
   }
 
-  // Step 5: Complete the putaway task
+  // Step 5: Move the stock balance from the receiving location to the actual bin (Pilot B2). The
+  // stock class is the one the GRN posted (the task's source event); a task with no resolvable
+  // source event moves owned stock. The issue is lot-scoped for a lot task (stock_balance.lot_id
+  // is the lot NUMBER, the same value the task carries) and fails closed with 409
+  // INSUFFICIENT_STOCK - rolling the whole event back - when the source no longer holds the
+  // quantity. `relocation` keeps last_issue_at untouched: a move must not reset the obsolescence clock.
+  // qc_gate_relocation is set only for the held-lot-into-quarantine case admitted in Step 2c.
+  if (moves) {
+    const source = await client.query(
+      `SELECT payload->>'stock_class' AS stock_class FROM domain_events WHERE event_id = $1`,
+      [task.source_event_id],
+    );
+    const stockClass = (source.rows[0]?.['stock_class'] as string | null | undefined) ?? 'owned';
+    await applyStockIssue(
+      {
+        sku: task.sku,
+        location_id: task.from_location_id,
+        lot_id: task.lot_id,
+        stock_class: stockClass,
+        quantity: task.quantity,
+        relocation: true,
+        ...(heldLot ? { qc_gate_relocation: true } : {}),
+        relocation_target_location_id: resolvedLocationId,
+      },
+      client,
+    );
+    await applyStockReceipt(
+      {
+        sku: task.sku,
+        location_id: resolvedLocationId,
+        location_code: resolvedLocationCode,
+        lot_id: task.lot_id,
+        stock_class: stockClass,
+        quantity: task.quantity,
+      },
+      client,
+    );
+  }
+
+  // Step 6: Complete the putaway task
   const completed = await completePutawayTask(
     {
       putawayTaskId,

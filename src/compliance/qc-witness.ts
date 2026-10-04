@@ -26,6 +26,7 @@ import {
   countNoticesForHoldPoint,
   type WitnessNoticeMethod,
 } from '../read/projections/qc_witness_notice.js';
+import { resolveActorSiteId } from './actor-site.js';
 import { resolveQcAuthority } from './quality.js';
 
 /**
@@ -326,7 +327,8 @@ async function applyWitnessHoldPointRaised(
   // api layer.
   const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
   const task = await getQcInspectionTaskByLotId(lotId, client, true);
-  const actorLocation = envelope.metadata.actor.location_id;
+  // Pilot R5: the stamp may be a bin; the fallback site is that location's site.
+  const actorLocation = await resolveActorSiteId(envelope.metadata.actor.location_id, client);
   // qc_quality_hold.site_id is NOT NULL (the Story 8.5 convention stores the sentinel there);
   // only the witness hold point's nullable column gets the NULL.
   const qcHoldSiteId = task?.site_id ?? actorLocation;

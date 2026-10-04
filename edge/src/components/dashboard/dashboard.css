@@ -1,0 +1,197 @@
+@import '../dashboard/chart.css';
+@import '../filters/filter.css';
+@import '../rbac/rbac.css';
+@import '../workflow/workflow.css';
+@import '../reports/report.css';
+
+/* Enhanced Dashboard Styles (Zoho-familiar: surface cards, border, rounded, accent primary). */
+
+.enhanced-dashboard {
+  width: 100%;
+  padding: var(--space-4);
+}
+
+.dashboard-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.view-selector {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.view-selector label {
+  font-weight: var(--label-weight);
+  font-size: var(--label-size);
+  color: var(--text-muted);
+}
+
+.view-selector select {
+  padding: 0 var(--space-3);
+  min-height: var(--control-height-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-size);
+}
+
+.dashboard-header h2 {
+  margin: 0 0 var(--space-2) 0;
+  font-size: var(--title-size);
+  font-weight: var(--title-weight);
+  color: var(--text);
+}
+
+.dashboard-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-size);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.dashboard-grid-item {
+  min-height: 200px;
+}
+
+.dashboard-grid-item.size-1x1 { grid-column: span 1; grid-row: span 1; }
+.dashboard-grid-item.size-2x1 { grid-column: span 2; grid-row: span 1; }
+.dashboard-grid-item.size-1x2 { grid-column: span 1; grid-row: span 2; }
+.dashboard-grid-item.size-2x2 { grid-column: span 2; grid-row: span 2; }
+
+.dashboard-widget {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  padding: var(--space-3);
+  height: 100%;
+}
+
+.dashboard-widget h3 {
+  margin: 0 0 var(--space-3) 0;
+  font-size: var(--title-size);
+  font-weight: var(--title-weight);
+  color: var(--text);
+}
+
+/* KPI Widget Styles */
+.kpi-widget .kpi-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: calc(100% - 30px);
+  text-align: center;
+}
+
+.kpi-widget .kpi-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 5px;
+}
+
+.kpi-widget .kpi-label {
+  font-size: var(--text-size);
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.kpi-widget .kpi-trend {
+  font-size: var(--caption-size);
+  font-weight: var(--label-weight);
+  padding: 2px var(--space-3);
+  border-radius: var(--rounded-full);
+}
+
+.kpi-widget .kpi-trend.up {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.kpi-widget .kpi-trend.down {
+  background: var(--err-bg);
+  color: var(--err);
+}
+
+.kpi-widget .kpi-trend.neutral {
+  background: var(--off-bg);
+  color: var(--off);
+}
+
+/* List Widget Styles */
+.list-widget .activity-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.activity-item {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+}
+
+.activity-action {
+  font-weight: 500;
+  color: var(--text);
+  flex: 2;
+}
+
+.activity-user {
+  color: var(--text-muted);
+  font-size: var(--text-size);
+  flex: 1;
+  text-align: center;
+}
+
+.activity-time {
+  color: var(--text-muted);
+  font-size: var(--text-size);
+  flex: 1;
+  text-align: right;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .dashboard-controls {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-grid-item.size-2x1,
+  .dashboard-grid-item.size-2x2 {
+    grid-column: span 1;
+  }
+
+  .activity-item {
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .activity-user,
+  .activity-time {
+    text-align: left;
+  }
+}

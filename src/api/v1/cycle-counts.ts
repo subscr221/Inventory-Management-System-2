@@ -9,6 +9,7 @@ import {
   getTraceId,
 } from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
+import { stampActedLocation } from './actor-stamp.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
@@ -281,7 +282,8 @@ const createCycleCountBase: RouteHandler = async (req, res) => {
     cycleCountId = randomUUID();
   }
 
-  const actor = actorContext(req);
+  // Pilot G2: a count is raised at ONE location, so that location is the audit stamp.
+  const actor = stampActedLocation(req, actorContext(req), 'inventory', locationId);
   const pool = getPool();
   const client = await pool.connect();
   let committed = false;
@@ -361,7 +363,7 @@ const submitCycleCountBase: RouteHandler = async (req, res, params) => {
     : undefined;
 
   assertRoleAllowed(req, CREATE_ROLES);
-  const actor = actorContext(req);
+  let actor = actorContext(req);
   const pool = getPool();
   const client = await pool.connect();
   let committed = false;
@@ -372,6 +374,9 @@ const submitCycleCountBase: RouteHandler = async (req, res, params) => {
       throw new AppError(404, 'NOT_FOUND', `Cycle count "${id}" not found`);
     }
     assertWriteLocationAccess(req, header.location_id);
+    // Pilot G2: the count is entered at the counted location. Approval and rejection below are
+    // site-level duties and keep the assignment's own stamp.
+    actor = stampActedLocation(req, actor, 'inventory', header.location_id);
 
     // Idempotent short-circuit for an already-submitted count.
     if (header.status !== 'open') {

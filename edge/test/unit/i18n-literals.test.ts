@@ -19,11 +19,24 @@ const ALLOWED_LITERAL_PATTERNS = [
   // Story 1.14: the refused-captures supervisor screen and the device dismiss control.
   /^refused\./,
   /^refused-/,
+  // Story 1.15: the employee base screens (check stock, my requests).
+  /^checkStock\./,
+  /^check-stock-/,
+  /^myRequests\./,
+  /^my-requests-/,
+  // Story 8.9: report damage and the damage cases workbench.
+  /^damage\./,
+  /^damage-/,
+  /^damageCases\./,
+  /^damage-cases-/,
   /^Promise$/,
   /^Dashboard$/,
   /^Frontline$/,
   /^main-content$/,
   /^first-sync-heading$/,
+  // The site-assignment refusal card (simulated pilot 2026-09-23).
+  /^site-refusal-heading$/,
+  /^(no_site|ambiguous_site|unavailable)$/,
   /^ready-heading$/,
   /^dashboard$/,
   /^frontline$/,

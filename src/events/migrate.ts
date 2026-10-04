@@ -318,6 +318,21 @@ const MIGRATIONS = [
   '../../read/projections/migration_golive_status.sql',
   // Story 1.13 (AD-18): the edge refused-captures queue. Appended at the tail; no FK.
   '../../read/projections/edge_refused_capture.sql',
+  // Pilot Ruling B: customer-owned job-work material received against the service order and the
+  // customer's challan, with no purchase order and an optional weighbridge ticket. Forward-only
+  // ALTERs on grn and grn_line (widened source_document CHECK, nullable PO reference and ticket,
+  // CHECKs that keep every PO/ASN receipt as strict as before). Appended at the tail; grn.sql and
+  // grn_line.sql are NOT edited and re-apply harmlessly above it.
+  '../../read/projections/grn_jobwork_challan.sql',
+  // Story 3.11: GRN line condition and reason codes. Forward-only ADD COLUMN IF NOT EXISTS plus
+  // named CHECKs on grn_line; appended at the tail, grn_line.sql is NOT edited.
+  '../../read/projections/grn_line_condition.sql',
+  // Story 8.9: the damage case (report or receipt), its append-only action history, the photo
+  // store, and the replacement-requisition link on indent (forward-only ADD COLUMN; indent.sql is
+  // NOT edited). Appended at the tail; no FK between them.
+  '../../read/projections/damage_report.sql',
+  '../../read/projections/attachment.sql',
+  '../../read/projections/indent_damage_link.sql',
 ];
 
 async function migrate(): Promise<void> {

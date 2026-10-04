@@ -1,16 +1,94 @@
+@import '../src/components/dashboard/dashboard.css';
+@import '../src/components/search/search.css';
+
+/* DESIGN.md (ux-Inventory Management System_2-2026-09-23) default tokens: Zoho-familiar
+   structure, dark sidebar, Lato, per-site Ledger Blue accent for CMF-ALIGARH. */
 :root {
-  --primary: #1f47d9;
-  --primary-strong: #1a3ab3;
-  --neutral-50: #f8f9fa;
-  --neutral-100: #f0f2f5;
-  --neutral-500: #8a95a1;
-  --neutral-900: #1f2937;
-  --neutral-950: #000000;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --error-strong: #991b1b;
-  --info-strong: #1e40af;
-  --offline: #9ca3af;
+  /* Per-site accent family (Ledger Blue default) */
+  --accent: #1E6BC6;
+  --accent-strong: #1656A3;
+  --accent-soft: #E8F1FC;
+  --on-accent: #FFFFFF;
+  --accent-on-dark: #5AA2F0;
+
+  /* Shell and neutrals */
+  --side: #1B2230;
+  --side-hover: #252E3F;
+  --side-text: #C9D1DD;
+  --side-muted: #8C97A8;
+  --bg: #F4F6F9;
+  --surface: #FFFFFF;
+  --border: #DDE2E9;
+  --text: #1C2430;
+  --text-muted: #566173;
+
+  /* Status pairs (fixed across sites) */
+  --ok: #1E7A3C;
+  --ok-bg: #E6F4EA;
+  --warn: #8A5300;
+  --warn-bg: #FFF3DC;
+  --err: #B3261E;
+  --err-bg: #FCE8E6;
+  --info: #1F5FAD;
+  --info-bg: #E7F0FB;
+  --off: #4A5568;
+  --off-bg: #ECEFF3;
+
+  /* Back-compat aliases used by older component classes */
+  --primary: var(--accent);
+  --primary-strong: var(--accent-strong);
+  --neutral-50: var(--bg);
+  --neutral-100: var(--surface);
+  --neutral-500: var(--border);
+  --neutral-900: var(--text);
+  --neutral-950: var(--text);
+  --success: var(--ok);
+  --warning: var(--warn);
+  --error-strong: var(--err);
+  --info-strong: var(--info);
+  --offline: var(--off);
+
+  /* Typography: Lato (open licence, replaces unlicensed Zoho Puvi) */
+  --font: 'Lato', 'Segoe UI', Roboto, system-ui, sans-serif;
+  --title-size: 18px;
+  --title-weight: 900;
+  --body-size: 13px;
+  --body-weight: 400;
+  --label-size: 13px;
+  --label-weight: 700;
+  --caption-size: 12px;
+  --caption-weight: 400;
+  --micro-size: 11px;
+  --micro-weight: 700;
+
+  /* Rounded */
+  --rounded-sm: 6px;
+  --rounded-md: 8px;
+  --rounded: 10px;
+  --rounded-full: 9999px;
+
+  /* Spacing (4px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --control-compact: 34px;
+  --touch-secondary: 48px;
+  --touch-primary: 56px;
+  --nav-item-touch: 52px;
+  --sidebar-width: 232px;
+  --sidebar-width-touch: 232px;
+  --icon-rail-width: 64px;
+  --bottom-nav-height: var(--touch-primary);
+  --body-touch-size: 16px;
+
+  /* Density. Bound to device input in the device-class blocks at the end of this file, never to
+     role. Touch-roomy is the mobile-first default; only a wide fine pointer goes compact. */
+  --control-height: var(--touch-primary);
+  --control-height-secondary: var(--touch-secondary);
+  --nav-item-height: var(--nav-item-touch);
+  --header-height: var(--touch-primary);
+  --text-size: var(--body-touch-size);
 }
 
 * {
@@ -21,149 +99,384 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: var(--neutral-50);
-  color: var(--neutral-900);
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--text-size);
+  font-weight: var(--body-weight);
+  line-height: 1.4;
 }
 
 a {
   color: inherit;
+  text-decoration: none;
 }
 
 button,
 a,
-input {
-  min-height: 44px;
-  min-width: 44px;
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
 }
 
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 3px;
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
 }
 
+/* Zoho-familiar shell: dark module sidebar + top bar with search, site switcher and quick create.
+   Desktop density (compact 34px controls); density follows device input, not role. */
 .edge-shell {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
+.edge-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Content column: top bar over the scrolling main area, beside the sidebar. */
+.edge-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Dark sidebar (DESIGN.md sidebar) */
+.edge-sidebar {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  background: var(--side);
+  color: var(--side-text);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  border-right: 1px solid var(--side-hover);
+}
+
+.edge-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3);
+  border-bottom: 1px solid var(--side-hover);
+}
+
+.edge-sidebar-brand h1,
+.edge-sidebar-brand .brand-name {
+  margin: 0;
+  font-size: var(--title-size);
+  font-weight: var(--title-weight);
+  color: var(--side-text);
+  letter-spacing: 0.02em;
+}
+
+.edge-sidebar-site {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--caption-size);
+  color: var(--side-muted);
+}
+
+.edge-sidebar-section {
+  padding: var(--space-2) 0;
+}
+
+.edge-sidebar-caption {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--micro-size);
+  font-weight: var(--micro-weight);
+  color: var(--side-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.edge-sidebar-nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.edge-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--nav-item-height);
+  padding: 0 var(--space-3);
+  color: var(--side-text);
+  font-size: var(--text-size);
+  font-weight: var(--body-weight);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  border-radius: 0;
+}
+
+.edge-sidebar-item:hover {
+  background: var(--side-hover);
+}
+
+.edge-sidebar-item.active {
+  color: var(--accent-on-dark);
+  box-shadow: inset 3px 0 0 var(--accent-on-dark);
+}
+
+.edge-sidebar-item.active .edge-sidebar-icon {
+  color: var(--accent-on-dark);
+}
+
+.edge-sidebar-icon {
+  color: var(--side-text);
+  font-size: var(--text-size);
+  width: 20px;
+  text-align: center;
+  flex: 0 0 auto;
+}
+
+.edge-sidebar-footer {
+  margin-top: auto;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--side-hover);
+}
+
+/* Top bar (Zoho Books top bar: search, site switcher, + New, user menu) */
 .edge-header {
   position: sticky;
   top: 0;
   z-index: 1000;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--neutral-500);
-  background: white;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  height: var(--header-height);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
-/* Story 1.12: sync badge and sign-out side by side; the sign-out gate notice sits under the header. */
+.edge-header-search {
+  flex: 1;
+  min-width: 200px;
+  max-width: 480px;
+}
+
 .edge-header-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.edge-site-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-secondary);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-size);
+  font-weight: var(--label-weight);
+  cursor: pointer;
+}
+
+.edge-site-switcher:hover {
+  border-color: var(--accent);
+}
+
+.quick-create {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-secondary);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--rounded);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  cursor: pointer;
+}
+
+.quick-create:hover {
+  background: var(--accent-strong);
+}
+
+.edge-user-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-secondary);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-size);
+  cursor: pointer;
+  border-radius: var(--rounded);
+}
+
+.edge-user-menu:hover {
+  background: var(--bg);
+}
+
+.edge-user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--rounded-full);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--caption-size);
+  font-weight: var(--label-weight);
 }
 
 .auth-sign-out-blocked {
   margin: 0;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--neutral-500);
-  background: var(--neutral-100, #f5f5f5);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: var(--text-size);
 }
 
-.edge-brand h1 {
-  margin: 0;
-  font-size: 1.5rem;
+.edge-main {
+  flex: 1;
+  width: 100%;
+  padding: var(--space-4);
+  overflow-y: auto;
+  background: var(--bg);
 }
 
-.edge-brand p {
-  margin: 4px 0 0;
+.edge-main-inner {
+  width: min(100%, 1440px);
+  margin: 0 auto;
 }
 
+/* Sync badge (DESIGN.md sync-badge): status pairs, pill, text label - colour never carries meaning alone. */
 .sync-badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 8px 16px;
-  border-radius: 9999px;
+  gap: var(--space-1);
+  min-height: var(--control-compact);
+  padding: 0 var(--space-3);
+  border-radius: var(--rounded-full);
   border: 0;
-  font-weight: 700;
+  font-size: var(--micro-size);
+  font-weight: var(--micro-weight);
 }
 
 .sync-online,
 .sync-captured {
-  background: var(--success);
-  color: var(--neutral-950);
+  background: var(--ok-bg);
+  color: var(--ok);
 }
 
 .sync-offline,
 .sync-pending {
-  background: var(--warning);
-  color: var(--neutral-950);
+  background: var(--warn-bg);
+  color: var(--warn);
 }
 
 .sync-syncing {
-  background: var(--info-strong);
-  color: white;
+  background: var(--info-bg);
+  color: var(--info);
 }
 
 .sync-error {
-  background: var(--error-strong);
-  color: white;
+  background: var(--err-bg);
+  color: var(--err);
 }
 
+/* Flat tab nav kept for view switching inside content; the sidebar owns module navigation. */
 .edge-nav {
   display: flex;
-  gap: 8px;
-  padding: 8px 24px;
-  border-bottom: 1px solid var(--neutral-500);
-  background: white;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .edge-nav a {
   display: inline-flex;
   align-items: center;
-  padding: 8px 16px;
-  color: var(--primary-strong);
-  font-weight: 700;
+  min-height: var(--control-height-secondary);
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-size);
+  font-weight: var(--label-weight);
+  border-bottom: 3px solid transparent;
+}
+
+.edge-nav a:hover {
+  color: var(--text);
+  background: var(--bg);
+}
+
+.edge-nav a[aria-current='true'],
+.edge-nav a.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 .edge-main {
-  width: min(100%, 1280px);
+  flex: 1;
+  width: 100%;
+  padding: var(--space-4);
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.edge-main-inner {
+  width: min(100%, 1440px);
   margin: 0 auto;
-  padding: 32px;
 }
 
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 24px;
+  gap: var(--space-4);
 }
 
 .edge-card {
-  padding: 24px;
-  background: white;
-  border: 1px solid var(--neutral-500);
-  border-radius: 12px;
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 5%);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+}
+
+.sample-data-notice {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  color: var(--warn);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn);
+  border-left-width: 4px;
+  border-radius: var(--rounded);
+  font-size: var(--text-size);
 }
 
 .sync-counts {
   display: flex;
-  gap: 24px;
-  margin: 24px 0 0;
+  gap: var(--space-4);
+  margin: var(--space-4) 0 0;
 }
 
 .sync-counts div {
@@ -172,120 +485,130 @@ input:focus-visible {
 }
 
 .sync-counts dd {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   font-size: 1.5rem;
   font-weight: 700;
 }
 
 .auth-required {
-  margin-bottom: 24px;
-  padding: 16px;
-  border: 2px solid var(--error-strong);
-  border-radius: 8px;
-  background: white;
-  color: var(--error-strong);
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  border: 2px solid var(--err);
+  border-radius: var(--rounded);
+  background: var(--surface);
+  color: var(--err);
   font-weight: 700;
 }
 
 .edge-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-top: 16px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
+/* Buttons (DESIGN.md buttons): accent fill primary, surface+border secondary, compact desktop height. */
 .primary-action {
   border: 0;
-  border-radius: 8px;
-  background: var(--primary-strong);
-  color: white;
-  font-weight: 700;
-  padding: 12px 18px;
+  border-radius: var(--rounded);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: var(--label-weight);
+  font-size: var(--label-size);
+  padding: 0 var(--space-4);
+  min-height: var(--control-height);
+  cursor: pointer;
+}
+
+.primary-action:hover {
+  background: var(--accent-strong);
 }
 
 .secondary-action {
-  border: 2px solid var(--primary);
-  border-radius: 8px;
-  background: white;
-  color: var(--primary);
-  font-weight: 700;
-  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: var(--label-weight);
+  font-size: var(--label-size);
+  padding: 0 var(--space-4);
+  min-height: var(--control-height-secondary);
+  cursor: pointer;
 }
 
+.secondary-action:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Form controls: surface fill, border, compact desktop height, accent focus halo. */
 .cross-dock-capture form {
   display: grid;
-  gap: 8px;
-  margin-top: 16px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 
 .cross-dock-capture input {
   width: 100%;
-  border: 2px solid var(--neutral-500);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  padding: 0 var(--space-3);
+  min-height: var(--control-height-secondary);
+  background: var(--surface);
+  color: var(--text);
 }
 
 .cross-dock-context dl {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .cross-dock-context dl div {
-  padding: 12px;
-  border: 1px solid var(--neutral-500);
-  border-radius: 8px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
 }
 
 .cross-dock-context dd {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
 
 .operator-status {
   display: inline-flex;
-  min-height: 44px;
+  min-height: var(--control-compact);
   align-items: center;
-  border-radius: 9999px;
-  background: var(--info-strong);
-  color: white;
-  padding: 8px 16px;
-  font-weight: 700;
+  border-radius: var(--rounded-full);
+  background: var(--info-bg);
+  color: var(--info);
+  padding: 0 var(--space-3);
+  font-size: var(--caption-size);
+  font-weight: var(--label-weight);
 }
 
 .skip-link {
   position: absolute;
-  left: 8px;
+  left: var(--space-2);
   top: -80px;
-  background: var(--primary-strong);
-  color: white;
-  padding: 8px 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  padding: var(--space-2) var(--space-3);
   z-index: 2000;
+  border-radius: var(--rounded);
 }
 
 .skip-link:focus {
-  top: 8px;
-}
-
-@media (max-width: 767px) {
-  .edge-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .edge-main {
-    padding: 16px;
-  }
+  top: var(--space-2);
 }
 
 /* Story 1.14: the refused-captures supervisor screen and the dismiss controls. Cards, not a table
-   (DESIGN.md:404). Error and status text uses the error colour token as text on white, never a
+   (DESIGN.md:404). Error and status text uses the error colour token as text on surface, never a
    bare colour without words. */
 .refused-screen {
   display: grid;
-  gap: 24px;
+  gap: var(--space-4);
 }
 
 .refused-notice {
@@ -296,49 +619,50 @@ input:focus-visible {
 
 .refused-list {
   display: grid;
-  gap: 16px;
-  margin: 16px 0 0;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
   padding: 0;
   list-style: none;
 }
 
 .refused-card {
-  padding: 16px;
-  border: 1px solid var(--neutral-500);
-  border-radius: 8px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
 }
 
 .refused-facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
   margin: 0;
 }
 
 .refused-facts dd {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
 
 .refused-resolve-form {
   display: grid;
-  gap: 8px;
-  margin-top: 16px;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 .refused-resolve-form textarea {
   width: 100%;
   min-height: 88px;
-  border: 2px solid var(--neutral-500);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  color: var(--text);
 }
 
 .refused-resolve-form textarea:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 3px;
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
 }
 
 .refused-note-hint {
@@ -346,8 +670,619 @@ input:focus-visible {
 }
 
 .refused-card-status {
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   min-height: 24px;
-  color: var(--error-strong);
+  color: var(--err);
   font-weight: 700;
+}
+
+/* Story 1.15: the employee base screens (check stock, my requests). Cards like Story 1.14; the
+   in-stock state is words in a pill, the colour only reinforces it (text stays on surface for
+   contrast), and no quantity is ever rendered. */
+.base-screen {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.base-screen-title {
+  margin: 0;
+}
+
+.base-form {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 420px;
+}
+
+.base-form input {
+  width: 100%;
+  min-height: var(--control-height-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  padding: 0 var(--space-3);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.base-form input:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
+.base-hint,
+.base-notice {
+  margin: 0;
+}
+
+.base-notice {
+  min-height: 24px;
+  margin-top: var(--space-3);
+  font-weight: 700;
+}
+
+.base-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.base-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+}
+
+.base-card-stacked {
+  display: grid;
+  justify-content: stretch;
+}
+
+.base-card-title {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.base-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.base-facts dd {
+  margin: var(--space-1) 0 0;
+  font-weight: 700;
+}
+
+/* Status pills (DESIGN.md status-pill): rounded full, micro typography, status pairs, always labelled. */
+.state-pill {
+  padding: 2px var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-full);
+  color: var(--text);
+  font-size: var(--micro-size);
+  font-weight: var(--micro-weight);
+  white-space: nowrap;
+}
+
+.state-pill-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+/* Story 8.9: report damage and the damage cases workbench. The 56px keyboard-wedge scan input
+   (EXPERIENCE.md scan-input-screen); state words in pills whose colour only reinforces the text
+   (DESIGN.md concurrence-keys-card: pending warn, concurred ok, disagree err). */
+.scan-input {
+  min-height: 56px;
+  font-size: 1.125rem;
+}
+
+.state-pill-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.state-pill-err {
+  background: var(--err-bg);
+  color: var(--err);
+  border-color: var(--err);
+}
+
+.damage-form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.damage-step {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  min-width: 0;
+}
+
+.damage-step legend {
+  padding: 0 4px;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.damage-form input:not([type='radio']):not([type='checkbox']),
+.damage-action-form input:not([type='radio']):not([type='checkbox']),
+.damage-action-form select,
+.damage-action-form textarea {
+  width: 100%;
+  max-width: 480px;
+  min-height: var(--control-height-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  padding: 0 var(--space-3);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.damage-form input.scan-input:not([type='radio']):not([type='checkbox']) {
+  min-height: 56px;
+}
+
+.damage-action-form textarea {
+  min-height: 72px;
+}
+
+.damage-form input:focus-visible,
+.damage-action-form select:focus-visible,
+.damage-action-form textarea:focus-visible,
+.damage-case-link:focus-visible,
+.damage-case h3:focus-visible,
+.damage-cases-detail h3:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
+.damage-choice {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.damage-choice legend {
+  padding: 0;
+  font-weight: 700;
+}
+
+.damage-choice label,
+.damage-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 48px;
+}
+
+.damage-choice label > span,
+.damage-toggle > span {
+  display: grid;
+  gap: 2px;
+}
+
+.damage-choice-rule {
+  font-weight: 400;
+}
+
+.damage-replacement {
+  display: grid;
+  gap: var(--space-2);
+  padding-left: var(--space-4);
+  border-left: 4px solid var(--border);
+}
+
+.damage-photo-label {
+  font-weight: 700;
+}
+
+.damage-footer {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+}
+
+.damage-cases {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.damage-cases-layout {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* List and case side by side on a wide pointer, stacked on touch (Task 10.1). */
+@media (min-width: 1024px) and (pointer: fine) {
+  .damage-cases-layout {
+    grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
+    align-items: start;
+  }
+}
+
+.damage-cases-list,
+.damage-cases-detail,
+.damage-case {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.damage-case-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-strong);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.damage-case-link[aria-current='true'] {
+  text-decoration-thickness: 3px;
+}
+
+.damage-card-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.damage-panel {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.damage-panel p {
+  margin: 0;
+}
+
+.damage-action-form {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.damage-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+}
+
+.damage-field-error {
+  margin: 0;
+  color: var(--err);
+  font-weight: 700;
+}
+
+.damage-photo {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: var(--rounded);
+  border: 1px solid var(--border);
+}
+
+/* Nav icons shared by the bottom nav and the icon rail. */
+.nav-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+
+/* Bottom nav (DESIGN.md bottom-nav): surface bar, touch-primary high, icon plus label, active
+   item in accent. Four slots; the fourth is More when anything overflows. */
+.bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.bottom-nav-list {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bottom-nav-slot {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.bottom-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: var(--bottom-nav-height);
+  padding: 0 var(--space-1);
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  cursor: pointer;
+}
+
+.bottom-nav-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bottom-nav-item[aria-current='page'],
+.bottom-nav-item.active {
+  color: var(--accent);
+  box-shadow: inset 0 3px 0 var(--accent);
+}
+
+.bottom-nav :focus-visible {
+  outline-color: var(--accent);
+  outline-offset: -3px;
+}
+
+.bottom-nav-more {
+  position: absolute;
+  right: var(--space-2);
+  bottom: calc(100% + var(--space-2));
+  min-width: 232px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  box-shadow: 0 -4px 12px rgb(0 0 0 / 6%);
+}
+
+.bottom-nav-more[hidden] {
+  display: none;
+}
+
+.bottom-nav-more-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--touch-secondary);
+  padding: 0 var(--space-4);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--body-touch-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bottom-nav-more-item:hover {
+  background: var(--bg);
+}
+
+.bottom-nav-more-item[aria-current='page'] {
+  color: var(--accent);
+  font-weight: var(--label-weight);
+}
+
+/* Icon rail (DESIGN.md icon-rail): collapsed dark navigation, icons in side-text, active item
+   marked with the accent-on-dark inset bar. The inner column stays in view while the page scrolls. */
+.icon-rail {
+  width: var(--icon-rail-width);
+  min-width: var(--icon-rail-width);
+  background: var(--side);
+  color: var(--side-text);
+  border-right: 1px solid var(--side-hover);
+}
+
+.icon-rail-expanded {
+  width: var(--sidebar-width-touch);
+  min-width: var(--sidebar-width-touch);
+}
+
+.icon-rail-inner {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 100vh;
+  max-height: 100dvh;
+  overflow-y: auto;
+}
+
+.icon-rail-list {
+  margin: 0;
+  padding: var(--space-2) 0;
+  list-style: none;
+}
+
+.icon-rail-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--nav-item-touch);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--side-text);
+  font-size: var(--body-touch-size);
+  cursor: pointer;
+}
+
+.icon-rail-expanded .icon-rail-item {
+  justify-content: flex-start;
+  padding: 0 var(--space-4);
+}
+
+.icon-rail-item:hover {
+  background: var(--side-hover);
+}
+
+.icon-rail-item[aria-current='page'] {
+  color: var(--accent-on-dark);
+  background: var(--side-hover);
+  box-shadow: inset 3px 0 0 var(--accent-on-dark);
+}
+
+.icon-rail :focus-visible {
+  outline-color: var(--accent-on-dark);
+  outline-offset: -3px;
+}
+
+.icon-rail-footer {
+  border-top: 1px solid var(--side-hover);
+}
+
+/* Device classes (EXPERIENCE.md Foundation): width plus pointer, never role. The same breakpoints
+   drive use-device-class.ts, which picks the nav surface; the display rules below keep the wrong
+   surface hidden before hydration and during a resize. */
+@media (max-width: 599px) {
+  /* Handheld: bottom nav, touch density */
+  :root {
+    --control-height: var(--touch-primary);
+    --control-height-secondary: var(--touch-secondary);
+    --nav-item-height: var(--nav-item-touch);
+    --header-height: var(--touch-primary);
+    --text-size: var(--body-touch-size);
+  }
+
+  .edge-sidebar,
+  .icon-rail,
+  .edge-nav {
+    display: none;
+  }
+
+  /* Search (the scan bar on scan-driven screens) always sits on top, actions on the row below. */
+  .edge-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+    height: auto;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .edge-header-search {
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .edge-main {
+    padding: var(--space-3);
+    padding-bottom: calc(
+      var(--bottom-nav-height) + var(--space-4) + env(safe-area-inset-bottom, 0px)
+    );
+  }
+
+  .card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The primary action is full width and pinned in the bottom third, clear of the bottom nav. */
+  .primary-action {
+    position: sticky;
+    bottom: calc(var(--bottom-nav-height) + var(--space-3) + env(safe-area-inset-bottom, 0px));
+    z-index: 10;
+    width: 100%;
+    box-shadow: 0 -4px 12px rgb(0 0 0 / 6%);
+  }
+
+  .secondary-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+  }
+}
+
+@media (min-width: 600px) and (max-width: 1100px) {
+  /* Tablet: icon rail, touch density */
+  :root {
+    --control-height: var(--touch-primary);
+    --control-height-secondary: var(--touch-secondary);
+    --nav-item-height: var(--nav-item-touch);
+    --header-height: var(--touch-primary);
+    --text-size: var(--body-touch-size);
+  }
+
+  .edge-sidebar,
+  .bottom-nav,
+  .edge-nav {
+    display: none;
+  }
+
+  .edge-header-search {
+    min-width: 0;
+  }
+}
+
+@media (min-width: 1101px) and (pointer: coarse) {
+  /* Desktop touch: sidebar, touch density */
+  :root {
+    --control-height: var(--touch-primary);
+    --control-height-secondary: var(--touch-secondary);
+    --nav-item-height: var(--nav-item-touch);
+    --header-height: var(--touch-primary);
+    --text-size: var(--body-touch-size);
+  }
+
+  .bottom-nav,
+  .icon-rail:not(.icon-rail-expanded) {
+    display: none;
+  }
+
+  .edge-sidebar {
+    width: var(--sidebar-width-touch);
+    min-width: var(--sidebar-width-touch);
+  }
+
+  .edge-sidebar-caption {
+    font-size: var(--body-touch-size);
+  }
+}
+
+@media (min-width: 1101px) and (pointer: fine) {
+  /* Desktop: sidebar, compact density */
+  :root {
+    --control-height: var(--control-compact);
+    --control-height-secondary: var(--control-compact);
+    --nav-item-height: var(--control-compact);
+    --header-height: var(--control-compact);
+    --text-size: var(--body-size);
+  }
+
+  .bottom-nav,
+  .icon-rail {
+    display: none;
+  }
 }

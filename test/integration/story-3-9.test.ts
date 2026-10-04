@@ -424,6 +424,102 @@ describe('Story 3.9 Forward-Pick Replenishment', () => {
       '170.000000',
       'a replayed confirmation must not move stock a second time',
     );
+
+    // Pilot F4 (bug 13): the replay answers with the ORIGINAL event and appends nothing.
+    assert.strictEqual(secondConfirm.body['event_id'], confirmRes.body['event_id']);
+    assert.strictEqual(secondConfirm.body['replayed'], true);
+    const completions = await getPool().query(
+      `SELECT count(*)::int AS n FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'replenishment_task.completed'`,
+      [taskId],
+    );
+    assert.strictEqual(completions.rows[0]!['n'], 1, 'a re-completion must not append an event');
+
+    // Pilot F2: a replenishment move is a relocation and must not start the issue clock.
+    const clock = await getPool().query(
+      `SELECT location_id FROM stock_balance WHERE sku = $1 AND last_issue_at IS NOT NULL`,
+      [localSku],
+    );
+    assert.deepStrictEqual(clock.rows, []);
+  });
+
+  it('Pilot F4: concurrent confirmations write exactly one event and all answer 200 with its id', async () => {
+    const localSku = `SKU-39-F4-${run}`;
+    await makeRequest(
+      port,
+      'PUT',
+      '/api/v1/replenishment/config',
+      { sku: localSku, zone_id: fpZoneId, min_qty: 10, max_qty: 30 },
+      managerHeaders,
+    );
+    await getPool().query(
+      `INSERT INTO stock_balance (sku, location_id, stock_class, on_hand)
+       VALUES ($1, $2, 'owned', 0), ($1, $3, 'owned', 200)`,
+      [localSku, fpBinId, reserveBinId],
+    );
+    const checkRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/replenishment/check',
+      { site_id: siteAId, sku: localSku },
+      managerHeaders,
+    );
+    assert.strictEqual(checkRes.status, 200, checkRes.raw);
+    const taskId = (checkRes.body['created'] as Array<Record<string, unknown>>)[0]![
+      'replenishment_task_id'
+    ] as string;
+
+    const answers = await Promise.all(
+      [1, 2, 3, 4].map(() =>
+        makeRequest(
+          port,
+          'POST',
+          `/api/v1/replenishment-tasks/${taskId}/confirm`,
+          { to_location_id: fpBinId },
+          frontlineHeaders,
+        ),
+      ),
+    );
+    for (const answer of answers) assert.strictEqual(answer.status, 200, answer.raw);
+    assert.strictEqual(new Set(answers.map((a) => a.body['event_id'])).size, 1);
+    const completions = await getPool().query(
+      `SELECT count(*)::int AS n FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'replenishment_task.completed'`,
+      [taskId],
+    );
+    assert.strictEqual(completions.rows[0]!['n'], 1);
+    const reserve = await getPool().query(
+      `SELECT on_hand FROM stock_balance WHERE sku = $1 AND location_id = $2 AND stock_class = 'owned'`,
+      [localSku, reserveBinId],
+    );
+    assert.strictEqual(reserve.rows[0]!['on_hand'], '170.000000');
+
+    // A direct event post on the completed task is refused by the seam and appends nothing.
+    const direct = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'warehouse',
+        stream_id: taskId,
+        event_type: 'replenishment_task.completed',
+        payload: { replenishment_task_id: taskId, to_location_id: fpBinId },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: randomUUID(), role: 'store_assistant', location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      frontlineHeaders,
+    );
+    assert.strictEqual(direct.status, 409, direct.raw);
+    assert.strictEqual(direct.body['error_code'], 'REPLENISHMENT_TASK_ALREADY_COMPLETED');
+    const after = await getPool().query(
+      `SELECT count(*)::int AS n FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'replenishment_task.completed'`,
+      [taskId],
+    );
+    assert.strictEqual(after.rows[0]!['n'], 1);
   });
 
   it('AC3: confirming to a destination outside the task zone is rejected with REPLENISHMENT_DESTINATION_OUTSIDE_ZONE', async () => {
@@ -463,6 +559,158 @@ describe('Story 3.9 Forward-Pick Replenishment', () => {
     );
     assert.strictEqual(res.status, 409, res.raw);
     assert.strictEqual(res.body['error_code'], 'REPLENISHMENT_DESTINATION_OUTSIDE_ZONE');
+  });
+
+  it('Pilot R6: a lot-controlled replenishment keeps its lot numbers, and a held lot stays behind', async () => {
+    const localSku = `SKU-39-R6-${run}`;
+    const lots = { held: `L39-A-HELD-${run}`, first: `L39-B-${run}`, second: `L39-C-${run}` };
+    await makeRequest(
+      port,
+      'PUT',
+      '/api/v1/replenishment/config',
+      { sku: localSku, zone_id: fpZoneId, min_qty: 10, max_qty: 30 },
+      managerHeaders,
+    );
+    // The held lot sorts first, so a drain that ignores the hold would take it before the others.
+    for (const [lot, onHand, hold] of [
+      [lots.held, 50, 'held'],
+      [lots.first, 20, 'none'],
+      [lots.second, 20, 'none'],
+    ] as const) {
+      await getPool().query(
+        `INSERT INTO lot_master (lot_id, lot_number, sku, quality_hold_status) VALUES ($1, $2, $3, $4)`,
+        [randomUUID(), lot, localSku, hold],
+      );
+      await getPool().query(
+        `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand) VALUES ($1, $2, $3, 'owned', $4)`,
+        [localSku, reserveBinId, lot, onHand],
+      );
+    }
+
+    const checkRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/replenishment/check',
+      { site_id: siteAId, sku: localSku },
+      managerHeaders,
+    );
+    assert.strictEqual(checkRes.status, 200, checkRes.raw);
+    const created = checkRes.body['created'] as Array<Record<string, unknown>>;
+    assert.strictEqual(created.length, 1, checkRes.raw);
+    const confirmRes = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/replenishment-tasks/${created[0]!['replenishment_task_id'] as string}/confirm`,
+      { to_location_id: fpBinId },
+      frontlineHeaders,
+    );
+    assert.strictEqual(confirmRes.status, 200, confirmRes.raw);
+
+    const balances = await getPool().query(
+      `SELECT location_id, lot_id, on_hand::float AS on_hand FROM stock_balance
+        WHERE sku = $1 AND on_hand <> 0 ORDER BY location_id = $2 DESC, lot_id`,
+      [localSku, reserveBinId],
+    );
+    assert.deepStrictEqual(balances.rows, [
+      { location_id: reserveBinId, lot_id: lots.held, on_hand: 50 },
+      { location_id: reserveBinId, lot_id: lots.second, on_hand: 10 },
+      { location_id: fpBinId, lot_id: lots.first, on_hand: 20 },
+      { location_id: fpBinId, lot_id: lots.second, on_hand: 10 },
+    ]);
+  });
+
+  it('generation: held reserve stock is not counted as source stock, and an unheld bin is still chosen', async () => {
+    const secondReserveBinId = randomUUID();
+    await seedLocation(
+      secondReserveBinId,
+      `ZRESBIN39-${run}`,
+      'bin',
+      reserveZoneId,
+      siteAId,
+      'reserve',
+    );
+
+    // The first reserve bin holds 70, but only 20 of it is drainable: it cannot cover the 30.
+    async function generate(
+      localSku: string,
+      secondBinOnHand: number | null,
+      blockedBy: 'manual_hold' | 'qc_gate' = 'manual_hold',
+    ): Promise<unknown> {
+      await makeRequest(
+        port,
+        'PUT',
+        '/api/v1/replenishment/config',
+        { sku: localSku, zone_id: fpZoneId, min_qty: 10, max_qty: 30 },
+        managerHeaders,
+      );
+      for (const [lot, binId, onHand, hold] of [
+        [`${localSku}-A-HELD`, reserveBinId, 50, blockedBy === 'manual_hold' ? 'held' : 'none'],
+        [`${localSku}-B`, reserveBinId, 20, 'none'],
+        [`${localSku}-C`, secondReserveBinId, secondBinOnHand, 'none'],
+      ] as const) {
+        if (onHand === null) continue;
+        const lotId = randomUUID();
+        await getPool().query(
+          `INSERT INTO lot_master (lot_id, lot_number, sku, quality_hold_status) VALUES ($1, $2, $3, $4)`,
+          [lotId, lot, localSku, hold],
+        );
+        // The Story 8.1 gate row (keyed by lot number + sku) blocks the lot with no manual hold.
+        if (blockedBy === 'qc_gate' && lot.endsWith('-A-HELD'))
+          await getPool().query(
+            `INSERT INTO qc_inspection_task
+               (task_id, lot_id, lot_number, source_completion_type, source_completion_id, item_id, sku,
+                quantity, uom, site_id, bom_revision_id, plan_id, plan_version_id, plan_scope, completed_at,
+                business_date, gate_status, gate_changed_at, source_event_id)
+             VALUES ($1, $2, $3, 'job_work_order', $4, $5, $6, 1, 'KG', $7, $8, $9, $10, 'standard', now(),
+                '2026-07-23', 'qc_hold', now(), $11)`,
+            [
+              randomUUID(),
+              lotId,
+              lot,
+              randomUUID(),
+              randomUUID(),
+              localSku,
+              siteAId,
+              randomUUID(),
+              randomUUID(),
+              randomUUID(),
+              randomUUID(),
+            ],
+          );
+        await getPool().query(
+          `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand) VALUES ($1, $2, $3, 'owned', $4)`,
+          [localSku, binId, lot, onHand],
+        );
+      }
+      const checkRes = await makeRequest(
+        port,
+        'POST',
+        '/api/v1/replenishment/check',
+        { site_id: siteAId, sku: localSku },
+        managerHeaders,
+      );
+      assert.strictEqual(checkRes.status, 200, checkRes.raw);
+      const created = checkRes.body['created'] as Array<Record<string, unknown>>;
+      assert.strictEqual(created.length, 1, checkRes.raw);
+      const task = await getPool().query(
+        `SELECT from_location_id FROM replenishment_task WHERE replenishment_task_id = $1`,
+        [created[0]!['replenishment_task_id']],
+      );
+      return task.rows[0]!['from_location_id'];
+    }
+
+    assert.strictEqual(
+      await generate(`SKU-39-GENHOLD-${run}`, null),
+      null,
+      'a bin whose drainable stock cannot cover the task must not be named as its source',
+    );
+    assert.strictEqual(
+      await generate(`SKU-39-GENGATE-${run}`, null, 'qc_gate'),
+      null,
+      'a lot under a blocking QC gate counts no more than a manually held one',
+    );
+    // Unheld behaviour is unchanged: a bin whose free stock covers the quantity is still chosen.
+    assert.strictEqual(await generate(`SKU-39-GENFREE-${run}`, 40), secondReserveBinId);
   });
 
   // -------------------------------------------------------------------------

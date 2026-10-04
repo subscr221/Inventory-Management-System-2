@@ -28,6 +28,7 @@ import {
 } from '../../read/projections/pick_task.js';
 import { activeUserExistsById } from '../../read/projections/users.js';
 import { listPickLinesByTask } from '../../read/projections/pick_line.js';
+import { stampActedLocation } from './actor-stamp.js';
 import { generatePickTasks } from '../../warehouse/pick-task-generator.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
@@ -463,17 +464,22 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
     return;
   }
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
-  const confirmedLotId = body['confirmedLotId'] ?? body['confirmed_lot_id'];
+  // Pilot B3: an explicit null confirms a lot-less line (stock that is not lot-controlled).
+  const confirmedLotId =
+    body['confirmedLotId'] !== undefined ? body['confirmedLotId'] : body['confirmed_lot_id'];
   const confirmedQuantity = body['confirmedQuantity'] ?? body['confirmed_quantity'];
   const overrideReason = body['overrideReason'] ?? body['override_reason'];
   const captureMethod = body['captureMethod'] ?? body['capture_method'];
-  if (typeof confirmedLotId !== 'string' || !UUID_REGEX.test(confirmedLotId)) {
+  if (
+    confirmedLotId !== null &&
+    (typeof confirmedLotId !== 'string' || !UUID_REGEX.test(confirmedLotId))
+  ) {
     sendRequestError(
       req,
       res,
       400,
       'INVALID_PARAMS',
-      'confirmedLotId is required and must be a UUID',
+      'confirmedLotId is required and must be a UUID, or null for stock that is not lot-controlled',
     );
     return;
   }
@@ -494,7 +500,12 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
   }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'write');
 
-  const actor = actorContext(req);
+  // Pilot G2: a line is confirmed at ONE bin, so that bin is the audit stamp. An unknown line id
+  // is left to the projection seam and stamps nothing new.
+  const pickLine = (await listPickLinesByTask(pickTaskId)).find(
+    (l) => l.pick_line_id === pickLineId,
+  );
+  const actor = stampActedLocation(req, actorContext(req), 'warehouse', pickLine?.location_id);
   const persisted = await persistEvent(
     {
       stream_type: 'warehouse',
@@ -632,7 +643,7 @@ const printPickTaskBase: RouteHandler = async (req, res, params) => {
   ].filter((l): l is string => l !== null);
   const rows = lines.map(
     (l) =>
-      `${String(l.pick_sequence).padStart(3)} | ${l.pick_line_id} | ${l.dispatch_order_line_id} | ${l.directed_lot_id} | ${l.directed_quantity.padStart(8)} | ${l.location_id}`,
+      `${String(l.pick_sequence).padStart(3)} | ${l.pick_line_id} | ${l.dispatch_order_line_id} | ${(l.directed_lot_id ?? '(no lot)').padEnd(36)} | ${l.directed_quantity.padStart(8)} | ${l.location_id}`,
   );
   const text = [...header, ...rows, ''].join('\n');
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });

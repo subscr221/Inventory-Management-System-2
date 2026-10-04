@@ -947,12 +947,13 @@ describe('Story 7.3 Fault Reporting and Breakdown Work Orders Integration Tests'
     const downtime = closed.body['downtime'] as Record<string, unknown>;
     assert.strictEqual(Number(downtime['duration_minutes']), 120);
 
-    // Period covers the close date; business_date pins the "today" for the future check.
-    const endedDate = new Date(Date.parse(endedAt)).toISOString().slice(0, 10);
-    const businessDate = endedDate;
-    const periodStart = addDays(endedDate, -10);
-    const periodEnd = endedDate;
-    const periodMinutes = 11 * 1440;
+    // Pinned to TODAY (not derived from endedAt), matching the other AC3 report tests below: the
+    // close happens up to 120 real minutes after `reportedAt`, which can roll past midnight UTC
+    // relative to the TODAY captured at module load, so periodEnd carries a one-day buffer.
+    const periodStart = addDays(TODAY, -10);
+    const periodEnd = addDays(TODAY, 1);
+    const businessDate = addDays(TODAY, 2);
+    const periodMinutes = 12 * 1440;
 
     const report = await generateReport(periodStart, periodEnd, businessDate, assetId);
     assert.strictEqual(report.status, 200, JSON.stringify(report.body));

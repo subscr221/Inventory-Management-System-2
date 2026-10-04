@@ -1,4 +1,5 @@
 import type { EventEnvelope } from './store.js';
+import type { ValuationOutflow } from '../compliance/inventory-valuation.js';
 
 /**
  * Event types introduced by Story 2.5: Inter-Location Transfer Requests.
@@ -411,10 +412,20 @@ export interface WeighbridgeRecordedEnvelope extends Omit<EventEnvelope, 'payloa
 export interface GoodsReceivedPayload {
   grn_id: string;
   grn_line_id: string;
-  correlation_id: string;
-  po_ref_ext: string;
-  line_no: number;
-  source_document: 'PO' | 'ASN';
+  /**
+   * The weighbridge binding token. Required on a PO/ASN receipt. Pilot Ruling B: OPTIONAL on a
+   * 'JOBWORK_CHALLAN' receipt, where a supplied ticket is validated exactly the same way.
+   */
+  correlation_id?: string;
+  /** Required on a PO/ASN receipt; must be absent (with line_no) on a 'JOBWORK_CHALLAN' receipt. */
+  po_ref_ext?: string;
+  line_no?: number;
+  /**
+   * Pilot Ruling B: 'JOBWORK_CHALLAN' receives customer-owned job-work material against the
+   * service order plus the customer's challan, with no purchase order. It requires stock_class
+   * 'job_work', service_order_id, challan_number_ext, challan_date and challan_qty.
+   */
+  source_document: 'PO' | 'ASN' | 'JOBWORK_CHALLAN';
   source_ref_ext?: string | null;
   sku: string;
   target_location_id?: string;
@@ -435,6 +446,24 @@ export interface GoodsReceivedPayload {
   cross_dock_task_id?: string;
   /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
   received_by?: string;
+  /**
+   * Story 3.11: the physical condition of THIS line's quantity, as reported at the dock (a report,
+   * not a verdict - QC decides). Absent means 'GOOD' (additive extension; pre-3.11 events are
+   * GOOD). DAMAGED and REJECTED post into the site ZONE-QC-HOLD with a held putaway; REJECTED
+   * never counts against the PO line.
+   */
+  line_condition?: 'GOOD' | 'DAMAGED' | 'REJECTED';
+  /**
+   * Story 3.11: exactly one fixed group code on a non-clean line (src/compliance/receiving-reasons.ts
+   * holds the catalogue and the allowed condition/reason pairs).
+   */
+  reason_code?: 'SHORT' | 'DAMAGED' | 'REJECTED' | 'OTHER';
+  /** Story 3.11: the fixed sub-reason within SHORT, DAMAGED or REJECTED; forbidden for OTHER. */
+  reason_detail?: string;
+  /** Story 3.11: the one-line description, required with reason_code 'OTHER'. */
+  reason_note?: string;
+  /** Story 3.11: opaque photo attachment key (the challan_photo_ref precedent), required with 'OTHER'. */
+  reason_photo_ref?: string;
 }
 
 export interface GoodsReceivedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -508,7 +537,8 @@ export interface PickLineInput {
   pick_line_id: string;
   dispatch_order_line_id: string;
   sku: string;
-  directed_lot_id: string;
+  /** lot_master.lot_id UUID; null for stock that is not lot-controlled (Pilot B3). */
+  directed_lot_id: string | null;
   directed_quantity: number | string;
   location_id: string;
   pick_sequence: number;
@@ -522,7 +552,8 @@ export interface PickTaskCreatedPayload {
   dispatch_order_id: string;
   sku: string;
   quantity: number | string;
-  lot_id: string;
+  /** First line's directed lot; null when that line is lot-less (Pilot B3). */
+  lot_id: string | null;
   location_id: string;
   pick_sequence: number;
   strategy: 'single' | 'batch' | 'wave' | 'zone';
@@ -545,7 +576,8 @@ export interface PickTaskCreatedEnvelope extends Omit<EventEnvelope, 'payload'> 
 export interface PickLineConfirmedPayload {
   pick_task_id: string;
   pick_line_id: string;
-  confirmed_lot_id: string;
+  /** null confirms a lot-less line (Pilot B3); it must match a lot-less directed line. */
+  confirmed_lot_id: string | null;
   confirmed_quantity: number | string;
   override_reason?: string | null;
   capture_method: 'PWA' | 'PAPER';
@@ -584,7 +616,8 @@ export interface DispatchPackedPayload {
   dispatch_order_id: string;
   sku: string;
   packed_qty: number | string;
-  lot_id: string;
+  /** null for stock that is not lot-controlled (Pilot B3). */
+  lot_id: string | null;
   actual_weight_kg?: number | string | null;
   label_ref?: string | null;
   carton_count: number;
@@ -693,6 +726,30 @@ export interface PutawayTaskAssignedPayload {
 export interface PutawayTaskAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'putaway_task.assigned';
   payload: PutawayTaskAssignedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Pilot G3 (owner ruling 2026-09-20): same-site bin-to-bin move
+// ---------------------------------------------------------------------------
+export interface StockBinMovedPayload {
+  /** The one site both bins belong to; validated against the register in the compliance seam. */
+  site_id: string;
+  sku: string;
+  from_location_id: string;
+  to_location_id: string;
+  quantity: number | string;
+  /** The lot NUMBER (the stock_balance.lot_id key). Required for a lot-controlled item only. */
+  lot_id?: string | null;
+  /** One serial number per unit moved, for a serial-controlled item only. */
+  serials?: string[];
+  /** Defaults to 'owned'; a move never changes the class. */
+  stock_class?: 'owned' | 'consignment' | 'vmi' | 'job_work' | 'prototype' | 'offcut';
+  reason?: string | null;
+}
+
+export interface StockBinMovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'stock.bin_moved';
+  payload: StockBinMovedPayload;
 }
 
 export interface PickTaskAssignedPayload {
@@ -922,6 +979,8 @@ export interface IndentRaisedPayload {
   approver_actor_id?: string;
   doa_entry_id?: string;
   duplicate_window_days?: number;
+  /** Story 8.9 (AC 5, D15): the damage case this replacement requisition was raised for. */
+  damage_report_id?: string;
 }
 
 export interface IndentRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -2453,6 +2512,30 @@ export interface SpareCataloguedEnvelope extends Omit<EventEnvelope, 'payload'> 
 }
 
 /**
+ * Story 7.9 (FR-M-09): amends the min-max levels of an already catalogued spare in place, without
+ * re-cataloguing it. The row is identified by the (sku, location_id) grain the storekeeper already
+ * knows; stream_id is the existing catalogue_id. The caller sends only sku, location_id and the NEW
+ * levels. The seam locks the row and writes catalogue_id, previous_min_level and
+ * previous_max_level onto this payload before the event is persisted, so the append-only event log
+ * IS the row's level history - no separate history table exists. is_critical is NOT amendable here.
+ */
+export interface SpareCatalogueAmendedPayload {
+  sku: string;
+  location_id: string;
+  min_level: string | null;
+  max_level: string | null;
+  /** Seam-written from the locked row; a caller-supplied value is ignored and overwritten. */
+  catalogue_id?: string;
+  previous_min_level?: string | null;
+  previous_max_level?: string | null;
+}
+
+export interface SpareCatalogueAmendedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.spare_catalogue_amended';
+  payload: SpareCatalogueAmendedPayload;
+}
+
+/**
  * Story 7.4 (FR-M-07): one line of the maintenance-owned asset parts list, the equipment BOM.
  * stream_id is part_line_id. This is NOT an Epic 5 bom.* event and must never be treated as one
  * (AD-4): there is no revision, no release gate and no ERP outbound. quantity_per is a NUMERIC
@@ -3038,6 +3121,9 @@ export interface ProductionOrderCancelledEnvelope extends Omit<EventEnvelope, 'p
  * applyStockIssue / applyStockIssueUnderSite, which RETURN their drained-row detail; the seam
  * writes ONE posting per drained row (Binding Decision 7) so a return can restore the exact
  * (location, lot) grain the drain took. posting_value is computed in SQL NUMERIC, never in JS.
+ * Owner defaults 2026-09-20 (D1): `valuation` is this posting's share of what the issue relieved
+ * from inventory valuation; posting_value equals its value and unit_cost is that value over the
+ * whole quantity, so an unvalued part sits in WIP at zero. A later return reads this block.
  */
 export interface ProductionMaterialPosting {
   posting_id: string;
@@ -3049,6 +3135,8 @@ export interface ProductionMaterialPosting {
   quantity: string;
   unit_cost: string;
   posting_value: string;
+  /** Write-back; absent on events that predate the 2026-09-20 ruling. */
+  valuation?: ValuationOutflow;
 }
 
 /**
@@ -3093,8 +3181,9 @@ export interface ProductionOrderMaterialStagedEnvelope extends Omit<EventEnvelop
  * Story 6.2 (FR-MO-05): issues staged material to the order. stream_id is production_order_id.
  * The applier locks the stage row FOR UPDATE, deallocates BEFORE issuing (the 7.4 binding order),
  * and writes one WIP posting per drained balance row (write-back). quantity is bounded by the
- * stage's remaining quantity; unit_cost is server-derived from the Story 2.4 running average
- * (WIP_COST_UNRESOLVED fail-closed).
+ * stage's remaining quantity. Owner defaults 2026-09-20 (D1, D4): the issue relieves inventory
+ * valuation and WIP takes in exactly that value; stock with no cost basis still issues, at zero,
+ * and wip_cost_unresolved flags the event for finance (WIP_COST_UNRESOLVED no longer refuses it).
  */
 export interface ProductionOrderMaterialIssuedPayload {
   production_order_id: string;
@@ -3105,6 +3194,10 @@ export interface ProductionOrderMaterialIssuedPayload {
   issued_at: string;
   /** Write-back: one entry per drained balance row. */
   postings: ProductionMaterialPosting[];
+  /** Write-back: what the issue took out of inventory valuation (the audit record). */
+  valuation?: ValuationOutflow;
+  /** Write-back: true when any part of the issue had no cost basis and entered WIP at zero. */
+  wip_cost_unresolved?: boolean;
 }
 
 export interface ProductionOrderMaterialIssuedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -5447,6 +5540,112 @@ export interface RefusedCaptureResolvedEnvelope extends Omit<EventEnvelope, 'pay
 }
 
 // ---------------------------------------------------------------------------
+// Story 8.9: damage cases (stream 'damage', stream_id = report_id) and the photo store
+// ---------------------------------------------------------------------------
+
+export type DamageOutcomeCode =
+  'debit_note' | 'return_for_replacement' | 'write_off' | 'accept_as_is_price_reduction';
+
+/** Captured on any device by any signed-in person (the base hat). reporter_user_id is server-stamped. */
+export interface DamageReportedPayload {
+  report_id: string;
+  site_id: string;
+  reporter_user_id: string;
+  sku: string;
+  lot_number: string | null;
+  quantity: string;
+  found_at: 'stock' | 'in_use';
+  bin_code: string | null;
+  reason_code: string;
+  reason_note: string | null;
+  photo_attachment_id: string;
+  whole_lot_requested: boolean;
+  replacement_indent_id: string | null;
+}
+
+export interface DamageUnitsArrivedPayload {
+  report_id: string;
+  note: string | null;
+}
+
+export interface DamageSentForExternalCheckPayload {
+  report_id: string;
+  destination: string;
+  reason: string;
+  expected_return_date: string | null;
+  gate_pass_ref_ext: string | null;
+}
+
+export interface DamageReturnedFromExternalCheckPayload {
+  report_id: string;
+  note: string | null;
+  external_result_ref_ext: string | null;
+}
+
+export interface DamageInspectedPayload {
+  report_id: string;
+  confirmed_quantity: string;
+  defect_code: string | null;
+  note: string | null;
+}
+
+export interface DamageWholeLotDecidedPayload {
+  report_id: string;
+  decision: 'hold_lot' | 'keep_local';
+  reason: string;
+  /** Server-derived: the governed Story 8.5 hold this decision placed, if any. */
+  hold_id?: string | null;
+  lot_already_held?: boolean;
+}
+
+export interface DamageKeyTurnedPayload {
+  report_id: string;
+  key: 'qc' | 'finance';
+  outcome: DamageOutcomeCode;
+  price_reduction_pct: string | null;
+  note: string | null;
+  /** Server-derived from the DOA registry. */
+  doa_entry_id?: string;
+}
+
+export interface DamageKeyWithdrawnPayload {
+  report_id: string;
+  key: 'qc' | 'finance';
+  reason: string;
+}
+
+export interface DamageDisagreedPayload {
+  report_id: string;
+  key: 'qc' | 'finance';
+  proposed_outcome: DamageOutcomeCode;
+  price_reduction_pct: string | null;
+  reason: string;
+  doa_entry_id?: string;
+}
+
+export interface DamageEscalationDecidedPayload {
+  report_id: string;
+  outcome: DamageOutcomeCode;
+  price_reduction_pct: string | null;
+  reason: string;
+  doa_entry_id?: string;
+}
+
+export interface DamageOutcomeRecordedPayload {
+  report_id: string;
+  erp_document_ref_ext: string;
+  note: string | null;
+}
+
+/** Metadata only: the bytes live in the attachment table, never on an event (D14). */
+export interface AttachmentUploadedPayload {
+  attachment_id: string;
+  content_type: string;
+  byte_size: number;
+  sha256: string;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -5582,6 +5781,13 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'pick_task.completed': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  // Pilot G3: a same-site bin-to-bin move on the 'warehouse' stream. Like the putaway completion
+  // it relocates the balance through its own projection apply and posts no valuated movement, so
+  // tagging is not gated on it and the valuation projection never sees it.
+  'stock.bin_moved': {
     streamType: 'warehouse',
     requiresBusinessStream: false,
   },
@@ -6023,6 +6229,11 @@ export const SUPPORTED_EVENT_TYPES = {
   // belongs to the stock.* events of Epic 2 - so requiresBusinessStream stays false, matching the
   // rest of the maintenance block.
   'maintenance.spare_catalogued': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 7.9: amends the levels of an existing catalogue row; same stream, no stock movement.
+  'maintenance.spare_catalogue_amended': {
     streamType: 'maintenance',
     requiresBusinessStream: false,
   },
@@ -6531,6 +6742,63 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'sync.refused_capture_resolved': {
     streamType: 'sync',
+    requiresBusinessStream: false,
+  },
+  // Story 8.9: the damage case on its own 'damage' stream (D2: never 'qc', whose registry pins
+  // every event central-only but one). Only damage.reported travels the edge door; the report
+  // relocates held stock inside its own transaction, as goods.received does, so the stream is not
+  // an inventory movement stream and carries no business-stream tag.
+  'damage.reported': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.units_arrived': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.sent_for_external_check': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.returned_from_external_check': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.returned_to_stock': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.inspected': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.whole_lot_decided': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.key_turned': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.key_withdrawn': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.disagreed': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.escalation_decided': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.outcome_recorded': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  // Story 8.9 (AC 7, D14): the photo upload's edit-log record; metadata only, never bytes.
+  'attachment.uploaded': {
+    streamType: 'attachment',
     requiresBusinessStream: false,
   },
 } as const;

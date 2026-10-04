@@ -21,15 +21,17 @@ const CROSS_DOCK_NONQUALIFICATION_REASONS = new Set([
 export interface GrnLine {
   grn_line_id: string;
   grn_id: string;
-  po_ref_ext: string;
-  line_no: number;
+  /** Null together with line_no, only on a job_work line received against a customer challan (Pilot Ruling B). */
+  po_ref_ext: string | null;
+  line_no: number | null;
   sku: string;
   lot_id: string | null;
   expiry_date: string | null;
   received_qty: string;
   uom: string;
   stock_class: string;
-  weighbridge_correlation_id: string;
+  /** Null when a customer challan receipt carried no weighbridge ticket (Pilot Ruling B). */
+  weighbridge_correlation_id: string | null;
   qc_hold: boolean;
   shortage_variance_qty: string;
   target_location_id: string | null;
@@ -38,6 +40,12 @@ export interface GrnLine {
   cross_dock: boolean;
   matched_dispatch_order_line_id: string | null;
   cross_dock_nonqualification_reason: string | null;
+  /** Story 3.11: the condition reported at the dock; 'GOOD' on every pre-3.11 line. */
+  line_condition: 'GOOD' | 'DAMAGED' | 'REJECTED';
+  reason_code: 'SHORT' | 'DAMAGED' | 'REJECTED' | 'OTHER' | null;
+  reason_detail: string | null;
+  reason_note: string | null;
+  reason_photo_ref: string | null;
   source_event_id: string;
   created_at: string;
   updated_at: string;
@@ -46,15 +54,15 @@ export interface GrnLine {
 export interface InsertGrnLineInput {
   grn_line_id: string;
   grn_id: string;
-  po_ref_ext: string;
-  line_no: number;
+  po_ref_ext: string | null;
+  line_no: number | null;
   sku: string;
   lot_id?: string | null;
   expiry_date?: string | null;
   received_qty: string;
   uom: string;
   stock_class?: string;
-  weighbridge_correlation_id: string;
+  weighbridge_correlation_id: string | null;
   qc_hold?: boolean;
   shortage_variance_qty?: string;
   target_location_id?: string | null;
@@ -63,6 +71,11 @@ export interface InsertGrnLineInput {
   cross_dock?: boolean;
   matched_dispatch_order_line_id?: string | null;
   cross_dock_nonqualification_reason?: string | null;
+  line_condition?: 'GOOD' | 'DAMAGED' | 'REJECTED';
+  reason_code?: string | null;
+  reason_detail?: string | null;
+  reason_note?: string | null;
+  reason_photo_ref?: string | null;
   source_event_id: string;
 }
 
@@ -88,7 +101,9 @@ function grnLineColumns(prefix = ''): string {
        ${p}stock_class, ${p}weighbridge_correlation_id, ${p}qc_hold,
        ${p}shortage_variance_qty::text AS shortage_variance_qty, ${p}target_location_id, ${p}status,
         ${p}rejection_reason, ${p}cross_dock, ${p}matched_dispatch_order_line_id,
-        ${p}cross_dock_nonqualification_reason, ${p}source_event_id, ${p}created_at, ${p}updated_at`;
+        ${p}cross_dock_nonqualification_reason, ${p}line_condition, ${p}reason_code,
+        ${p}reason_detail, ${p}reason_note, ${p}reason_photo_ref, ${p}source_event_id,
+        ${p}created_at, ${p}updated_at`;
 }
 
 const GRN_LINE_COLUMNS = grnLineColumns();
@@ -97,15 +112,16 @@ function mapRow(row: Record<string, unknown>): GrnLine {
   return {
     grn_line_id: row['grn_line_id'] as string,
     grn_id: row['grn_id'] as string,
-    po_ref_ext: row['po_ref_ext'] as string,
-    line_no: Number(row['line_no']),
+    po_ref_ext: (row['po_ref_ext'] as string | null) ?? null,
+    line_no:
+      row['line_no'] === null || row['line_no'] === undefined ? null : Number(row['line_no']),
     sku: row['sku'] as string,
     lot_id: (row['lot_id'] as string | null) ?? null,
     expiry_date: (row['expiry_date'] as string | null) ?? null,
     received_qty: String(row['received_qty']),
     uom: row['uom'] as string,
     stock_class: row['stock_class'] as string,
-    weighbridge_correlation_id: row['weighbridge_correlation_id'] as string,
+    weighbridge_correlation_id: (row['weighbridge_correlation_id'] as string | null) ?? null,
     qc_hold: row['qc_hold'] === true,
     shortage_variance_qty: String(row['shortage_variance_qty']),
     target_location_id: (row['target_location_id'] as string | null) ?? null,
@@ -116,6 +132,11 @@ function mapRow(row: Record<string, unknown>): GrnLine {
       (row['matched_dispatch_order_line_id'] as string | null) ?? null,
     cross_dock_nonqualification_reason:
       (row['cross_dock_nonqualification_reason'] as string | null) ?? null,
+    line_condition: (row['line_condition'] as GrnLine['line_condition'] | null) ?? 'GOOD',
+    reason_code: (row['reason_code'] as GrnLine['reason_code']) ?? null,
+    reason_detail: (row['reason_detail'] as string | null) ?? null,
+    reason_note: (row['reason_note'] as string | null) ?? null,
+    reason_photo_ref: (row['reason_photo_ref'] as string | null) ?? null,
     source_event_id: row['source_event_id'] as string,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
@@ -144,14 +165,16 @@ export async function listGrnLinesByGrn(grnId: string, client?: PoolClient): Pro
 /**
  * The receiving discrepancy view (AC5/AC6): every line with a short-receipt shortage variance or a
  * quarantined status, optionally scoped to a site by joining the header. rejected over-tolerance
- * lines are also surfaced (rejection_reason carries the breach detail).
+ * lines are also surfaced (rejection_reason carries the breach detail). Story 3.11: so is every
+ * line carrying a dock reason code - DAMAGED and REJECTED lines are quarantined, and a GOOD line
+ * with an OTHER anomaly appears through its reason_code.
  */
 export async function listDiscrepancyLines(
   filters: ListDiscrepancyLinesFilters = {},
   client?: PoolClient,
 ): Promise<GrnLine[]> {
   const clauses: string[] = [
-    `(l.shortage_variance_qty > 0 OR l.status IN ('quarantined', 'rejected'))`,
+    `(l.shortage_variance_qty > 0 OR l.status IN ('quarantined', 'rejected') OR l.reason_code IS NOT NULL)`,
   ];
   const values: unknown[] = [];
   const add = (sql: string, value: unknown): void => {
@@ -187,8 +210,9 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
        (grn_line_id, grn_id, po_ref_ext, line_no, sku, lot_id, expiry_date, received_qty, uom,
         stock_class, weighbridge_correlation_id, qc_hold, shortage_variance_qty, target_location_id,
         status, rejection_reason, cross_dock, matched_dispatch_order_line_id,
-        cross_dock_nonqualification_reason, source_event_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10, $11, $12, $13::numeric, $14, $15, $16, $17, $18, $19, $20)
+        cross_dock_nonqualification_reason, source_event_id, line_condition, reason_code,
+        reason_detail, reason_note, reason_photo_ref)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10, $11, $12, $13::numeric, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
       ON CONFLICT (grn_line_id) DO NOTHING`,
     [
       input.grn_line_id,
@@ -211,18 +235,27 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
       input.matched_dispatch_order_line_id ?? null,
       input.cross_dock_nonqualification_reason ?? null,
       input.source_event_id,
+      input.line_condition ?? 'GOOD',
+      input.reason_code ?? null,
+      input.reason_detail ?? null,
+      input.reason_note ?? null,
+      input.reason_photo_ref ?? null,
     ],
   );
   const existing = await client.query(
     `SELECT 1 FROM grn_line
-      WHERE grn_line_id = $1 AND grn_id = $2 AND po_ref_ext = $3 AND line_no = $4 AND sku = $5
+      WHERE grn_line_id = $1 AND grn_id = $2 AND po_ref_ext IS NOT DISTINCT FROM $3
+        AND line_no IS NOT DISTINCT FROM $4::int AND sku = $5
         AND lot_id IS NOT DISTINCT FROM $6 AND expiry_date IS NOT DISTINCT FROM $7::date
         AND received_qty = $8::numeric AND uom = $9 AND stock_class = $10
-        AND weighbridge_correlation_id = $11 AND qc_hold = $12
+        AND weighbridge_correlation_id IS NOT DISTINCT FROM $11::uuid AND qc_hold = $12
         AND shortage_variance_qty = $13::numeric AND target_location_id IS NOT DISTINCT FROM $14::uuid
         AND status = $15 AND rejection_reason IS NOT DISTINCT FROM $16
         AND cross_dock = $17 AND matched_dispatch_order_line_id IS NOT DISTINCT FROM $18::uuid
-        AND cross_dock_nonqualification_reason IS NOT DISTINCT FROM $19 AND source_event_id = $20`,
+        AND cross_dock_nonqualification_reason IS NOT DISTINCT FROM $19 AND source_event_id = $20
+        AND line_condition = $21 AND reason_code IS NOT DISTINCT FROM $22
+        AND reason_detail IS NOT DISTINCT FROM $23 AND reason_note IS NOT DISTINCT FROM $24
+        AND reason_photo_ref IS NOT DISTINCT FROM $25`,
     [
       input.grn_line_id,
       input.grn_id,
@@ -244,6 +277,11 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
       input.matched_dispatch_order_line_id ?? null,
       input.cross_dock_nonqualification_reason ?? null,
       input.source_event_id,
+      input.line_condition ?? 'GOOD',
+      input.reason_code ?? null,
+      input.reason_detail ?? null,
+      input.reason_note ?? null,
+      input.reason_photo_ref ?? null,
     ],
   );
   if (existing.rows.length === 0) {

@@ -7,7 +7,11 @@ import {
   getAuthorizedAssignment,
   getTraceId,
 } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import {
+  requireRole,
+  permittedLocationsForModuleScope,
+  EMPLOYEE_MODULE,
+} from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { randomUUID } from 'node:crypto';
@@ -118,6 +122,24 @@ function assertSiteReadAccess(req: IncomingMessage, siteId: string): void {
   }
 }
 
+/**
+ * Story 1.15 (AC 4): procurement read at the indent's site reads any indent there; without it the
+ * caller reads only an indent they raised (the base-role "My requests" detail). A procurement
+ * reader scoped elsewhere keeps today's LOCATION_ACCESS_DENIED; a caller with no procurement read
+ * at all gets the requester-ownership denial the withdraw route uses.
+ */
+function assertIndentReadAccess(req: IncomingMessage, indent: IndentRow): void {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  const scope = permittedLocationsForModuleScope(authContext.roles, 'procurement', 'read');
+  if (scope.wildcard || scope.locations.has(indent.site_id)) return;
+  if (indent.requester_user_id === authContext.userId) return;
+  if (scope.locations.size > 0) assertSiteReadAccess(req, indent.site_id);
+  throw new AppError(403, 'FUNCTION_ACCESS_DENIED', 'Only the requester can view this indent', {
+    indent_id: indent.indent_id,
+  });
+}
+
 interface RaiseLineInput {
   sku: string;
   item_category: string;
@@ -190,7 +212,17 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
   const estimatedValue = parseFloat(estimatedValueStr);
   const approval = await resolveApprover(INDENT_DOA_TYPE, estimatedValue);
 
-  const indentId = randomUUID();
+  // Story 8.9 (AC 5, D15): a damage replacement names its case, and its indent id was minted with
+  // the report (the report names it back), so the client's id is kept for that raise only. Every
+  // other raise keeps a server-minted id exactly as before.
+  const damageReportId =
+    typeof body.damage_report_id === 'string' ? body.damage_report_id : undefined;
+  const indentId =
+    damageReportId !== undefined &&
+    typeof body.indent_id === 'string' &&
+    UUID_REGEX.test(body.indent_id)
+      ? body.indent_id
+      : randomUUID();
   const now = new Date().toISOString();
   const eventId = randomUUID();
 
@@ -213,6 +245,7 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
         approver_actor_id: approval.approverActorId ?? undefined,
         doa_entry_id: approval.doaEntryId ?? undefined,
         duplicate_confirmed: body.confirm_duplicate === true,
+        ...(damageReportId !== undefined ? { damage_report_id: damageReportId } : {}),
       },
       metadata: {
         correlation_id: randomUUID(),
@@ -268,7 +301,7 @@ export const getIndentBase: RouteHandler = async (req, res, params) => {
     });
     return;
   }
-  assertSiteReadAccess(req, indent.site_id);
+  assertIndentReadAccess(req, indent);
 
   const lines = await getIndentLines(indentId);
   sendJson(res, 200, { indent, lines });
@@ -328,12 +361,30 @@ export const listIndentsBase: RouteHandler = async (req, res, _params) => {
 
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
-  const permittedSites = permittedLocationsForModuleScope(authContext.roles, 'procurement', 'read');
+  const procurementRead = permittedLocationsForModuleScope(
+    authContext.roles,
+    'procurement',
+    'read',
+  );
+  const ownOnly = mine === 'true';
+  // Story 1.15 (D6): a base-role caller lists their own requisitions only, and says so; the list
+  // is never silently narrowed. Own requests are visible at every site, so mine=true drops the
+  // site filter.
+  if (!ownOnly && !procurementRead.wildcard && procurementRead.locations.size === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'Base role lists own requisitions only; pass mine=true',
+    );
+  }
+  const permittedSites = ownOnly
+    ? { wildcard: true, locations: new Set<string>() }
+    : procurementRead;
 
   const actor = actorContext(req);
   const results = await listIndents({
     status,
-    requesterUserId: mine === 'true' ? actor.userId : undefined,
+    requesterUserId: ownOnly ? actor.userId : undefined,
     search: search ?? undefined,
     permittedSites,
     limit,
@@ -554,18 +605,29 @@ export const cancelIndentBase: RouteHandler = async (req, res, params) => {
   sendJson(res, 200, { event_id: persisted.event_id, indent: updated });
 };
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Story 1.15 (AC 1, D2, D3): raising is the one indent action the base role may take. The gate is
+ * site-scoped on body.site_id, the same rule the edge door already applies to an offline
+ * indent.raised; a non-UUID site_id is left to the compliance seam's INVALID_PARAMS.
+ */
 export const raiseIndentHandler = requireRole({
-  module: 'procurement',
+  module: [EMPLOYEE_MODULE, 'procurement'],
   functionScope: 'write',
+  locationId: (_params, body) => {
+    const siteId = (body as Record<string, unknown> | undefined)?.['site_id'];
+    return typeof siteId === 'string' && UUID_REGEX.test(siteId) ? siteId : undefined;
+  },
 })(raiseIndentBase);
 
 export const getIndentHandler = requireRole({
-  module: 'procurement',
+  module: [EMPLOYEE_MODULE, 'procurement'],
   functionScope: 'read',
 })(getIndentBase);
 
 export const listIndentsHandler = requireRole({
-  module: 'procurement',
+  module: [EMPLOYEE_MODULE, 'procurement'],
   functionScope: 'read',
 })(listIndentsBase);
 

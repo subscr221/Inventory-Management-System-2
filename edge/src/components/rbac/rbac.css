@@ -1,0 +1,180 @@
+/* RBAC Manager Styles (Zoho-familiar: surface card, border, rounded, accent). */
+
+.rbac-manager {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.rbac-header {
+  margin-bottom: var(--space-4);
+}
+
+.rbac-header h2 {
+  margin: 0 0 var(--space-2) 0;
+  color: var(--text);
+  font-size: var(--title-size);
+  font-weight: var(--title-weight);
+}
+
+.rbac-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-size);
+}
+
+.rbac-content {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--space-4);
+}
+
+.rbac-section h3 {
+  margin: 0 0 var(--space-3) 0;
+  color: var(--text);
+  font-size: var(--title-size);
+  font-weight: var(--title-weight);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-2);
+}
+
+.roles-list,
+.users-list,
+.permissions-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.role-item,
+.user-item,
+.permission-item {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  cursor: pointer;
+}
+
+.role-item:hover,
+.user-item:hover {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+
+.role-item.selected,
+.user-item.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.role-item h4,
+.user-item h4 {
+  margin: 0 0 var(--space-1) 0;
+  color: var(--text);
+  font-size: var(--text-size);
+  font-weight: var(--label-weight);
+}
+
+.role-item p,
+.user-item p {
+  margin: 0 0 var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--caption-size);
+}
+
+.permission-count {
+  font-size: var(--micro-size);
+  font-weight: var(--micro-weight);
+  color: var(--text);
+  background: var(--bg);
+  padding: 2px var(--space-2);
+  border-radius: var(--rounded-full);
+}
+
+.user-role {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.role-label {
+  font-size: var(--caption-size);
+  color: var(--text-muted);
+}
+
+.user-role select {
+  padding: 0 var(--space-2);
+  min-height: var(--control-height-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  font-size: var(--text-size);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.permissions-manager {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.permission-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.permission-header h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-size);
+  font-weight: var(--label-weight);
+}
+
+.permission-item {
+  padding: var(--space-2) var(--space-3);
+  cursor: default;
+}
+
+.permission-label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.permission-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.permission-name {
+  font-weight: var(--label-weight);
+  color: var(--text);
+}
+
+.permission-description {
+  font-size: var(--caption-size);
+  color: var(--text-muted);
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .rbac-content {
+    grid-template-columns: 1fr;
+  }
+
+  .permission-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .permission-header .primary-action {
+    width: 100%;
+  }
+}

@@ -90,6 +90,10 @@ const PERMANENT_ERROR_CODES = new Set([
   'RECEIVING_PO_NOT_FOUND',
   'RECEIVING_QTY_REQUIRED',
   'RECEIVING_QC_HOLD_ZONE_NOT_FOUND',
+  // Story 3.11: GRN line condition and reason codes.
+  'RECEIVING_REASON_REQUIRED',
+  'RECEIVING_REASON_INVALID',
+  'RECEIVING_OTHER_EVIDENCE_REQUIRED',
   'LOCATION_NOT_FOUND',
   'PUTAWAY_TASK_NOT_FOUND',
   'PUTAWAY_TASK_NOT_HELD',
@@ -132,6 +136,8 @@ const PERMANENT_ERROR_CODES = new Set([
   'DISPATCH_DOCUMENTS_INVALID_PAYLOAD',
   'DISPATCH_DISPATCHED_INVALID_PAYLOAD',
   'PACKED_QTY_MISMATCH',
+  'PACKED_LINE_NOT_PICKED',
+  'DISPATCH_PACKED_LINE_NOT_PICKED',
   'LOT_ON_HOLD',
   'DISPATCH_DOCUMENTS_NOT_GENERATED',
   'INVALID_PARAMS',
@@ -269,6 +275,18 @@ const PERMANENT_ERROR_CODES = new Set([
   'CREDIT_NOTE_MISSING',
   'CREDIT_NOTE_UNCITABLE',
   'CREDIT_NOTE_SUPERSEDED',
+  // Story 8.9: damage capture (and the linked replacement indent, and any stock leaving
+  // quarantine) refusals an offline retry can never clear.
+  'DAMAGE_REASON_INVALID',
+  'DAMAGE_OTHER_NOTE_REQUIRED',
+  'DAMAGE_PHOTO_REQUIRED',
+  'DAMAGE_QUANTITY_INVALID',
+  'DAMAGE_LOT_REQUIRED',
+  'DAMAGE_LOT_NOT_FOUND',
+  'DAMAGE_LOCATION_NOT_FOUND',
+  'DAMAGE_REPLACEMENT_LINK_INVALID',
+  'DAMAGE_UNITS_HELD',
+  'DAMAGE_CASE_BLOCKS_RELEASE',
 ]);
 
 const TRANSIENT_STATUS_CODES = new Set([408, 425, 429]);
@@ -460,8 +478,15 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
               localStatus === 'auth_required'
                 ? undefined
                 : {
-                    classification: { action: 'complete', localStatus: 'auth_required', retryable: false },
-                    details: { error_code: 'OWNER_NOT_SIGNED_IN', details: { owner_user_id: owner } },
+                    classification: {
+                      action: 'complete',
+                      localStatus: 'auth_required',
+                      retryable: false,
+                    },
+                    details: {
+                      error_code: 'OWNER_NOT_SIGNED_IN',
+                      details: { owner_user_id: owner },
+                    },
                   },
             );
           }

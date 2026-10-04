@@ -831,6 +831,50 @@ describe('Story 7.8 Offline Technician Workflow and Closure Codes', () => {
     assert.strictEqual(await eventCountForKey(envelope['idempotency_key'] as string), 1);
   });
 
+  it('AC1: a race loser refused by the fault report primary key still gets the DUPLICATE_EVENT event identity', async () => {
+    // The fault projection insert runs BEFORE the domain_events insert, so when both posts pass
+    // the sequential duplicate SELECTs the loser collides on maintenance_fault_report_pkey, not on
+    // uq_idempotency. A table lock holds both posts at that insert so the interleaving is forced.
+    const { assetTag } = await createAsset();
+    const envelope = faultEnvelope(assetTag, false);
+    const locker = await getAdminPool().connect();
+    let posts: Promise<[HttpResult, HttpResult]>;
+    try {
+      await locker.query('BEGIN');
+      await locker.query('LOCK TABLE maintenance_fault_report IN SHARE ROW EXCLUSIVE MODE');
+      posts = Promise.all([postEdge(envelope), postEdge(envelope)]);
+      let waiting = 0;
+      // Up to 30 s: a cold CI run can be slow to bring both posts to the insert.
+      for (let i = 0; i < 1200 && waiting < 2; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+        const r = await getAdminPool().query(
+          `SELECT count(*)::int AS n FROM pg_locks
+            WHERE NOT granted AND relation = 'maintenance_fault_report'::regclass`,
+        );
+        waiting = r.rows[0]!['n'] as number;
+      }
+      assert.strictEqual(
+        waiting,
+        2,
+        `both posts must be parked at the fault report insert, saw ${waiting} waiter(s) after 30 s`,
+      );
+    } finally {
+      await locker.query('ROLLBACK');
+      locker.release();
+    }
+    const [a, b] = await posts;
+    const statuses = [a.status, b.status].sort();
+    assert.deepStrictEqual(statuses, [201, 409], JSON.stringify([a.body, b.body]));
+    const rejected = a.status === 409 ? a : b;
+    assert.strictEqual(rejected.body['error_code'], 'DUPLICATE_EVENT');
+    assert.strictEqual(detailsOf(rejected.body)['existing_event_id'], envelope['event_id']);
+    assert.strictEqual(
+      detailsOf(rejected.body)['existing_event_type'],
+      'maintenance.fault_reported',
+    );
+    assert.strictEqual(await eventCountForKey(envelope['idempotency_key'] as string), 1);
+  });
+
   it('AC1: an edge status update stamped head + 1 from the worklist stream_version lands in_progress', async () => {
     const { assetId } = await createAsset();
     const workOrder = await breakdownWorkOrder(assetId);

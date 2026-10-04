@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import type { PoolClient } from 'pg';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import {
@@ -49,6 +50,7 @@ import {
 import { getInTransitByTransferRequest } from '../../read/projections/in_transit.js';
 import { getItemBySku } from '../../read/projections/item_master.js';
 import { getLocationById } from '../../read/projections/location_register.js';
+import { stampActedLocation } from './actor-stamp.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -86,6 +88,23 @@ function actorContext(req: IncomingMessage): ActorContext {
   const auditLocationId = assignment?.locationId ?? '*';
   const eventLocationId = auditLocationId === '*' ? NO_LOCATION_UUID : auditLocationId;
   return { userId, role, auditLocationId, eventLocationId };
+}
+
+/**
+ * Pilot G2 (owner ruling 2026-09-22): ship and receive each act at ONE location of the request,
+ * the source bin and the destination bin, so that bin is the audit stamp. Like receiving's stamp,
+ * this takes nothing on the caller's word: only an ACTIVE location is stamped and anything else
+ * keeps the site stamp. The handler's own access check has already run and is not revisited.
+ */
+async function transferActor(
+  req: IncomingMessage,
+  actor: ActorContext,
+  locationId: string,
+  client: PoolClient,
+): Promise<ActorContext> {
+  const location = await getLocationById(locationId, client);
+  const valid = location !== null && location.status === 'active';
+  return stampActedLocation(req, actor, 'inventory', valid ? location.location_id : undefined);
 }
 
 function auditCtxFor(
@@ -1034,7 +1053,7 @@ const shipTransferRequestBase: RouteHandler = async (req, res, params) => {
   }
 
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
-  const actor = actorContext(req);
+  let actor = actorContext(req);
 
   if (!body || !isNonEmptyString(body['lot_id'])) {
     sendRequestError(
@@ -1068,6 +1087,7 @@ const shipTransferRequestBase: RouteHandler = async (req, res, params) => {
 
     // Ship moves stock out of the source location: caller must be assigned there (Story 2.5 review).
     assertWriteLocationAccess(req, row.from_location_id);
+    actor = await transferActor(req, actor, row.from_location_id, client);
 
     if (row.status !== 'approved' && row.status !== 'pending_shipment') {
       throw new AppError(
@@ -1164,7 +1184,7 @@ const receiveTransferRequestBase: RouteHandler = async (req, res, params) => {
   }
 
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
-  const actor = actorContext(req);
+  let actor = actorContext(req);
 
   if (!body || !isNonEmptyString(body['lot_id'])) {
     sendRequestError(
@@ -1204,6 +1224,7 @@ const receiveTransferRequestBase: RouteHandler = async (req, res, params) => {
 
     // Receive brings stock into the destination: caller must be assigned there (Story 2.5 review).
     assertWriteLocationAccess(req, row.to_location_id);
+    actor = await transferActor(req, actor, row.to_location_id, client);
 
     if (row.status !== 'shipped' && row.status !== 'partially_received') {
       throw new AppError(

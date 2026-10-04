@@ -1,0 +1,88 @@
+
+Running 8 tests using 1 worker
+
+[1/8] test\staging\department-head.spec.ts:7:1 › subscr reviews refused captures and resolves one captured by someone else
+[2/8] test\staging\floor-staff.spec.ts:55:1 › indent1 raises a requisition for a pilot SKU and it syncs
+[3/8] test\staging\floor-staff.spec.ts:67:1 › indent1 repeats a requisition for the same SKU; it is held for confirmation, not refused
+[4/8] test\staging\floor-staff.spec.ts:83:1 › maint1 reports a fault on a pack asset and it syncs
+[5/8] test\staging\read-only-roles.spec.ts:15:3 › accounts@ancorlabs.org signs in, sees their name, signs out to Keycloak
+[6/8] (retries) test\staging\read-only-roles.spec.ts:15:3 › accounts@ancorlabs.org signs in, sees their name, signs out to Keycloak (retry #1)
+  1) test\staging\read-only-roles.spec.ts:15:3 › accounts@ancorlabs.org signs in, sees their name, signs out to Keycloak 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\.org) ·/ })
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 30000ms
+      - waiting for locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\.org) ·/ })
+
+
+       at auth.ts:136
+
+      134 |     });
+      135 |   }
+    > 136 |   await expect(name).toBeVisible({ timeout: 30_000 });
+          |                      ^
+      137 |
+      138 |   fs.mkdirSync(AUTH_DIR, { recursive: true });
+      139 |   await page.context().storageState({ path: authFile(email) });
+        at signIn (D:\WINCODE\Inventory Management System_2\edge\test\staging\auth.ts:136:22)
+        at D:\WINCODE\Inventory Management System_2\edge\test\staging\read-only-roles.spec.ts:16:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ..\_bmad-output\pilot-sim\playwright\test-results\read-only-roles-accounts-a-88d87--name-signs-out-to-Keycloak\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ..\_bmad-output\pilot-sim\playwright\test-results\read-only-roles-accounts-a-88d87--name-signs-out-to-Keycloak\error-context.md
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\.org) ·/ })
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 30000ms
+      - waiting for locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\.org) ·/ })
+
+
+       at auth.ts:136
+
+      134 |     });
+      135 |   }
+    > 136 |   await expect(name).toBeVisible({ timeout: 30_000 });
+          |                      ^
+      137 |
+      138 |   fs.mkdirSync(AUTH_DIR, { recursive: true });
+      139 |   await page.context().storageState({ path: authFile(email) });
+        at signIn (D:\WINCODE\Inventory Management System_2\edge\test\staging\auth.ts:136:22)
+        at D:\WINCODE\Inventory Management System_2\edge\test\staging\read-only-roles.spec.ts:16:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ..\_bmad-output\pilot-sim\playwright\test-results\read-only-roles-accounts-a-88d87--name-signs-out-to-Keycloak-retry1\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ..\_bmad-output\pilot-sim\playwright\test-results\read-only-roles-accounts-a-88d87--name-signs-out-to-Keycloak-retry1\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ..\_bmad-output\pilot-sim\playwright\test-results\read-only-roles-accounts-a-88d87--name-signs-out-to-Keycloak-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace ..\_bmad-output\pilot-sim\playwright\test-results\read-only-roles-accounts-a-88d87--name-signs-out-to-Keycloak-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+[7/8] test\staging\read-only-roles.spec.ts:15:3 › anupam@ancorlabs.org signs in, sees their name, signs out to Keycloak
+[8/8] test\staging\read-only-roles.spec.ts:15:3 › info@ancorlabs.org signs in, sees their name, signs out to Keycloak
+[9/8] test\staging\read-only-roles.spec.ts:15:3 › cmf_supervisor@ancorlabs.org signs in, sees their name, signs out to Keycloak
+  1 failed
+    test\staging\read-only-roles.spec.ts:15:3 › accounts@ancorlabs.org signs in, sees their name, signs out to Keycloak 
+  7 passed (3.2m)

@@ -16,6 +16,7 @@ import {
 } from '../read/projections/indent.js';
 import { findActiveDelegation } from '../read/projections/doa_registry.js';
 import { emitNotification, emitNotificationInTransaction } from '../notify/emit.js';
+import { assertReplacementLink } from './damage.js';
 
 const PROCUREMENT_STREAM_TYPES = new Set(['procurement']);
 const INDENT_EVENT_TYPES = new Set([
@@ -148,6 +149,14 @@ function assertIndentRaisedShape(p: Record<string, unknown>): void {
   }
   if (p['reason'] !== undefined && p['reason'] !== null && typeof p['reason'] !== 'string') {
     reject('INVALID_PARAMS', 'reason must be a string');
+  }
+  // Story 8.9 (AC 5, D15): a replacement requisition names its damage case; the applier checks it.
+  if (
+    p['damage_report_id'] !== undefined &&
+    p['damage_report_id'] !== null &&
+    !isUuid(p['damage_report_id'])
+  ) {
+    reject('INVALID_PARAMS', 'damage_report_id must be a UUID');
   }
 
   if (!Array.isArray(p['lines']) || (p['lines'] as unknown[]).length === 0) {
@@ -309,6 +318,20 @@ async function applyIndentRaised(
   ) {
     reject('INVALID_PARAMS', 'occurred_at is required and must be a valid ISO 8601 date string');
   }
+  // Story 8.9 (AC 5, D15): the replacement link is validated before anything is written - the case
+  // must name this indent back and belong to this requester. Approval, duplicate detection and
+  // numbering are untouched: a replacement is an ordinary requisition under normal rules.
+  const damageReportId = isUuid(p['damage_report_id']) ? (p['damage_report_id'] as string) : null;
+  if (damageReportId !== null) {
+    await assertReplacementLink(
+      {
+        indentId,
+        damageReportId,
+        requesterUserId: p['requester_user_id'] as string,
+      },
+      client,
+    );
+  }
   const year = new Date(occurredAt).getUTCFullYear();
   const indentNumber = await allocateIndentNumber(year, client);
 
@@ -367,28 +390,17 @@ async function applyIndentRaised(
     );
   }
   await recomputeIndentEstimatedValue(indentId, client);
+  if (damageReportId !== null) {
+    await client.query(`UPDATE indent SET damage_report_id = $2 WHERE indent_id = $1`, [
+      indentId,
+      damageReportId,
+    ]);
+  }
 
   if (duplicateOf) {
-    // Audit trail of the hold, committed atomically with the raise (same client/transaction).
-    await persistEvent(
-      {
-        stream_type: 'procurement',
-        stream_id: indentId,
-        event_type: 'indent.duplicate_flagged',
-        payload: {
-          indent_id: indentId,
-          duplicate_of_indent_id: duplicateOf,
-        },
-        metadata: {
-          correlation_id: envelope.metadata.correlation_id ?? randomUUID(),
-          causation_id: eventId,
-          actor: envelope.metadata.actor,
-          occurred_at: occurredAt,
-        },
-      },
-      undefined,
-      client,
-    );
+    // The indent.duplicate_flagged audit event is written by recordIndentDuplicateFlag AFTER this
+    // raise is inserted: written here it took version 1 of the new stream first, and a device
+    // capture (which always declares event_version 1) was refused STREAM_CONFLICT.
 
     // AC 3: informational duplicate-hold notice to the requester. Plain emitNotification - it
     // never throws, so the offline-synced capture can never be lost to a notification failure.
@@ -408,6 +420,44 @@ async function applyIndentRaised(
       occurred_at: occurredAt,
     });
   }
+}
+
+/**
+ * Writes the indent.duplicate_flagged audit event of a held raise, in the raise's transaction,
+ * AFTER the raise itself is inserted (persistEvent calls it once the envelope's row exists), so
+ * the raise keeps the version it declared and the flag follows it in the stream. Does nothing for
+ * any other event, for a raise that was not held, or for an idempotent replay (the indent row was
+ * created by an earlier event, not this one).
+ */
+export async function recordIndentDuplicateFlag(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  if (envelope.stream_type !== 'procurement' || envelope.event_type !== 'indent.raised') return;
+  const held = await client.query(
+    `SELECT indent_id, duplicate_of_indent_id FROM indent
+     WHERE source_event_id = $1 AND duplicate_of_indent_id IS NOT NULL`,
+    [eventId],
+  );
+  const row = held.rows[0] as { indent_id: string; duplicate_of_indent_id: string } | undefined;
+  if (!row) return;
+  await persistEvent(
+    {
+      stream_type: 'procurement',
+      stream_id: row.indent_id,
+      event_type: 'indent.duplicate_flagged',
+      payload: { indent_id: row.indent_id, duplicate_of_indent_id: row.duplicate_of_indent_id },
+      metadata: {
+        correlation_id: envelope.metadata.correlation_id ?? randomUUID(),
+        causation_id: eventId,
+        actor: envelope.metadata.actor,
+        occurred_at: envelope.metadata.occurred_at,
+      },
+    },
+    undefined,
+    client,
+  );
 }
 
 async function applyIndentDuplicateFlagged(

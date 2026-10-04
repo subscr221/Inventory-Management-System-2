@@ -21,7 +21,7 @@ export interface CreatePackingRecordInput {
   dispatch_order_id: string;
   sku: string;
   packed_qty: number | string;
-  lot_id: string;
+  lot_id: string | null;
   actual_weight_kg?: number | string | null;
   label_ref?: string | null;
   carton_count: number;

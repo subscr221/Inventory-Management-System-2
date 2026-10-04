@@ -115,8 +115,8 @@ export async function lockInventoryValuation(
  */
 export async function applyValuationReceipt(
   sku: string,
-  quantity: number,
-  unitCost: number,
+  quantity: number | string,
+  unitCost: number | string,
   client: PoolClient,
 ): Promise<InventoryValuationRow> {
   const result = await client.query(
@@ -145,8 +145,8 @@ export async function applyValuationReceipt(
  */
 export async function applyValuationIssue(
   sku: string,
-  quantity: number,
-  cost: number,
+  quantity: number | string,
+  cost: number | string,
   client: PoolClient,
 ): Promise<InventoryValuationRow> {
   const result = await client.query(
@@ -161,6 +161,34 @@ export async function applyValuationIssue(
   return result.rows.length > 0
     ? mapValuationRow(result.rows[0]!)
     : await lockInventoryValuation(sku, client);
+}
+
+/**
+ * Puts back a VALUE (not quantity x a rounded unit cost) that an earlier outflow took out - a
+ * production/spares return, or a count gain at the carrying cost. The average is recomputed from
+ * the new totals in the same statement, and a write-down's original-cost ceiling rises by the same
+ * amount so chk_inventory_valuation_recovery_cap keeps meaning "never above original cost".
+ */
+export async function applyValuationReturnValue(
+  sku: string,
+  quantity: string,
+  value: string,
+  client: PoolClient,
+): Promise<InventoryValuationRow> {
+  const result = await client.query(
+    `INSERT INTO inventory_valuation (sku, quantity_on_hand, running_average_cost, carrying_value)
+     VALUES ($1, $2::numeric, $3::numeric / $2::numeric, $3::numeric)
+     ON CONFLICT (sku) DO UPDATE SET
+       carrying_value = inventory_valuation.carrying_value + EXCLUDED.carrying_value,
+       quantity_on_hand = inventory_valuation.quantity_on_hand + EXCLUDED.quantity_on_hand,
+       running_average_cost = (inventory_valuation.carrying_value + EXCLUDED.carrying_value)
+         / (inventory_valuation.quantity_on_hand + EXCLUDED.quantity_on_hand),
+       pre_writedown_cost = inventory_valuation.pre_writedown_cost + EXCLUDED.carrying_value,
+       updated_at = now()
+     RETURNING ${VALUATION_COLUMNS}`,
+    [sku, quantity, value],
+  );
+  return mapValuationRow(result.rows[0]!);
 }
 
 /**
@@ -223,7 +251,12 @@ function mapFifoLayer(row: Record<string, unknown>): FifoLayer {
 }
 
 export async function insertFifoLayer(
-  input: { sku: string; unit_cost: number; quantity: number; event_id?: string | null },
+  input: {
+    sku: string;
+    unit_cost: number | string;
+    quantity: number | string;
+    event_id?: string | null;
+  },
   client: PoolClient,
 ): Promise<FifoLayer> {
   const result = await client.query(
@@ -245,6 +278,46 @@ export async function lockOpenFifoLayers(sku: string, client: PoolClient): Promi
     [sku],
   );
   return result.rows.map(mapFifoLayer);
+}
+
+/**
+ * FIFO depletion for an outflow seam, in ONE SQL NUMERIC statement (no JS arithmetic on money or
+ * quantity): oldest layers first, up to LEAST(quantity, quantityOnHand), stopping where the layers
+ * end instead of rejecting. `layer_total` is the cost of every open layer BEFORE the walk, which
+ * the caller compares with the carrying value to see an NRV write-down.
+ */
+export async function depleteFifoLayersUpTo(
+  sku: string,
+  quantity: string,
+  quantityOnHand: string,
+  client: PoolClient,
+): Promise<{ costed: string; cost: string; layer_total: string }> {
+  await lockOpenFifoLayers(sku, client);
+  const result = await client.query(
+    `WITH open AS (
+       SELECT layer_id, unit_cost, remaining_quantity,
+              COALESCE(SUM(remaining_quantity) OVER (
+                ORDER BY sequence_no ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS before
+         FROM inventory_valuation_fifo_layer
+        WHERE sku = $1 AND remaining_quantity > 0),
+     take AS (
+       SELECT layer_id, unit_cost,
+              GREATEST(0, LEAST(remaining_quantity,
+                                LEAST($2::numeric, $3::numeric) - before)) AS consumed
+         FROM open),
+     upd AS (
+       UPDATE inventory_valuation_fifo_layer l
+          SET remaining_quantity = l.remaining_quantity - t.consumed
+         FROM take t
+        WHERE l.layer_id = t.layer_id AND t.consumed > 0)
+     SELECT COALESCE(SUM(consumed), 0)::text AS costed,
+            COALESCE(SUM(consumed * unit_cost), 0)::text AS cost,
+            (SELECT COALESCE(SUM(remaining_quantity * unit_cost), 0) FROM open)::text AS layer_total
+       FROM take`,
+    [sku, quantity, quantityOnHand],
+  );
+  const row = result.rows[0] as Record<string, string>;
+  return { costed: row['costed']!, cost: row['cost']!, layer_total: row['layer_total']! };
 }
 
 export async function setFifoLayerRemaining(

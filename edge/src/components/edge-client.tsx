@@ -6,6 +6,10 @@ import { createTestCaptureEvent } from '../capture/test-capture';
 import { createCrossDockCompletionEvent } from '../capture/cross-dock';
 import { assertLotNotHeld } from '../capture/held-lot';
 import { createIndentRaisedEvent } from '../capture/indent';
+import { createDamageCaptureEvents } from '../capture/damage';
+import type { CaptureSettlement, DamageSubmitInput, DamageSubmitResult } from './report-damage';
+import { pendingPhotoStore } from '../local-db/pending-photos';
+import { reencodeAsJpeg, uploadPendingPhotos } from '../sync/attachment-uploader';
 import {
   createFaultReportedEvent,
   createMeterReadingRecordedEvent,
@@ -31,6 +35,7 @@ import {
   hasAuthRequired,
   insertCaptureEvent,
   readCachedContext,
+  readCaptureSettlement,
   readFailures,
   readOutboxCounts,
   readWaitingForOtherOwners,
@@ -51,8 +56,9 @@ import { EdgePowerSyncConnector } from '../sync/connector';
 import { deriveSyncUiState, type SyncUiState } from '../sync/sync-status';
 import { refreshWorklist } from '../sync/worklist-refresh';
 import { authorizedFetch } from '../session/api-fetch';
+import { classifyBootstrapRefusal } from '../session/bootstrap-refusal';
 import { AuthConfigUnavailableError, loadAuthConfig } from '../session/auth-config';
-import { createBrowserSession, setActiveSession, type EdgeSession } from '../session/session';
+import { createBrowserSession, getActiveSession, setActiveSession, type EdgeSession } from '../session/session';
 
 interface BootstrapResponse {
   user_id: string;
@@ -81,6 +87,8 @@ interface RuntimeState {
   failures: Array<{ eventId: string; eventType: string; errorCode: string; failedAt: string }>;
   authRequired: boolean;
   firstSyncRequired: boolean;
+  // The account has no single concrete site, so bootstrap is refused and nothing will sync.
+  siteRefusal: 'no_site' | 'ambiguous_site' | null;
   setupError: boolean;
   // Story 1.12: offline with no cached sign-in; unsettled captures that blocked a sign-out.
   offlineNoSession: boolean;
@@ -93,6 +101,8 @@ interface RuntimeState {
   syncState: SyncUiState;
   // Story 1.14 (AC 5): navigator.onLine as of the last outbox refresh or online/offline event.
   online: boolean;
+  // Story 1.15 (Task 3.6): `navigation` came from a live bootstrap, not the offline placeholder.
+  navigationConfirmed: boolean;
   // Story 7.8: the cached technician worklist.
   workOrders: CachedWorkOrderRow[];
   worklistMeta: WorklistMeta;
@@ -100,6 +110,9 @@ interface RuntimeState {
   selectedWorkOrderId: string | null;
   selectedReservations: CachedReservationRow[];
 }
+
+/** Bootstrap refused for the account's site assignment: already shown, not a sync failure. */
+class SiteRefusedError extends Error {}
 
 const initialState: RuntimeState = {
   userId: '',
@@ -113,6 +126,7 @@ const initialState: RuntimeState = {
   failures: [],
   authRequired: false,
   firstSyncRequired: false,
+  siteRefusal: null,
   setupError: false,
   offlineNoSession: false,
   signOutBlockedCount: 0,
@@ -122,6 +136,7 @@ const initialState: RuntimeState = {
   waitingForOthers: [],
   syncState: 'offline',
   online: true,
+  navigationConfirmed: false,
   workOrders: [],
   worklistMeta: { total: 0, truncated: false, fetchedAt: null },
   closureCatalogue: { fault: [], cause: [], remedy: [] },
@@ -188,7 +203,19 @@ function parseMeters(raw: string | undefined): WorklistMeter[] {
 export function EdgeClient({
   view = 'frontline',
 }: {
-  view?: 'frontline' | 'maintenance' | 'refused-captures';
+  view?:
+    | 'frontline'
+    | 'dashboard'
+    | 'maintenance'
+    | 'refused-captures'
+    | 'workflows'
+    | 'access-control'
+    | 'reports'
+    | 'new-requisition'
+    | 'check-stock'
+    | 'my-requests'
+    | 'report-damage'
+    | 'damage-cases';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
@@ -200,7 +227,30 @@ export function EdgeClient({
   const sessionAuthLost = useRef(false);
   // Story 1.12: no capture may start between the sign-out count and the identity being cleared.
   const signingOut = useRef(false);
+  // Bootstrap refused the site (no concrete site assignment): the API never named the user, and
+  // capture never opened, so this person owns no outbox rows but must still be able to sign out.
+  const siteRefused = useRef(false);
   const [state, setState] = useState(initialState);
+  // Story 8.9 (Task 9.2): one photo upload pass at a time.
+  const uploadingPhotos = useRef(false);
+
+  // Story 8.9 (Task 9.2): PUT pending damage photos when online, on bootstrap and after each
+  // refreshLocalState. Only the signed-in person's photos go out under their session.
+  const uploadPhotos = useCallback(() => {
+    const owner = signedInUserId.current;
+    if (!owner || uploadingPhotos.current || !navigator.onLine) return;
+    uploadingPhotos.current = true;
+    void uploadPendingPhotos({
+      store: pendingPhotoStore,
+      ownerUserId: owner,
+      fetch: authorizedFetch,
+      reencode: reencodeAsJpeg,
+    })
+      .catch(() => undefined)
+      .finally(() => {
+        uploadingPhotos.current = false;
+      });
+  }, []);
 
   const insertOwnCapture = useCallback(async (db: PowerSyncDatabase, event: Parameters<typeof insertCaptureEvent>[1]) => {
     if (signingOut.current) throw new Error('Signing out: capture is closed');
@@ -241,7 +291,8 @@ export function EdgeClient({
         ? 'error'
         : deriveSyncUiState({ online, syncing, ...counts }),
     }));
-  }, []);
+    uploadPhotos();
+  }, [uploadPhotos]);
 
   // Story 7.8: read the cached worklist (survives restarts; the snapshot meta lives in localStorage).
   const loadWorklistFromCache = useCallback(async (db: PowerSyncDatabase) => {
@@ -375,7 +426,24 @@ export function EdgeClient({
 
         try {
           const response = await authorizedFetch('/api/v1/edge/bootstrap', { credentials: 'include' });
-          if (!response.ok) throw new Error('bootstrap unavailable');
+          if (!response.ok) {
+            const refusal = await classifyBootstrapRefusal(response);
+            if (refusal === 'unavailable') throw new Error('bootstrap unavailable');
+            // Not a sync problem: tell the person their account has no usable site, name them from
+            // the sign-in token, and show no cached identity from an earlier assignment.
+            const signedInName = (await getActiveSession()?.getDisplayName()) ?? null;
+            siteRefused.current = true;
+            if (!cancelled)
+              setState((current) => ({
+                ...current,
+                siteRefusal: refusal,
+                firstSyncRequired: false,
+                userName: signedInName ?? '',
+                siteName: '',
+                signOutAvailable: sessionReady,
+              }));
+            throw new SiteRefusedError();
+          }
           const bootstrap = (await response.json()) as BootstrapResponse;
           await cacheContext(
             db,
@@ -407,7 +475,9 @@ export function EdgeClient({
             siteId: bootstrap.site_id,
             siteName: bootstrap.site_name,
             navigation: bootstrap.navigation,
+            navigationConfirmed: true,
             firstSyncRequired: false,
+            siteRefusal: null,
             authRequired: false,
             signOutAvailable: sessionReady,
           }));
@@ -415,8 +485,10 @@ export function EdgeClient({
             .connect(new EdgePowerSyncConnector('', () => signedInUserId.current))
             .catch(() => undefined);
           if (navigator.onLine) void refreshWorklistNow(db).catch(() => undefined);
-        } catch {
-          if (!cached) setState((current) => ({ ...current, firstSyncRequired: true }));
+          uploadPhotos();
+        } catch (error) {
+          if (!(error instanceof SiteRefusedError) && !cached)
+            setState((current) => ({ ...current, firstSyncRequired: true }));
         }
 
         // Story 1.13: one watch over both the outbox and the local-only retention table.
@@ -465,7 +537,7 @@ export function EdgeClient({
       session.current = null;
       setActiveSession(null);
     };
-  }, [loadWorklistFromCache, refreshLocalState, refreshWorklistNow]);
+  }, [loadWorklistFromCache, refreshLocalState, refreshWorklistNow, uploadPhotos]);
 
   // Story 1.12 (AC4): shared-tablet sign-out. Refused while captures would still upload (the
   // server attributes uploads to the bearer, not to the device-stamped actor); when online the
@@ -475,13 +547,13 @@ export function EdgeClient({
     const db = database.current;
     const current = session.current;
     const userId = signedInUserId.current;
-    if (!db || !current || !userId || signingOut.current) return;
+    if (!db || !current || (!userId && !siteRefused.current) || signingOut.current) return;
     signingOut.current = true;
     setState((prev) => ({ ...prev, signingOut: true }));
     let result: Awaited<ReturnType<EdgeSession['signOut']>>;
     try {
       result = await current.signOut({
-        countUnsettled: () => countUnsettled(db, userId),
+        countUnsettled: () => (userId ? countUnsettled(db, userId) : Promise.resolve(0)),
         clearCachedUser: () => clearCachedUserContext(db),
       });
     } catch {
@@ -492,7 +564,7 @@ export function EdgeClient({
     if (result.blocked) {
       signingOut.current = false;
       setState((prev) => ({ ...prev, signingOut: false, signOutBlockedCount: result.count }));
-      if (navigator.onLine) {
+      if (navigator.onLine && userId) {
         await resetAuthRequired(db, userId);
         await refreshLocalState(db);
       }
@@ -502,6 +574,7 @@ export function EdgeClient({
     // redirect that could not reach the IdP, stays here, so the shell must stop showing this user.
     // Capture stays closed (signingOut) until the next start signs somebody in.
     signedInUserId.current = null;
+    siteRefused.current = false;
     sessionAuthLost.current = false;
     setActiveSession(null);
     setState((prev) => ({
@@ -587,6 +660,74 @@ export function EdgeClient({
     await refreshLocalState(db);
     return event.event_id;
   }, [refreshLocalState, state.role, state.siteId, state.userId]);
+
+  // --- Story 8.9: report damage (the submitIndent pattern) ---------------------------------------
+
+  const submitDamage = useCallback(async (input: DamageSubmitInput): Promise<DamageSubmitResult> => {
+    const db = database.current;
+    if (!db || !state.userId || !state.siteId) {
+      throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
+    }
+    if (signingOut.current) throw new Error('Signing out: capture is closed');
+    const occurredAt = new Date().toISOString();
+    const reportId = crypto.randomUUID();
+    const photoAttachmentId = crypto.randomUUID();
+    // The photo first: a report whose photo was never stored would wait forever for it.
+    await pendingPhotoStore.put({
+      attachmentId: photoAttachmentId,
+      blob: input.photo,
+      contentType: input.photo.type,
+      ownerUserId: state.userId,
+      createdAt: occurredAt,
+    });
+    const events = createDamageCaptureEvents({
+      sku: input.sku,
+      lotNumber: input.lotNumber,
+      quantity: input.quantity,
+      foundAt: input.foundAt,
+      binCode: input.binCode,
+      reasonCode: input.reasonCode,
+      reasonNote: input.reasonNote,
+      photoAttachmentId,
+      wholeLotRequested: input.wholeLotRequested,
+      replacement: input.replacement
+        ? { ...input.replacement, reason: t('damage.replacementReason') }
+        : null,
+      userId: state.userId,
+      role: state.role,
+      siteId: state.siteId,
+      deviceId: deviceId(),
+      reportId,
+      occurredAt,
+    });
+    // One local transaction, damage event first: the outbox uploads it before the linked indent.
+    const insertAll = async (tx: Parameters<typeof insertCaptureEvent>[0]) => {
+      for (const event of events) await insertCaptureEvent(tx, event);
+    };
+    try {
+      if (db.writeTransaction) await db.writeTransaction(insertAll);
+      else await insertAll(db);
+    } catch (err) {
+      // Code review 2026-09-28: the photo above is already stored under photoAttachmentId; if the
+      // event insert that would reference it never lands, remove it rather than leave an orphaned
+      // blob with no owning report.
+      await pendingPhotoStore.remove(photoAttachmentId).catch(() => undefined);
+      throw err;
+    }
+    await refreshLocalState(db);
+    const damage = events[0]!;
+    return {
+      eventId: damage.event_id,
+      reportId,
+      replacementIndentId: (damage.payload['replacement_indent_id'] as string | null) ?? null,
+    };
+  }, [refreshLocalState, state.role, state.siteId, state.userId]);
+
+  const damageSettlement = useCallback(async (eventId: string): Promise<CaptureSettlement> => {
+    const db = database.current;
+    if (!db) return 'pending';
+    return readCaptureSettlement(db, eventId);
+  }, []);
 
   // --- Story 7.8: the five technician flows (the submitIndent pattern) ---------------------------
 
@@ -698,8 +839,10 @@ export function EdgeClient({
     <AppShell
       userName={state.userName || t('app.defaultUserName')}
       siteName={state.siteName || t('app.defaultSiteName')}
+      role={state.role}
       syncState={state.syncState}
       firstSyncRequired={state.firstSyncRequired}
+      siteRefusal={state.siteRefusal}
       failures={state.failures}
       navigation={state.navigation}
       pendingCount={state.pendingCount}
@@ -716,11 +859,19 @@ export function EdgeClient({
       onLoadCrossDockTask={loadCrossDockTask}
       onConfirmCrossDock={confirmCrossDock}
       onSubmitIndent={submitIndent}
+      reportDamage={{
+        onSubmit: submitDamage,
+        settlementOf: damageSettlement,
+        outboxVersion: `${state.pendingCount}:${state.failedCount}`,
+      }}
+      userId={state.userId}
       onRetry={() => {
         const db = database.current;
         if (db) void refreshLocalState(db);
       }}
       view={view}
+      online={state.online}
+      navigationConfirmed={state.navigationConfirmed}
       refusedCaptures={{ siteId: state.siteId, userId: state.userId, online: state.online }}
       onDismissFailure={dismissFailure}
       maintenance={{

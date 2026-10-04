@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS pick_line (
   pick_task_id           UUID NOT NULL REFERENCES pick_task(pick_task_id),
   dispatch_order_line_id UUID NOT NULL,
   sku                    TEXT NOT NULL,
-  directed_lot_id        UUID NOT NULL,
+  directed_lot_id        UUID,
   confirmed_lot_id       UUID,
   directed_quantity      NUMERIC(14,3) NOT NULL,
   confirmed_quantity     NUMERIC(14,3),
@@ -55,6 +55,10 @@ END $$;
 -- than confirmation used, which could resolve to another bin (and another task's allocation) when
 -- a lot is allocated across several bins. Null until the line is confirmed.
 ALTER TABLE IF EXISTS pick_line ADD COLUMN IF NOT EXISTS confirmed_location_id UUID;
+
+-- Pilot B3: a pick line for stock that is not lot-controlled directs no lot (the lot-less
+-- stock_balance row carries lot_id NULL), so directed_lot_id is nullable. Idempotent.
+ALTER TABLE IF EXISTS pick_line ALTER COLUMN directed_lot_id DROP NOT NULL;
 ALTER TABLE IF EXISTS pick_line ADD COLUMN IF NOT EXISTS cross_dock_task_id UUID;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pick_line_cross_dock_task

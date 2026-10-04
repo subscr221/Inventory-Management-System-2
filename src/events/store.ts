@@ -65,6 +65,7 @@ import {
   assertLocationOverrideShape,
   applyPutawayCompletedProjection,
 } from '../compliance/putaway.js';
+import { assertStockBinMovedShape, applyStockBinMovedProjection } from '../compliance/bin-move.js';
 import {
   assertPickTaskCreatedShape,
   assertPickLineConfirmedShape,
@@ -107,7 +108,16 @@ import {
   applyCrossDockTaskCompletedProjection,
 } from '../compliance/cross-dock.js';
 import { assertSupplierShape, applySupplierProjection } from '../compliance/supplier.js';
-import { assertIndentShape, applyIndentProjection } from '../compliance/indent.js';
+import {
+  assertIndentShape,
+  applyIndentProjection,
+  recordIndentDuplicateFlag,
+} from '../compliance/indent.js';
+import {
+  assertDamageShape,
+  assertAttachmentShape,
+  applyDamageProjection,
+} from '../compliance/damage.js';
 import {
   assertPurchaseOrderShape,
   applyPurchaseOrderProjection,
@@ -304,6 +314,7 @@ import type {
   DispatchIrnRecordedEnvelope,
   TaskSlaConfigUpdatedEnvelope,
   PutawayTaskAssignedEnvelope,
+  StockBinMovedEnvelope,
   PickTaskAssignedEnvelope,
   ForwardPickConfigUpdatedEnvelope,
   ReplenishmentTaskCreatedEnvelope,
@@ -733,6 +744,10 @@ export async function persistEvent(
   if (envelope.event_type === 'pick_task.assigned') {
     assertPickTaskAssignedShape(envelope as unknown as PickTaskAssignedEnvelope);
   }
+  // Pilot G3: bin-move shape validation is non-DB and runs with the other pre-transaction asserts.
+  if (envelope.event_type === 'stock.bin_moved') {
+    assertStockBinMovedShape(envelope as unknown as StockBinMovedEnvelope);
+  }
   // Story 3.9: forward-pick replenishment shape validation (config threshold, task creation,
   // task completion) is non-DB and runs with the other pre-transaction asserts, so a malformed
   // payload never consumes an idempotency key.
@@ -897,6 +912,10 @@ export async function persistEvent(
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
   // passes through byte-for-byte and the Story 1.9 spine gate stays green.
   assertErpReadOnly(envelope);
+  // Story 8.9: damage-case and photo-upload shape validation is non-DB and runs with the other
+  // pre-transaction asserts, so a malformed damage event never consumes an idempotency key.
+  assertDamageShape(envelope);
+  assertAttachmentShape(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();
@@ -1098,6 +1117,11 @@ export async function persistEvent(
         client,
       );
     }
+    // Pilot G3: a same-site bin-to-bin move relocates the balance inside this transaction, under
+    // the same destination and QC rules as the putaway completion above.
+    if (envelope.event_type === 'stock.bin_moved') {
+      await applyStockBinMovedProjection(envelope as unknown as StockBinMovedEnvelope, client);
+    }
     // Story 3.9: forward-pick config upsert, replenishment task creation, and task completion
     // (which moves stock via applyStockIssue/applyStockReceipt directly) - all inside this same
     // transaction so the projections, the stock movement, and the domain_events insert commit or
@@ -1203,7 +1227,7 @@ export async function persistEvent(
     // issue, receipt on return, deallocate on cancel) commit or roll back together. A ledger
     // rejection - INSUFFICIENT_STOCK from applyStockAllocation - therefore rolls back the
     // reservation row too, and no maintenance event is ever stored for a movement that failed.
-    await applyMaintenanceSpareProjection(envelope, client);
+    await applyMaintenanceSpareProjection(envelope, client, eventId);
     // Story 7.5: the calibration register projections run inside this same transaction, so the
     // register/certificate/escalation row and the instrument_calibration_statuses write the
     // lockout gate reads commit or roll back together. eventId is passed through because the
@@ -1334,6 +1358,11 @@ export async function persistEvent(
     // reordered. The promotion gate and the approval identity checks live in the applier and
     // self-audit their refusals through auditCtx.
     await applyMigrationProjection(envelope, client, eventId, auditCtx);
+    // Story 8.9: the damage case (report with its report-time relocation into the QC hold area,
+    // custody marks, inspection, the whole-lot decision with its nested governed hold, the two DOA
+    // keys, escalation and the recorded ERP outcome) runs inside this same transaction, tail-appended
+    // so nothing above is reordered. Every guard lives in the applier (AD-12).
+    await applyDamageProjection(envelope, client, eventId);
 
     let nextVersion: number;
 
@@ -1367,6 +1396,11 @@ export async function persistEvent(
     const persisted = mapRowToEvent(result.rows[0]!);
 
     await assertLocationInvariant(envelope, persisted, client);
+
+    // Story 4.3: a held indent raise gets its duplicate_flagged audit event only now, after the
+    // raise holds its own version (a device capture declares version 1; written earlier by the
+    // applier the flag took it and the capture was refused STREAM_CONFLICT, found 2026-09-23).
+    await recordIndentDuplicateFlag(envelope, client, eventId);
 
     if (auditCtx) {
       // http_status comes from the caller (201 for POST-created resources, 200 for PUT/PATCH
@@ -1414,13 +1448,24 @@ export async function persistEvent(
       // Postgres exposes the violated constraint name via err.constraint, not err.detail
       // (err.detail only contains the conflicting key/value, e.g. "Key (idempotency_key)=(...) already exists.").
       const constraint = (err as { constraint?: string }).constraint;
-      if (constraint === 'uq_idempotency' || constraint === 'domain_events_pkey') {
-        if (ownsTransaction) {
-          const existing = await client.query(
+      // Projections run BEFORE the domain_events insert, so the loser of an identical-replay race
+      // can collide on a projection key (e.g. maintenance_fault_report_pkey) instead of on
+      // uq_idempotency. When the winner's event is already committed under this idempotency key or
+      // event id, the loser is a duplicate whichever constraint fired, and gets the same outcome
+      // and detail shape as the sequential short-circuit above.
+      const existing = ownsTransaction
+        ? await client.query(
             `SELECT event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at
               FROM domain_events WHERE idempotency_key = $1 OR event_id = $2 LIMIT 1`,
             [envelope.idempotency_key, eventId],
-          );
+          )
+        : null;
+      if (
+        constraint === 'uq_idempotency' ||
+        constraint === 'domain_events_pkey' ||
+        (existing !== null && existing.rows.length > 0)
+      ) {
+        if (existing !== null) {
           if (existing.rows.length > 0) {
             if (opts?.strictDuplicate === true) {
               const row = existing.rows[0]!;
@@ -2247,18 +2292,18 @@ export async function persistEvent(
                                                           : null,
                                                     }
                                                   : constraint === 'edge_refused_capture_pkey'
-                                                  ? {
-                                                      refusal_id:
-                                                        typeof p['refusal_id'] === 'string'
-                                                          ? p['refusal_id']
-                                                          : null,
-                                                    }
-                                                  : {
-                                                      asset_id:
-                                                        typeof p['asset_id'] === 'string'
-                                                          ? p['asset_id']
-                                                          : null,
-                                                    };
+                                                    ? {
+                                                        refusal_id:
+                                                          typeof p['refusal_id'] === 'string'
+                                                            ? p['refusal_id']
+                                                            : null,
+                                                      }
+                                                    : {
+                                                        asset_id:
+                                                          typeof p['asset_id'] === 'string'
+                                                            ? p['asset_id']
+                                                            : null,
+                                                      };
         throw new AppError(
           409,
           'DUPLICATE_EVENT',
@@ -2299,6 +2344,29 @@ export async function persistEvent(
             work_order_id:
               typeof envelope.payload['work_order_id'] === 'string'
                 ? envelope.payload['work_order_id']
+                : null,
+          },
+        );
+      } else if (constraint === 'damage_report_pkey') {
+        // Story 8.9: a racing replay of the same client-minted report_id.
+        throw new AppError(409, 'DUPLICATE_EVENT', 'This damage report has already been recorded', {
+          report_id:
+            typeof envelope.payload['report_id'] === 'string'
+              ? envelope.payload['report_id']
+              : null,
+        });
+      } else if (constraint === 'uq_damage_report_source_grn_line') {
+        // Story 8.9: a DIFFERENT report_id tried to open a second case for a GRN line that already
+        // has one - a business-rule violation (one case per line), never an idempotent replay of the
+        // same attempt, so it gets its own code rather than reusing DUPLICATE_EVENT.
+        throw new AppError(
+          409,
+          'DAMAGE_CASE_ALREADY_EXISTS_FOR_GRN_LINE',
+          'A damage case already exists for this GRN line',
+          {
+            source_grn_line_id:
+              typeof envelope.payload['source_grn_line_id'] === 'string'
+                ? envelope.payload['source_grn_line_id']
                 : null,
           },
         );

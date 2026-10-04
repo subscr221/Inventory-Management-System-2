@@ -290,23 +290,39 @@ export interface RoleHolder {
   external_id: string;
 }
 
+// Story 1.16 (D4): an assignment covers a location when it names it or names every location.
+const LOCATION_CLAUSE = `
+       AND (a.location_id = $2 OR a.location_id = '*')`;
+const MEMBER_LOCATION_CLAUSE = `
+       AND (a.location_id = $3 OR a.location_id = '*')`;
+
 /**
  * Returns the current active holder of `role`, or null if no active user holds it. If more than one
- * active user holds the same role, the earliest-assigned wins (deterministic tie-break) - a Phase-1
- * simplification with no location dimension; Epic 4 workflows may add location-scoped resolution.
+ * active user holds the same role, the earliest-assigned wins (deterministic tie-break).
+ *
+ * Story 1.16 (D4): with `locationId` the holder must be assigned at that location or at every
+ * location ('*'), the same rule notification routing applies in resolveTargetUserIds. Without it
+ * the lookup is location-blind, exactly as before, so a caller that knows the transaction site
+ * should pass it. Only `undefined` means "no location": any other value filters, so a caller that
+ * lost its site resolves only a holder assigned at every location, never a holder of another site.
+ * The match is on the id itself: pass the site id, because a zone or bin under the site matches
+ * no site-level assignment. When a holder at the site and a holder at every location both exist,
+ * the earliest-assigned of them wins.
  */
 export async function findRoleHolder(
   role: string,
   client?: PoolClient,
+  locationId?: string,
 ): Promise<RoleHolder | null> {
+  const atLocation = locationId !== undefined;
   const result = await runner(client).query(
     `SELECT u.user_id, u.external_id
      FROM user_role_assignments a
      JOIN users u ON u.user_id = a.user_id
-     WHERE a.role = $1 AND u.active = true
+     WHERE a.role = $1 AND u.active = true${atLocation ? LOCATION_CLAUSE : ''}
      ORDER BY a.created_at ASC, a.assignment_id ASC
      LIMIT 1`,
-    [role],
+    atLocation ? [role, locationId] : [role],
   );
   if (result.rows.length === 0) return null;
   const row = result.rows[0]!;
@@ -316,21 +332,25 @@ export async function findRoleHolder(
 /**
  * Membership test: does `userId` actively hold the role on DOA entry `entryId`? Any active holder
  * of the governing role may sign, not only the earliest one findRoleHolder happens to return.
+ *
+ * Story 1.16 (D4): with `locationId` the role must be held at that location or at every location.
  */
 export async function isActiveRoleHolderForEntry(
   entryId: string | null,
   userId: string | null,
   client?: PoolClient,
+  locationId?: string,
 ): Promise<boolean> {
   if (!entryId || !userId) return false;
+  const atLocation = locationId !== undefined;
   const result = await runner(client).query(
     `SELECT 1
      FROM doa_registry_entries e
      JOIN user_role_assignments a ON a.role = e.role
      JOIN users u ON u.user_id = a.user_id
-     WHERE e.entry_id = $1 AND a.user_id = $2 AND u.active = true
+     WHERE e.entry_id = $1 AND a.user_id = $2 AND u.active = true${atLocation ? MEMBER_LOCATION_CLAUSE : ''}
      LIMIT 1`,
-    [entryId, userId],
+    atLocation ? [entryId, userId, locationId] : [entryId, userId],
   );
   return result.rows.length > 0;
 }

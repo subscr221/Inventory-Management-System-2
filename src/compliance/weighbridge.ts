@@ -7,8 +7,15 @@ import { upsertWeighbridgeEvent } from '../read/projections/weighbridge_event.js
 import { getExaminationByDeviceKey } from '../read/projections/statutory_examination.js';
 import type { StatutoryExaminationRow } from '../read/projections/statutory_examination.js';
 
-/** AC3: tolerance breaches are routed to the receiving supervisor for review before receipt. */
-const TOLERANCE_BREACH_TARGET_ROLE = 'receiving_supervisor';
+/**
+ * Story 3.3 AC3 / Story 3.12: tolerance breaches are routed to the unloading supervisor for review
+ * before receipt. The access matrix (access-matrix-frontline-draft-2026-07-11.md, role row
+ * `unloading_supervisor`: "owns unmatched-vehicle and tolerance-breach exceptions at receiving";
+ * band row "Tolerance-breach acceptance band": primary `unloading_supervisor`) names no other owner,
+ * and it is the role the pilot pack provisions. `src/api/v1/weighbridge.ts` imports this constant so
+ * the read gate and the routing target never drift apart.
+ */
+export const TOLERANCE_BREACH_OWNER_ROLE = 'unloading_supervisor';
 
 const WEIGHBRIDGE_STREAM_TYPES = new Set(['weighbridge']);
 const WEIGHBRIDGE_EVENT_TYPES = new Set(['weighbridge.recorded']);
@@ -341,13 +348,14 @@ export async function applyWeighbridgeProjection(
   );
 
   // AC3: an out-of-tolerance load is blocked from silent receipt and routed as a task to the
-  // named owner (receiving supervisor). Transactional with the projection write above, so a
+  // named owner (the unloading supervisor, TOLERANCE_BREACH_OWNER_ROLE; access matrix row
+  // "Tolerance-breach acceptance band"). Transactional with the projection write above, so a
   // breach is never persisted without its routed alert (mirrors the Story 2.6/2.7 approval-task
   // pattern in src/compliance/planning-jobs.ts).
   if (status === 'tolerance_breach') {
     await emitNotificationInTransaction(
       {
-        target: { role: TOLERANCE_BREACH_TARGET_ROLE, location_id: siteId },
+        target: { role: TOLERANCE_BREACH_OWNER_ROLE, location_id: siteId },
         event_type: 'weighbridge_tolerance_breach',
         status_verb: 'Tolerance breach',
         object_type: 'weighbridge_event',

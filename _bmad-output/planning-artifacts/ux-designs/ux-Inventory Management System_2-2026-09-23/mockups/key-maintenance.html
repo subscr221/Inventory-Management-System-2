@@ -1,0 +1,1112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maintenance Work Orders</title>
+<style>
+/*
+  KEY SCREEN: Maintenance - technician worklist and work order capture, supervisor work order board.
+  One frame, four device classes (Handheld, Tablet, Desktop, Desktop touch); both roles in every class.
+  Governing spine sections:
+    EXPERIENCE.md
+      - Key Flows > Maintenance: worklist by priority, open WO status steps (Accepted, In progress,
+        Waiting spares, Done), meter reading, spare issue by lot/bin scan, closure (codes + notes + photo),
+        report fault from any asset scan; supervisor triage (priority, assign), return-to-service
+        signature, warranty override, sync conflict resolution
+      - Component Patterns: scan bar (scan, camera, type it), task list, status stepper, reservation line,
+        blocked-scan card, code tiles, kanban board, approval checklist, sync badge, device-class navigation
+        (bottom nav, icon rail, dark sidebar)
+      - State Patterns: captured-pending-sync, spare on QC hold blocked, return-to-service awaiting
+        signature, sync conflict, approval needs a live connection
+    DESIGN.md
+      - Density by input (override 2026-09-25): finger classes = touch-roomy (primary >=56px pinned
+        at the bottom, secondary >=48px); Desktop mouse = compact (34px controls, as the other desk mocks)
+      - Accent token family: theme A Ledger Blue (--accent, --accent-strong, --accent-soft,
+        --on-accent, --accent-on-dark) exactly as in color-themes-1.html; dark sidebar #1B2230
+  Decision source: .memlog.md (2026-09-25, incl. the every-role-on-every-device override).
+  Look and mechanics mirror key-stores.html. Nothing loads from the network.
+*/
+:root{
+  --side:#1B2230; --side-hover:#252E3F; --side-text:#C9D1DD; --side-muted:#8C97A8;
+  --bg:#F4F6F9; --surface:#FFFFFF; --border:#DDE2E9; --text:#1C2430; --text-muted:#566173;
+  --ok:#1E7A3C; --ok-bg:#E6F4EA; --warn:#8A5300; --warn-bg:#FFF3DC;
+  --err:#B3261E; --err-bg:#FCE8E6; --info:#1F5FAD; --info-bg:#E7F0FB;
+  --off:#4A5568; --off-bg:#ECEFF3;
+  /* A. Ledger Blue (default for CMF-ALIGARH) */
+  --accent:#1E6BC6; --accent-strong:#1656A3; --accent-soft:#E8F1FC; --on-accent:#FFFFFF; --accent-on-dark:#5AA2F0;
+  --font: Lato, "Segoe UI", Roboto, system-ui, sans-serif;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.4}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+button[disabled]{cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.side :focus-visible,.s-top :focus-visible,.rail :focus-visible{outline-color:var(--accent-on-dark)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.page{padding:16px;display:flex;flex-direction:column;gap:16px}
+.intro h1{font-size:22px;margin:0 0 4px}
+.intro p{margin:0;color:var(--text-muted);max-width:980px}
+
+/* ---------- page switchers (outside the frame) ---------- */
+.switches{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:flex-end}
+.swg{display:flex;flex-direction:column;gap:4px}
+.swg>span{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)}
+.switch{display:inline-flex;flex-wrap:wrap;border:1px solid #B9C1CC;border-radius:8px;background:var(--surface);overflow:hidden}
+.switch button{min-height:44px;border:0;border-right:1px solid #DDE2E9;background:transparent;padding:4px 14px;font-weight:700;text-align:left;line-height:1.15}
+.switch button:last-child{border-right:0}
+.switch button small{display:block;font-weight:400;font-size:11.5px;color:var(--text-muted)}
+.switch button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.switch button[aria-pressed="true"] small{color:#DCE9FA}
+.stage{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.device{display:flex;flex-direction:column;gap:6px;max-width:100%}
+.device-label{font-size:13px;font-weight:700;max-width:898px}
+.device-label span{font-weight:400;color:var(--text-muted)}
+
+/* ---------- the one frame, sized by device class ---------- */
+.fwrap{overflow:hidden;flex:none}
+.bezel{background:#1F2937;border-radius:22px;padding:10px;position:relative}
+.screen{background:var(--bg);overflow:hidden;display:flex;position:relative}
+.fw-hand{width:410px;height:820px;border-radius:22px}
+.s-hand{width:390px;height:800px;flex-direction:column}
+.fw-tab{width:462px;height:660px;border-radius:22px}
+.fw-tab .bezel{transform:scale(.55);transform-origin:0 0;width:840px}
+.s-tab{width:820px;height:1180px;flex-direction:row}
+.fw-desk{width:898px;height:562px;border-radius:8px;border:1px solid var(--border)}
+.fw-desk .screen{transform:scale(.7);transform-origin:0 0}
+.s-desk{width:1280px;height:800px;flex-direction:row}
+.content{flex:1;display:flex;min-height:0;min-width:0}
+.dmain{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+
+/* ---------- buttons, density by input ---------- */
+.b{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:2px solid transparent;border-radius:var(--radius);font-weight:700;padding:0 12px;text-align:center;line-height:1.15}
+.b-pri{background:var(--accent);color:var(--on-accent)}
+.b-pri:hover{background:var(--accent-strong)}
+.b-pri[disabled]{background:#E3E7ED;color:var(--text-muted);border-color:#C9D0DA}
+.b-sec{background:var(--surface);color:var(--accent-strong);border-color:var(--accent)}
+.b-sec:hover{background:var(--accent-soft)}
+.b-sec[disabled]{color:var(--text-muted);border-color:#C9D0DA;background:#F4F6F9}
+.b-plain{background:var(--surface);color:var(--text);border-color:#B9C1CC}
+.b-ghost{background:transparent;color:var(--accent-strong);text-decoration:underline;text-underline-offset:2px}
+.b-full{width:100%}
+.touch{font-size:16px}
+.touch .b{min-height:56px;font-size:17px}
+.touch .b-sec,.touch .b-plain,.touch .b-ghost{min-height:48px;font-size:16px}
+.compact{font-size:13px}
+.compact .b{min-height:34px;border-width:1px;border-radius:6px;font-size:13px;padding:0 12px}
+.icon{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;flex:none}
+.compact .icon{width:15px;height:15px}
+
+/* ---------- handheld / tablet top bar, bottom nav, icon rail ---------- */
+.s-top{height:48px;flex:none;background:var(--side);color:#fff;display:flex;align-items:center;gap:8px;padding:0 12px}
+.s-top b{font-size:16px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-top .who{font-size:13px;color:var(--side-text);white-space:nowrap}
+.s-top .spacer{flex:1}
+.ready{width:10px;height:10px;border-radius:50%;background:#3DD68C;box-shadow:0 0 0 3px rgba(61,214,140,.25);flex:none}
+.sync{font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;background:#2E3850;color:#E6EAF0;white-space:nowrap}
+.sync .d{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:#9AA5B6}
+.sync.on .d{background:#3DD68C}
+.dtop .sync{background:var(--off-bg);color:var(--off)}
+.dtop .sync.on{background:var(--ok-bg);color:var(--ok)}
+.dtop .sync.on .d{background:var(--ok)}
+.bnav{height:64px;flex:none;display:flex;background:var(--surface);border-top:1px solid var(--border)}
+.bnav button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-muted);font-size:13px;font-weight:700;position:relative;min-height:56px}
+.bnav svg,.rail svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9}
+.bnav button[aria-current="page"]{color:var(--accent)}
+.bnav button[aria-current="page"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+.bnav .cnt,.rail .cnt{position:absolute;top:6px;left:calc(50% + 8px);background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+.rail{width:92px;flex:none;background:var(--side);display:flex;flex-direction:column;gap:4px;padding:0 0 8px}
+.rail .mark{height:56px;display:grid;place-items:center;border-bottom:1px solid #2A3345;margin-bottom:6px}
+.rail .mark span{width:34px;height:34px;border-radius:8px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-weight:900;font-size:13px}
+.rail button{position:relative;min-height:72px;border:0;border-left:4px solid transparent;background:transparent;color:var(--side-text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:13px;font-weight:700;padding:4px 2px;line-height:1.1}
+.rail button:hover{background:var(--side-hover)}
+.rail button[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff}
+.rail button[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.rail .cnt{left:calc(50% + 6px)}
+
+/* ---------- scan bar ---------- */
+.scanbar{flex:none;background:var(--surface);border-bottom:1px solid var(--border);padding:8px 10px}
+.scanbar form,.sform{display:flex;gap:8px;align-items:stretch}
+.fld{flex:1;display:flex;align-items:center;gap:8px;border:2px solid #8792A3;border-radius:var(--radius);padding:0 10px;background:#FAFBFC;min-width:0}
+.fld:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.fld input{border:0;background:transparent;flex:1;min-width:0;outline:none;height:52px;font-size:16px}
+.scan2{display:flex;gap:8px;margin-top:8px;align-items:center}
+.scan2 .b{flex:1}
+.scan2 .hint{flex:1;margin:0}
+.hint{font-size:12.5px;color:var(--text-muted);margin:4px 2px 0}
+.compact .scanbar{padding:10px 12px}
+.compact .fld{border-width:1px;border-radius:6px}
+.compact .fld input{height:32px;font-size:13px}
+.compact .scan2{margin-top:6px}
+.compact .scan2 .b{flex:none}
+
+/* ---------- worklist ---------- */
+.lp{width:330px;flex:none;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;background:var(--bg)}
+.rp{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--surface)}
+.d-hand .lp{width:auto;flex:1 1 0;min-width:0;border-right:0}
+.d-desk .lp,.d-deskt .lp{width:380px}
+.inbox{flex:1;overflow:auto;padding:4px 10px 12px;min-height:0;overflow-x:hidden}
+.grp h3{display:flex;align-items:center;gap:8px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:12px 2px 6px}
+.grp h3 .cnt{background:var(--accent);color:var(--on-accent);border-radius:999px;padding:0 8px;font-size:12px;letter-spacing:0}
+.grp h3 .cnt.zero{background:var(--off-bg);color:var(--off)}
+.grp ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.task{width:100%;display:flex;gap:10px;align-items:center;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;min-height:72px}
+.task:hover{border-color:var(--accent)}
+.task[aria-current="true"]{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+.task .tx{flex:1;min-width:0}
+.task b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task .m{display:block;font-size:13px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task .pl{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px}
+.task .go{color:var(--accent);font-weight:900;font-size:20px}
+.compact .inbox{padding:0 12px 12px}
+.compact .task{min-height:44px;padding:6px 10px;border-radius:6px}
+.compact .task b{font-size:13px}
+.compact .task .m{font-size:12px}
+.empty-g{font-size:13px;color:var(--text-muted);padding:6px 2px}
+.qa{padding:8px 10px 0;flex:none}
+.prio{width:44px;height:44px;border-radius:8px;display:grid;place-items:center;font-weight:900;font-size:15px;flex:none;border:1px solid}
+.compact .prio{width:32px;height:32px;font-size:12px;border-radius:6px}
+.pr1{background:var(--err-bg);color:var(--err);border-color:#F2C2BE}
+.pr2{background:var(--warn-bg);color:var(--warn);border-color:#E8C27A}
+.pr3{background:var(--info-bg);color:var(--info);border-color:#BCD3F0}
+.pr4,.pr0{background:var(--off-bg);color:var(--off);border-color:#C9D0DA}
+.pill{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.p-ok{background:var(--ok-bg);color:var(--ok)}
+.p-warn{background:var(--warn-bg);color:var(--warn)}
+.p-err{background:var(--err-bg);color:var(--err)}
+.p-info{background:var(--info-bg);color:var(--info)}
+.p-off{background:var(--off-bg);color:var(--off)}
+
+/* ---------- work order detail ---------- */
+.acc{flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--surface)}
+.acc-head{flex:none;display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border);background:var(--surface)}
+.acc-head .tx{flex:1;min-width:0}
+.acc-head b{display:block;font-size:17px}
+.acc-head .m{display:block;font-size:13px;color:var(--text-muted)}
+.acc-head .pl{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+.backbtn{flex:none;width:48px;min-height:48px;border:1px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);display:grid;place-items:center;color:var(--text)}
+.compact .backbtn{width:34px;min-height:34px;border-radius:6px}
+.acc-body{flex:1;overflow:auto;overflow-x:hidden;padding:12px;display:flex;flex-direction:column;gap:12px;min-height:0;background:var(--bg)}
+.acc-foot{flex:none;padding:10px 12px 12px;border-top:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;gap:8px}
+.todo{font-size:13.5px;color:var(--text-muted);display:flex;justify-content:space-between;gap:8px}
+.todo b{color:var(--text)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.card h4{margin:0 0 6px;font-size:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card .m,.m{font-size:13px;color:var(--text-muted)}
+.compact .acc-head b{font-size:15px}
+.compact .card{border-radius:6px;padding:8px 12px}
+.compact .card h4{font-size:14px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row>.b{flex:1}
+.gap{margin-top:8px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:14px;margin:0}
+.compact .kv{font-size:13px}
+.kv dt{color:var(--text-muted)}
+.kv dd{margin:0;font-weight:700}
+.steps{display:flex;list-style:none;margin:0;padding:0;gap:6px}
+.steps li{flex:1;font-size:13.5px;font-weight:700;padding-top:8px;border-top:6px solid #C9D0DA;color:var(--text-muted);line-height:1.2;min-width:0}
+.steps li small{display:block;font-weight:400;font-size:12px}
+.steps li.dn{border-top-color:var(--ok);color:var(--ok)}
+.steps li.cur{border-top-color:var(--accent);color:var(--accent-strong)}
+.steps li.skip{border-top-style:dashed}
+.compact .steps li{font-size:12px;border-top-width:4px;padding-top:6px}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.tile{min-height:48px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-weight:700;font-size:14.5px;padding:4px 10px;text-align:left;line-height:1.2;color:var(--text)}
+.tile[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong);box-shadow:inset 0 0 0 1px var(--accent)}
+.tile[disabled]{color:var(--text-muted);background:#F4F6F9}
+.tile small{display:block;font-weight:400;font-size:12.5px;color:var(--text-muted)}
+.fl{display:block;font-weight:700;font-size:14px;margin:0 0 6px}
+.inp,.ta,.sel{width:100%;min-height:48px;border:2px solid #8792A3;border-radius:var(--radius);padding:0 10px;background:#fff;font-size:16px}
+.ta{padding:8px 10px;min-height:84px;resize:vertical}
+.inp:focus,.ta:focus,.sel:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.inp.num{width:150px;font-size:20px;font-weight:700;text-align:right}
+.meterrow{display:flex;gap:8px;align-items:flex-end;margin-top:10px}
+.meterrow>div{flex:none}
+.meterrow .b{flex:1}
+.err{color:var(--err);font-weight:700;font-size:13.5px;margin:6px 0 0;display:flex;gap:6px;align-items:flex-start}
+.log{list-style:none;margin:8px 0 0;padding:0;font-size:13.5px;display:flex;flex-direction:column;gap:4px}
+.resl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.resl li{display:flex;gap:10px;align-items:center;border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+.resl li .tx{flex:1;min-width:0}
+.resl li b{display:block}
+.chk{display:flex;align-items:center;gap:10px;min-height:48px;border:2px solid #B9C1CC;border-radius:var(--radius);padding:4px 12px;font-weight:700}
+.chk input{width:22px;height:22px;accent-color:var(--accent);flex:none}
+.photo{width:72px;height:54px;border-radius:6px;flex:none;background:repeating-linear-gradient(160deg,#8A939F 0 6px,#A8B0BB 6px 11px,#6F7883 11px 13px);border:1px solid #5F6773}
+.blocked{border:2px solid var(--err);background:var(--err-bg);border-radius:var(--radius);padding:12px;display:flex;gap:10px;align-items:flex-start}
+.blocked .icon{color:var(--err);width:26px;height:26px;margin-top:2px}
+.blocked b{color:var(--err);font-size:16px;display:block}
+.okcard{border:2px solid var(--ok);background:var(--ok-bg);border-radius:var(--radius);padding:12px}
+.okcard b{color:var(--ok)}
+.lotrow{width:100%;display:flex;gap:10px;align-items:center;text-align:left;min-height:56px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);padding:6px 10px}
+.lotrow[disabled]{background:#F4F6F9;border-style:dashed;color:var(--text-muted)}
+.lotrow .tx{flex:1;min-width:0}
+.lotrow b{display:block;font-family:Consolas,monospace}
+.dest{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--radius);background:var(--info-bg);border:1px solid #BCD3F0;font-size:14px;margin:0}
+.dest .icon{color:var(--info);margin-top:1px}
+.dest b{color:var(--info)}
+.dest.w{background:var(--warn-bg);border-color:#E8C27A}
+.dest.w .icon,.dest.w b{color:var(--warn)}
+.dest.g{background:var(--ok-bg);border-color:#9FCDAE}
+.dest.g .icon,.dest.g b{color:var(--ok)}
+.dest.e{background:var(--err-bg);border-color:#F2C2BE}
+.dest.e .icon,.dest.e b{color:var(--err)}
+.dest .m{display:block;font-size:13px;color:var(--text-muted)}
+.qtyl{display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.qtyl label{font-weight:700;min-width:70px}
+.stp{width:48px;min-height:48px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-size:22px;font-weight:900}
+.qv{width:64px;text-align:center;font-size:20px;font-weight:700}
+.donev{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px;min-height:0;background:var(--surface);overflow-x:hidden}
+.donehead{display:flex;gap:12px;align-items:center}
+.check{width:52px;height:52px;border-radius:50%;border:5px solid var(--ok);display:grid;place-items:center;font-size:28px;color:var(--ok);flex:none;font-weight:900}
+.donehead h2{margin:0;font-size:20px}
+.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
+.tbl th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);background:#FAFBFC}
+.tbl td{padding:7px 8px;border-bottom:1px solid #EDF0F4;vertical-align:top}
+.tbl .num{text-align:right;font-variant-numeric:tabular-nums}
+.kind{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);font-weight:700}
+.compact .sel,.compact .inp{min-height:34px;border-width:1px;border-radius:6px;font-size:13px}
+.compact .inp.num{font-size:15px;width:120px}
+.compact .ta{border-width:1px;border-radius:6px;font-size:13px;min-height:60px}
+.compact .chk{min-height:34px;border-width:1px;border-radius:6px;font-weight:400;font-size:13px}
+.compact .chk input{width:18px;height:18px}
+.compact .tile{min-height:36px;border-width:1px;border-radius:6px;font-size:12.5px}
+.compact .tile small{font-size:11.5px}
+.compact .dest{font-size:13px;border-radius:6px;padding:8px 10px}
+.compact .fl{font-size:12.5px}
+.compact .tbl{font-size:12.5px}
+.compact .stp{width:34px;min-height:34px;font-size:16px;border-width:1px;border-radius:6px}
+.compact .qv{font-size:15px}
+.compact .lotrow{min-height:40px;border-width:1px;border-radius:6px}
+.compact .donehead h2{font-size:17px}
+.compact .check{width:40px;height:40px;font-size:22px;border-width:4px}
+.compact .blocked,.compact .okcard{border-radius:6px;padding:10px}
+.compact .blocked b{font-size:14px}
+
+/* ---------- desktop shell (dark sidebar) ---------- */
+.side{width:208px;flex:none;background:var(--side);color:var(--side-text);display:flex;flex-direction:column}
+.brand{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;font-weight:900;font-size:15px;border-bottom:1px solid #2A3345}
+.brand .mark{width:26px;height:26px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:12px}
+.side nav{padding:8px 0;flex:1}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;height:40px;padding:0 16px 0 13px;border:0;border-left:3px solid transparent;background:transparent;color:var(--side-text);text-align:left;font-size:13px}
+.touch .nav-item{height:52px;font-size:15px}
+.nav-item:hover{background:var(--side-hover)}
+.nav-item svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.nav-item[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff;font-weight:700}
+.nav-item[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 7px;font-weight:700}
+.side-foot{padding:12px 16px;border-top:1px solid #2A3345;font-size:12px;color:var(--side-muted)}
+.dtop{height:56px;flex:none;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 16px}
+.touch .dtop{height:68px}
+.search{flex:1;max-width:420px;display:flex;align-items:center;gap:8px;height:34px;border:1px solid var(--border);border-radius:6px;padding:0 10px;background:#FAFBFC}
+.touch .search{height:48px;border-width:2px;border-radius:var(--radius)}
+.search input{border:0;background:transparent;flex:1;min-width:0;outline:none}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.site{display:flex;align-items:center;gap:6px;min-height:34px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-weight:700}
+.touch .site{min-height:48px}
+.avatar{width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);display:grid;place-items:center;font-weight:900;font-size:12px;flex:none}
+.spacer{flex:1}
+
+/* ---------- supervisor board ---------- */
+.board{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
+.bhead{padding:12px 16px 8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.bhead h2{margin:0 8px 0 0;font-size:16px}
+.attn{flex:none;display:flex;flex-wrap:wrap;gap:6px;padding:10px 10px 4px}
+.att{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 12px;border-radius:999px;border:1px solid;font-weight:700;font-size:12.5px;background:var(--surface)}
+.touch .att{min-height:48px;font-size:14px}
+.att.w{border-color:#E8C27A;color:var(--warn)}
+.att.e{border-color:#F2C2BE;color:var(--err)}
+.att.i{border-color:#BCD3F0;color:var(--info)}
+.att.z{border-color:var(--border);color:var(--off)}
+.devnote{flex:0 0 100%;font-size:12.5px;color:var(--text-muted);display:flex;gap:6px;align-items:center}
+.attn .devnote{padding:2px 2px 0}
+.cols{flex:1;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;padding:0 16px 12px;min-height:0}
+.col{display:flex;flex-direction:column;min-height:0;background:#E9EDF2;border-radius:8px}
+.col h3{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);padding:8px 10px;margin:0;display:flex;justify-content:space-between;gap:4px}
+.col ul{list-style:none;margin:0;padding:0 6px 6px;overflow:auto;display:flex;flex-direction:column;gap:6px;min-height:0}
+.col .cf{font-size:11.5px;color:var(--text-muted);padding:4px 10px 8px}
+.kc{width:100%;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px 8px;min-height:44px;display:flex;flex-direction:column;gap:3px}
+.touch .kc{padding:10px;min-height:56px;gap:5px}
+.kc:hover{border-color:var(--accent)}
+.kc[aria-current="true"]{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.kc .id{flex-wrap:wrap;font-size:11.5px;color:var(--text-muted);display:flex;justify-content:space-between;gap:4px;align-items:center}
+.kc b{font-size:12.5px;line-height:1.25}
+.touch .kc b{font-size:14px}
+.kc .m{font-size:11.5px}
+.kc .pill{font-size:11px;white-space:normal;align-self:flex-start}
+.dpanel{width:340px;flex:none;border-left:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;min-height:0;min-width:0}
+.d-deskt .dpanel{width:390px}
+.d-hand .dpanel,.d-tab .dpanel{width:auto;flex:1;border-left:0}
+.dpanel .dh{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:flex-start}
+.dpanel .dh .tx{flex:1;min-width:0}
+.dpanel .dh b{font-size:15px;display:block}
+.touch .dpanel .dh b{font-size:17px}
+.d-hand .dpanel .dh{padding:10px 12px}
+.dpanel .body{flex:1;overflow:auto;overflow-x:hidden;padding:12px 16px 16px;display:flex;flex-direction:column;gap:14px}
+.d-hand .dpanel .body{padding:12px}
+.dsec h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.seg button{min-height:36px;border:1px solid #B9C1CC;border-radius:6px;background:#fff;font-weight:700;font-size:12px;line-height:1.1;padding:2px}
+.touch .seg button{min-height:56px;font-size:14px;border-width:2px;border-radius:var(--radius)}
+.seg button small{display:block;font-weight:400;font-size:10.5px;color:var(--text-muted)}
+.touch .seg button small{font-size:11.5px}
+.seg button[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong);box-shadow:inset 0 0 0 1px var(--accent)}
+.seg button[disabled]{color:var(--text-muted);background:#F4F6F9}
+
+/* ---------- side panels ---------- */
+.sidep{width:340px;max-width:100%;display:flex;flex-direction:column;gap:16px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.panel h2{font-size:15px;margin:0 0 8px}
+.panel h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:8px 0 6px}
+.panel .b{width:100%;margin-bottom:8px;min-height:44px;font-size:14px}
+.legend{margin:0;padding-left:18px;font-size:13px}
+.legend li{margin-bottom:6px}
+.ltag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--border);background:#F4F6F9}
+.ltag.as{background:var(--warn-bg);color:var(--warn);border-color:#E8C27A}
+@media (max-width:940px){.fw-desk{width:100%;max-width:898px;overflow:auto}}</style>
+</head>
+<body>
+<div class="page">
+  <div class="intro">
+    <h1>Maintenance - technician worklist and supervisor board</h1>
+    <p>One frame, one shared state. Pick a device class and a role: every role works on every device; the role decides what is shown, the device class decides how. The technician's device works offline and its captures reach the supervisor only after sync. Approvals (return to service, warranty override, conflict resolution) need a live connection. Main path: open WO-2026-0144, Start work, record a meter reading, scan spare lot L-2609-117 and confirm issue, close with codes, notes and photo, bring Arif's device online, then switch to Supervisor and sign return to service.</p>
+  </div>
+
+  <div class="switches">
+    <div class="swg"><span id="dev-l">Device class</span>
+      <div class="switch" role="group" aria-labelledby="dev-l">
+        <button type="button" data-dev="hand" aria-pressed="false">Handheld<small>scanner or phone</small></button>
+        <button type="button" data-dev="tab" aria-pressed="true">Tablet<small>finger</small></button>
+        <button type="button" data-dev="desk" aria-pressed="false">Desktop<small>mouse</small></button>
+        <button type="button" data-dev="deskt" aria-pressed="false">Desktop touch<small>touchscreen PC</small></button>
+      </div>
+    </div>
+    <div class="swg"><span id="role-l">Role</span>
+      <div class="switch" role="group" aria-labelledby="role-l">
+        <button type="button" data-role="tech" aria-pressed="true">Technician<small>Arif Ansari</small></button>
+        <button type="button" data-role="sup" aria-pressed="false">Supervisor<small>Deepak Chauhan</small></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="device">
+      <div class="device-label" id="dev-cap" aria-live="polite"></div>
+      <div class="fwrap" id="fwrap"><div class="bezel" id="bezel"><div class="screen" id="f-app"></div></div></div>
+    </div>
+
+    <div class="sidep">
+      <section class="panel" aria-labelledby="demo-h">
+        <h2 id="demo-h">Demo controls</h2>
+        <h3>Technician (switches role)</h3>
+        <button class="b b-sec" data-demo="open">Open WO-2026-0144</button>
+        <button class="b b-sec" data-demo="start">Start work on WO-2026-0144</button>
+        <button class="b b-sec" data-demo="lot">Scan spare lot L-2609-117</button>
+        <button class="b b-sec" data-demo="held">Scan lot L-2608-092 (on QC hold)</button>
+        <button class="b b-sec" data-demo="bin">Scan bin label R-M1-03</button>
+        <button class="b b-sec" data-demo="closefill">Quick-fill closure</button>
+        <button class="b b-sec" data-demo="asset">Scan asset tag CNC-04</button>
+        <h3>Supervisor (switches role)</h3>
+        <button class="b b-sec" data-demo="rts">Open return to service</button>
+        <button class="b b-sec" data-demo="conf">Open sync conflict</button>
+        <button class="b b-sec" data-demo="war">Open warranty-flagged WO</button>
+        <h3>Connections</h3>
+        <button class="b b-sec" data-demo="offline" id="off-btn">Arif's device: offline</button>
+        <button class="b b-sec" data-demo="supoff" id="supoff-btn">Deepak's device: online</button>
+        <button class="b b-ghost" data-demo="reset">Reset</button>
+        <div class="sr" aria-live="polite" id="live"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="leg-h">
+        <h2 id="leg-h">Legend - decisions rendered</h2>
+        <ol class="legend">
+          <li><span class="ltag">DECISION</span> Every role on every device: technician and supervisor both work in Handheld, Tablet, Desktop and Desktop touch. Role decides what is shown; device class decides how.</li>
+          <li><span class="ltag">DECISION</span> Handheld (390 x 800, finger): touch-roomy, primary 56px pinned at the bottom, secondary 48px, bottom nav, single column, a list item opens a detail page with a back button.</li>
+          <li><span class="ltag">DECISION</span> Tablet (820 x 1180, finger): touch-roomy, icon rail with short labels on the left, list and detail panes.</li>
+          <li><span class="ltag">DECISION</span> Desktop (1280 x 800, mouse): compact 34px controls, dark sidebar #1B2230 with Maintenance active, top bar with search, site switcher CMF-ALIGARH and + New, list and detail side by side. Desktop touch: same layout, touch-roomy density.</li>
+          <li><span class="ltag">DECISION</span> Scanning: "Scanner ready" shows only on Handheld; Camera is offered on Handheld and Tablet; Type it is always available; Desktop says "USB scanner or type".</li>
+          <li><span class="ltag">DECISION</span> Approvals need a live connection on every device: return-to-service signature, warranty override and conflict resolution are disabled while the supervisor's device is offline.</li>
+          <li><span class="ltag">DECISION</span> Maintenance is one of the 8 role surfaces: maintenance_technician and maintenance_supervisor.</li>
+          <li><span class="ltag">DECISION</span> Accent A Ledger Blue #1E6BC6 five-token family; --accent-on-dark marks the active nav item on the sidebar and rail. Lato first in the font stack.</li>
+          <li><span class="ltag">DECISION</span> Zoho-style structure only: module sidebar, search, site switcher, + New in accent. No Zoho name, logo or icons.</li>
+          <li><span class="ltag">DECISION</span> Offline-first: every technician capture, on any device, shows "Captured - pending sync"; the supervisor sees it only after sync.</li>
+          <li><span class="ltag">DECISION</span> Stock on hold is not issuable: a spare lot on QC hold is blocked at scan and cannot be issued.</li>
+          <li><span class="ltag">DECISION</span> maintenance_supervisor is an approver; the return-to-service signature is an approval (it would also appear in the Approvals inbox).</li>
+          <li><span class="ltag as">ASSUMPTION</span> Maintenance layouts were not elicited with the user; drafted from the existing edge components (worklist, status, meter reading, spares issue, closure, fault report).</li>
+          <li><span class="ltag as">ASSUMPTION</span> On Handheld and Tablet the supervisor's 5-column board becomes a list grouped by the same columns (a kanban does not fit); the kanban stays on Desktop and Desktop touch.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Triage changes (priority, assign, create work order) are also disabled while the supervisor's device is offline; only approvals were ruled on.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Status steps Accepted, In progress, Waiting spares, Done. Waiting spares maps to the existing on_hold status plus a note. Supervisor assignment arrives as "Assigned - accept".</li>
+          <li><span class="ltag as">ASSUMPTION</span> Closure keeps the existing three required codes (fault, cause, remedy) as tiles, adds notes and a photo; photo required on breakdown work orders. Code lists are mock values.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Spares are issued by scanning the lot or bin label against the work order reservation (the existing component picks a reservation from a list).</li>
+          <li><span class="ltag as">ASSUMPTION</span> Asset stays out of service until the supervisor signs return to service after a 3-item checklist.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Warranty override: on a warranty-flagged work order the supervisor either calls the OEM or overrides to repair in-house with a mandatory reason.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Sync conflict example: an offline meter reading lower than the server reading; supervisor keeps server, keeps both or sends back.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Priority scale P1 to P4 with text labels; other technicians shown by role title. Report fault from an asset scan pre-fills the asset tag; photo is optional. The camera viewfinder is not rendered.</li>
+        </ol>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var ICON={
+    scan:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>',
+    cam:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    key:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h1M10 10h1M14 10h1M18 10h0M7 14h10"/></svg>',
+    back:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
+    lock:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    alert:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>',
+    sign:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20c3-1 4-6 6-6s1 5 3 5 3-3 5-3 2 2 4 2"/><path d="M14 4l4 4-7 7H7v-4z"/></svg>',
+    info:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>',
+    wifi:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 9a15 15 0 0 1 20 0M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/></svg>'
+  };
+  var NI={
+    list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1"/>',
+    scan:'<path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M7 12h10"/>',
+    fault:'<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
+    more:'<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+    board:'<rect x="3" y="4" width="5" height="16"/><rect x="10" y="4" width="5" height="11"/><rect x="17" y="4" width="4" height="7"/>',
+    sign:'<path d="M3 20c3-1 4-6 6-6s1 5 3 5 3-3 5-3 2 2 4 2"/><path d="M14 4l4 4-7 7H7v-4z"/>',
+    conf:'<path d="M7 4v10M4 11l3 3 3-3M17 20V10M14 13l3-3 3 3"/>'
+  };
+  var ME='Arif Ansari', SUP='Deepak Chauhan';
+  var TECHS=[ME,'Technician 2 - night shift','OEM service engineer'];
+  var PRI={1:['P1','Critical - line down','p-err'],2:['P2','High','p-warn'],3:['P3','Normal','p-info'],4:['P4','Low','p-off']};
+  var STAT={new:'To triage',assigned:'Assigned - accept',accepted:'Accepted',progress:'In progress',waiting:'Waiting spares',done:'Done'};
+  var FAULT=['Vibration','Noise','Overheating','Leak'],CAUSE=['Bearing wear','Misalignment','Lubrication failure','Loose fastener'],REMEDY=['Replaced part','Adjusted or aligned','Lubricated','Tightened'];
+  var LOTS={
+    'L-2609-117':{item:'Spindle bearing 7014 ACD/P4A',bin:'R-M1-03',qty:6,hold:''},
+    'L-2608-092':{item:'Spindle bearing 7014 ACD/P4A',bin:'R-M1-03',qty:4,hold:'QC-2026-0318 - rust spots found on opening'},
+    'L-2609-121':{item:'Belleville spring set, drawbar',bin:'R-M1-07',qty:3,hold:''}};
+  var BINS={'R-M1-03':['L-2609-117','L-2608-092'],'R-M1-07':['L-2609-121']};
+  var ASSETS={'CNC-04':'Horizontal machining centre HMC 500 · Machine shop bay 3','CNC-02':'VMC 850 machining centre · Machine shop bay 2','HP-01':'Hydraulic press 250 T · Press shop'};
+  var DEV={
+    hand:{wrap:'fw-hand',scr:'s-hand',cap:'Handheld (scanner or phone) <span>390 x 800 at 100% - finger: touch-roomy, bottom nav, single column, list opens a detail page</span>'},
+    tab:{wrap:'fw-tab',scr:'s-tab',cap:'Tablet <span>820 x 1180 shown at 55% - finger: touch-roomy, icon rail, list and detail panes</span>'},
+    desk:{wrap:'fw-desk',scr:'s-desk',cap:'Desktop <span>1280 x 800 shown at 70% - mouse: compact, dark sidebar, list and detail side by side</span>'},
+    deskt:{wrap:'fw-desk',scr:'s-desk',cap:'Desktop touch (touchscreen PC) <span>1280 x 800 shown at 70% - desktop layout with dark sidebar, touch-roomy density</span>'}};
+  function norm(w){var d={warranty:'',wov:'',safety:false,meters:[],res:[],hist:[],mlog:[],note:'',closure:null,closedAt:'',rts:'',rtsBy:'',rtsAt:'',wasWaiting:false};for(var k in d)if(!(k in w))w[k]=d[k];return w;}
+  function seed(){return [
+    {id:'WO-2026-0144',title:'CNC-02 spindle vibration',asset:'CNC-02',an:ASSETS['CNC-02'],pri:1,type:'Breakdown',origin:'Fault report by line operator, 07:52',due:'Today 12:00',status:'accepted',tech:ME,
+      meters:[{n:'Spindle run hours',u:'h',cur:12480},{n:'Spindle vibration',u:'mm/s',cur:7.8}],
+      res:[{item:'Spindle bearing 7014 ACD/P4A',qty:2,bin:'R-M1-03',issued:0,lot:''},{item:'Belleville spring set, drawbar',qty:1,bin:'R-M1-07',issued:0,lot:''}],
+      hist:[['Vibration','Lubrication failure','Lubricated','12-07-2026'],['Noise','Loose fastener','Tightened','03-04-2026']]},
+    {id:'WO-2026-0141',title:'AC-03 compressor oil leak',asset:'AC-03',an:'Screw compressor 37 kW · Utility room',pri:2,type:'Corrective',origin:'Inspection round, 22-09-2026',due:'Today 17:00',status:'waiting',tech:ME,wasWaiting:true,note:'Waiting for shaft seal kit - IND-2026-0419',meters:[{n:'Run hours',u:'h',cur:8305}]},
+    {id:'WO-2026-0139',title:'HP-01 press - 500 h preventive',asset:'HP-01',an:ASSETS['HP-01'],pri:3,type:'Preventive',origin:'PM schedule, every 500 run hours',due:'26-09-2026',status:'assigned',tech:ME,meters:[{n:'Pump run hours',u:'h',cur:4996}]},
+    {id:'WO-2026-0146',title:'CV-05 conveyor belt tracking',asset:'CV-05',an:'Belt conveyor · Dispatch bay',pri:3,type:'Corrective',origin:'Fault report, 06:30',due:'27-09-2026',status:'progress',tech:TECHS[1],warranty:'Supplier warranty till 31-01-2027 - in-house repair may void the claim'},
+    {id:'WO-2026-0135',title:'L-07 lathe tailstock play',asset:'L-07',an:'CNC lathe · Machine shop bay 1',pri:2,type:'Breakdown',origin:'Fault report, 24-09-2026',due:'24-09-2026',status:'done',tech:ME,
+      closure:{f:'Noise',c:'Misalignment',r:'Adjusted or aligned',notes:'Tailstock gib adjusted, runout 0.01 mm on test bar',photo:true},closedAt:'Yesterday 18:20',rts:'awaiting'},
+    {id:'WO-2026-0147',title:'WLD-01 welding set tripping',asset:'WLD-01',an:'MIG welding set · Fabrication',pri:0,type:'Breakdown',origin:'Fault report by fabrication operator, 09:05',due:'-',status:'new',tech:'',safety:true}
+  ].map(norm);}
+  function clone(o){return JSON.parse(JSON.stringify(o));}
+  var S,syncT=null,nextNo=148,FID='f-app';
+  function fresh(){var s=seed();return {srv:s,loc:clone(s),up:[],down:[],offline:true,supOff:false,dev:'tab',role:'tech',tpage:'list',spage:'list',
+    view:'wo',sel:'WO-2026-0144',asset:'',
+    sp:{found:'',qty:1,msg:'',bad:''},spq:'',cl:{f:'',c:'',r:'',notes:'',photo:false},mr:{m:0,val:'',err:''},fl:{tag:'',desc:'',safety:false,photo:false,sent:''},
+    scanq:'',msg:'',dsel:'WO-2026-0144',rtsChk:{},wr:'',conflict:{open:true,res:'',pick:''}};}
+  S=fresh();
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function say(t){var l=document.getElementById('live');l.textContent='';setTimeout(function(){l.textContent=t;},30);}
+  function find(list,id){for(var i=0;i<list.length;i++)if(list[i].id===id)return list[i];return null;}
+  function fmt(n){return Number(n).toLocaleString('en-IN');}
+  function pad(n){return (n<10?'0':'')+n;}
+  function now(){var d=new Date();return pad(d.getHours())+':'+pad(d.getMinutes());}
+  function priPill(p){if(!p)return '<span class="pill p-off">Priority not set</span>';var x=PRI[p];return '<span class="pill '+x[2]+'">'+x[0]+' '+x[1]+'</span>';}
+  function cur(){return find(S.loc,S.sel);}
+  function pendingIds(){var o={};S.up.forEach(function(u){if(u.id)o[u.id]=1;});return o;}
+  function isHand(){return S.dev==='hand';}
+  function isDesk(){return S.dev==='desk'||S.dev==='deskt';}
+  function dis(off){return off?' disabled aria-disabled="true"':'';}
+
+  /* ---- sync: technician captures go up, supervisor actions come down ---- */
+  function capture(id,patch,msg){
+    var w=find(S.loc,id);Object.assign(w,clone(patch));S.up.push({id:id,patch:clone(patch)});
+    say(msg+(S.offline?'. Captured - pending sync':'. Syncing'));scheduleSync();
+  }
+  function sup(id,patch,msg){
+    var w=find(S.srv,id);Object.assign(w,clone(patch));
+    if(w.tech===ME)S.down.push({id:id,patch:clone(patch)});
+    say(msg+(w.tech===ME?(S.offline?'. Reaches '+ME+' when their device syncs':'. Sent to '+ME):''));scheduleSync();
+  }
+  function doSync(){
+    S.up.forEach(function(u){if(u.neww){S.srv.push(clone(u.neww));return;}var w=find(S.srv,u.id);if(w)Object.assign(w,clone(u.patch));});
+    S.down.forEach(function(d){var w=find(S.loc,d.id);if(!w){var s=find(S.srv,d.id);if(s&&s.tech===ME)S.loc.push(clone(s));return;}Object.assign(w,clone(d.patch));});
+    S.up=[];S.down=[];
+  }
+  function scheduleSync(){
+    clearTimeout(syncT);if(S.offline||(!S.up.length&&!S.down.length))return;
+    syncT=setTimeout(function(){doSync();say(ME+' device synced with the server');renderAll();},1800);
+  }
+
+  /* ---- chrome shared by roles ---- */
+  function techBadge(){
+    var n=S.up.length;
+    if(S.offline)return '<span class="sync" role="status"><span class="d"></span>'+(n?'Captured - pending sync ('+n+')':'Offline')+'</span>';
+    return '<span class="sync on" role="status"><span class="d"></span>'+(n?'Syncing '+n:'Synced')+'</span>';
+  }
+  function supBadge(){
+    return S.supOff?'<span class="sync" role="status"><span class="d"></span>Offline - read only</span>':'<span class="sync on" role="status"><span class="d"></span>Online</span>';
+  }
+  function badge(){return S.role==='tech'?techBadge():supBadge();}
+  function hTop(){
+    return '<div class="s-top"><span class="ready" aria-hidden="true"></span><span class="who">Scanner ready</span><span class="spacer"></span>'+badge()+'</div>';
+  }
+  function tTop(){
+    return '<div class="s-top"><b>'+(S.role==='tech'?'Maintenance - my work':'Maintenance board')+'</b><span class="who">'+(S.role==='tech'?ME:SUP)+'</span>'+badge()+'</div>';
+  }
+  function navItems(){
+    if(S.role==='tech'){
+      var v=S.view==='fault'?2:(S.view==='asset'?1:0);
+      if(isHand()&&S.tpage==='list'&&v!==2)v=0;
+      return [['home','Worklist',NI.list,v===0,openCount()],['focusScan','Scan',NI.scan,v===1,0],['fault','Report fault',NI.fault,v===2,0],['nr','More',NI.more,false,0]];
+    }
+    var c=deskCounts(),dw=find(S.srv,S.dsel),det=!isHand()||S.spage==='detail';
+    var k=(det&&S.dsel==='conflict')?2:((det&&dw&&dw.status==='done'&&dw.rts==='awaiting')?1:0);
+    return [['sHome','Board',NI.board,k===0,c.tri],['attRts','Sign-off',NI.sign,k===1,c.rts],['navConf','Conflicts',NI.conf,k===2,c.conf],['nr','More',NI.more,false,0]];
+  }
+  function bnav(){
+    var h='<nav class="bnav" aria-label="Maintenance navigation">';
+    navItems().forEach(function(x){h+='<button data-a="'+x[0]+'" data-what="'+x[1]+'"'+(x[3]?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[2]+'</svg>'+x[1]+(x[4]?'<span class="cnt">'+x[4]+'</span>':'')+'</button>';});
+    return h+'</nav>';
+  }
+  function rail(){
+    var h='<nav class="rail" aria-label="Maintenance navigation"><div class="mark"><span aria-hidden="true">IM</span></div>';
+    navItems().forEach(function(x){h+='<button data-a="'+x[0]+'" data-what="'+x[1]+'"'+(x[3]?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[2]+'</svg>'+x[1]+(x[4]?'<span class="cnt">'+x[4]+'</span>':'')+'</button>';});
+    return h+'</nav>';
+  }
+  function side(){
+    var c=deskCounts(),tech=S.role==='tech',n=tech?openCount():c.rts+c.conf+c.tri;
+    var I=[['Dashboard','<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>'],
+      ['Gate','<path d="M3 21V8l9-5 9 5v13"/><path d="M8 21v-8h8v8"/>'],
+      ['Receiving','<path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/>'],
+      ['Stores','<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>'],
+      ['Maintenance','<path d="M14 6a4 4 0 0 0 5 5l-9 9a2 2 0 0 1-3-3l9-9"/>'],
+      ['Approvals','<path d="M4 12l5 5L20 6"/>'],
+      ['Reports','<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
+      ['Settings','<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>']];
+    var h='<aside class="side"><div class="brand"><span class="mark" aria-hidden="true">IM</span>IMS</div><nav aria-label="Modules">';
+    I.forEach(function(x){var on=x[0]==='Maintenance';
+      h+='<button class="nav-item"'+(on?' aria-current="page" data-a="'+(tech?'home':'sHome')+'"':' data-a="nr" data-what="'+x[0]+'"')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[1]+'</svg>'+x[0]+
+        (on&&n?'<span class="count">'+n+'</span>':'')+(!tech&&x[0]==='Approvals'&&c.rts?'<span class="count">'+c.rts+'</span>':'')+'</button>';});
+    return h+'</nav><div class="side-foot">Signed in: '+(tech?ME+'<br>Maintenance technician':SUP+'<br>Maintenance supervisor')+'</div></aside>';
+  }
+  function dtop(){
+    var tech=S.role==='tech';
+    return '<header class="dtop"><label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#566173" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span class="sr">Search IMS</span><input name="q" placeholder="Search work order, asset, spare, lot"></label>'+
+      '<span class="spacer"></span>'+badge()+'<button class="site" data-a="nr" data-what="Site switcher" aria-label="Switch site, current CMF-ALIGARH">CMF-ALIGARH <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>'+
+      '<button class="b b-pri" data-a="'+(tech?'fault':'nr')+'" data-what="+ New">+ New</button><span class="avatar" aria-hidden="true">'+(tech?'AA':'DC')+'</span></header>';
+  }
+  /* scan affordances: camera on handheld and tablet, Type it everywhere, desktop says USB scanner or type */
+  function scanExtras(){
+    if(isDesk())return '<div class="scan2"><p class="hint">USB scanner or type</p><button type="button" class="b b-plain" data-a="typeIt">'+ICON.key+'Type it</button></div>';
+    return '<div class="scan2"><button type="button" class="b b-sec" data-a="cam">'+ICON.cam+'Camera</button><button type="button" class="b b-sec" data-a="typeIt">'+ICON.key+'Type it</button></div>';
+  }
+
+  /* ---- technician worklist ---- */
+  function myWos(){return S.loc.filter(function(w){return w.tech===ME&&!(w.status==='done'&&w.rts==='signed');});}
+  function openCount(){return myWos().filter(function(w){return w.status!=='done';}).length;}
+  function scanbar(){
+    var ph=isDesk()?'USB scanner or type: asset, lot or bin':'Scan or type: asset, lot or bin';
+    return '<div class="scanbar scanwrap"><form data-scan="1" role="search"><label class="fld" for="'+FID+'-scan">'+ICON.scan+
+      '<span class="sr">Scan or type an asset tag, spare lot or bin label</span><input id="'+FID+'-scan" data-f="scanq" value="'+esc(S.scanq)+'" placeholder="'+ph+'" autocomplete="off"></label>'+
+      '<button class="b b-pri" type="submit">Go</button></form>'+scanExtras()+(S.msg?'<p class="hint" role="note">'+esc(S.msg)+'</p>':'')+'</div>';
+  }
+  function woBtn(w,pend){
+    var c=!isHand()&&S.sel===w.id&&(S.view==='wo'||S.view==='spare'||S.view==='close');
+    var pl='';
+    if(pend[w.id])pl+='<span class="pill p-off">Captured - pending sync</span>';
+    if(w.status==='done'&&w.rts==='awaiting')pl+='<span class="pill p-warn">Awaiting sign-off</span>';
+    else pl+='<span class="pill '+(w.status==='waiting'?'p-warn':(w.status==='assigned'?'p-info':'p-off'))+'">'+STAT[w.status]+'</span>';
+    if(w.warranty)pl+='<span class="pill p-info">Warranty-flagged</span>';
+    return '<li><button class="task" data-a="open" data-t="'+w.id+'"'+(c?' aria-current="true"':'')+'><span class="prio pr'+w.pri+'" aria-hidden="true">'+(w.pri?'P'+w.pri:'-')+'</span>'+
+      '<span class="tx"><b>'+esc(w.title)+'</b><span class="m">'+w.id+' · '+(w.pri?PRI[w.pri][0]+' '+PRI[w.pri][1]:'')+' · due '+esc(w.due)+'</span><span class="pl">'+pl+'</span></span><span class="go" aria-hidden="true">&rsaquo;</span></button></li>';
+  }
+  function worklist(){
+    var pend=pendingIds(),all=myWos();
+    var open=all.filter(function(w){return w.status!=='done';}).sort(function(a,b){return a.pri-b.pri;});
+    var done=all.filter(function(w){return w.status==='done';});
+    var h='<div class="inbox"><section class="grp" aria-label="Open work orders by priority, '+open.length+'"><h3>Open - by priority <span class="cnt'+(open.length?'':' zero')+'">'+open.length+'</span></h3><ul>';
+    open.forEach(function(w){h+=woBtn(w,pend);});
+    if(!open.length)h+='<li class="empty-g">No open work orders on this device</li>';
+    h+='</ul></section><section class="grp" aria-label="Done, awaiting supervisor sign-off, '+done.length+'"><h3>Done - awaiting sign-off <span class="cnt'+(done.length?'':' zero')+'">'+done.length+'</span></h3><ul>';
+    done.forEach(function(w){h+=woBtn(w,pend);});
+    if(!done.length)h+='<li class="empty-g">Nothing waiting</li>';
+    return h+'</ul></section><p class="m" style="margin:10px 2px">Worklist cached on this device. Captures sync when connected.</p></div>';
+  }
+  function techList(){
+    return '<section class="lp" aria-label="My work orders">'+scanbar()+(isHand()?'':'<div class="qa"><button class="b b-sec b-full" data-a="fault">'+ICON.alert+'Report fault</button></div>')+worklist()+'</section>';
+  }
+
+  /* ---- work order detail ---- */
+  function steps(w){
+    var order=['accepted','progress','waiting','done'],lab=['Accepted','In progress','Waiting spares','Done'];
+    var ci=w.status==='assigned'?-1:order.indexOf(w.status);
+    var h='<ol class="steps" aria-label="Work order status">';
+    order.forEach(function(s,i){
+      var cls='',sub='';
+      if(i===ci&&s!=='done'){cls='cur';sub='Now';}
+      else if(s==='waiting'){ if(w.wasWaiting&&ci!==2){cls='dn';sub='Done';} else if(ci>2){cls='skip';sub='Skipped';} else sub='If spares missing'; }
+      else if(i<ci||w.status==='done'){cls='dn';sub='Done';}
+      else sub='Next';
+      h+='<li class="'+cls+'"'+(cls==='cur'?' aria-current="step"':'')+'>'+(cls==='dn'?'&#10003; ':'')+lab[i]+'<small>'+sub+'</small></li>';
+    });
+    return h+'</ol>';
+  }
+  function woHead(w,back,lbl){
+    return '<div class="acc-head">'+(back?'<button class="backbtn" data-a="'+back+'" aria-label="'+(lbl||'Back to work order')+'">'+ICON.back+'</button>':'')+
+      '<div class="tx"><b>'+w.id+' · '+esc(w.title)+'</b><span class="m">'+w.asset+' · '+esc(w.an)+'</span><span class="pl">'+priPill(w.pri)+'<span class="pill p-off">'+w.type+'</span>'+
+      (w.warranty?'<span class="pill p-info">Warranty-flagged</span>':'')+'</span></div></div>';
+  }
+  function meterCard(w){
+    if(!w.meters.length)return '';
+    var ed=w.status!=='done'&&w.status!=='assigned';
+    var m=w.meters[Math.min(S.mr.m,w.meters.length-1)];
+    var h='<section class="card" aria-label="Meter reading"><h4>Meter reading</h4>';
+    if(!ed)return h+'<p class="m" style="margin:0">Accept the work order to record readings.</p></section>';
+    h+='<div class="tiles" role="group" aria-label="Meter">';
+    w.meters.forEach(function(x,k){h+='<button class="tile" data-a="meterPick" data-i="'+k+'" aria-pressed="'+(x===m)+'">'+x.n+'<small>Current '+fmt(x.cur)+' '+x.u+'</small></button>';});
+    h+='</div><div class="meterrow"><div><label class="fl" for="'+FID+'-mv">Reading ('+m.u+')</label><input class="inp num" id="'+FID+'-mv" inputmode="decimal" autocomplete="off" data-f="mval" value="'+esc(S.mr.val)+'" placeholder="'+fmt(m.cur)+'" aria-describedby="'+FID+'-mh"></div>'+
+      '<button class="b b-sec" data-a="meter">Record reading</button></div><p class="m" id="'+FID+'-mh" style="margin:6px 0 0">Current reading '+fmt(m.cur)+' '+m.u+'</p>';
+    if(S.mr.err)h+='<p class="err" role="alert">'+ICON.alert+'<span>'+esc(S.mr.err)+'</span></p>';
+    if(w.mlog.length){h+='<ul class="log">';w.mlog.forEach(function(l){h+='<li>'+l.n+': <b>'+fmt(l.v)+' '+l.u+'</b> at '+l.t+' '+(pendingIds()[w.id]?'<span class="pill p-off">Captured - pending sync</span>':'<span class="pill p-ok">Synced</span>')+'</li>';});h+='</ul>';}
+    return h+'</section>';
+  }
+  function resLines(w){
+    var h='<ul class="resl">';
+    w.res.forEach(function(r){var left=r.qty-r.issued;
+      h+='<li><span class="tx"><b>'+r.item+'</b><span class="m">Reserved '+r.qty+' · bin '+r.bin+(r.lot?' · lot '+r.lot:'')+'</span></span>'+
+        (left?'<span class="pill p-warn">'+left+' to issue</span>':'<span class="pill p-ok">Issued '+r.issued+'</span>')+'</li>';});
+    return h+'</ul>';
+  }
+  function spareCard(w){
+    if(!w.res.length)return '<section class="card" aria-label="Spares"><h4>Spares</h4><p class="m" style="margin:0">'+(w.status==='waiting'?esc(w.note):'No spares reserved for this work order.')+'</p></section>';
+    var ed=['accepted','progress','waiting'].indexOf(w.status)>=0;
+    return '<section class="card" aria-label="Spares"><h4>Spares</h4>'+resLines(w)+
+      (ed?'<button class="b b-sec b-full gap" data-a="spareOpen">'+ICON.scan+'Issue spares - scan lot or bin</button>':'')+'</section>';
+  }
+  function histCard(w){
+    if(!w.hist.length)return '';
+    var h='<section class="card" aria-label="Last closures on this asset"><h4>Last closures on '+w.asset+'</h4><table class="tbl"><thead><tr><th>Fault</th><th>Cause</th><th>Remedy</th><th>Closed</th></tr></thead><tbody>';
+    w.hist.forEach(function(x){h+='<tr><td>'+x[0]+'</td><td>'+x[1]+'</td><td>'+x[2]+'</td><td>'+x[3]+'</td></tr>';});
+    return h+'</tbody></table></section>';
+  }
+  function woView(){
+    var w=cur();if(!w)return '<div class="donev"><p class="m">Pick a work order.</p></div>';
+    if(w.status==='done')return closedView(w);
+    var h='<div class="acc">'+woHead(w,isHand()?'home':'','Back to worklist')+'<div class="acc-body">'+steps(w);
+    h+='<section class="card" aria-label="Work order"><dl class="kv"><dt>Status</dt><dd>'+STAT[w.status]+'</dd><dt>Due</dt><dd>'+esc(w.due)+'</dd><dt>Origin</dt><dd>'+esc(w.origin)+'</dd>'+
+      (w.note&&w.status==='waiting'?'<dt>Note</dt><dd>'+esc(w.note)+'</dd>':'')+'</dl></section>';
+    h+=meterCard(w)+spareCard(w)+histCard(w);
+    h+='</div><div class="acc-foot">';
+    if(w.status==='assigned')h+='<button class="b b-pri b-full" data-a="setStatus" data-s="accepted">Accept work order</button>';
+    else if(w.status==='accepted')h+='<button class="b b-pri b-full" data-a="setStatus" data-s="progress">Start work</button>';
+    else if(w.status==='progress')h+='<button class="b b-sec b-full" data-a="setStatus" data-s="waiting">Waiting spares - put on hold</button><button class="b b-pri b-full" data-a="closeOpen">Close work order</button>';
+    else if(w.status==='waiting')h+='<button class="b b-pri b-full" data-a="setStatus" data-s="progress">Resume work</button>';
+    return h+'</div></div>';
+  }
+
+  /* ---- spare issue ---- */
+  function spareScan(code){
+    var w=cur();S.sp={found:'',qty:1,msg:'',bad:''};
+    if(BINS[code]){S.sp.found='bin:'+code;say('Bin '+code+' scanned. Pick a lot');return;}
+    var L=LOTS[code];
+    if(L.hold){S.sp.found='held:'+code;say('Blocked. Lot '+code+' is on QC hold and cannot be issued');return;}
+    var r=w.res.filter(function(x){return x.item===L.item;})[0];
+    if(!r){S.sp.found='nores:'+code;say('Lot '+code+' is not reserved for this work order');return;}
+    if(r.qty-r.issued<=0){S.sp.found='full:'+code;say('Already issued in full');return;}
+    S.sp.found='ok:'+code;S.sp.qty=Math.min(r.qty-r.issued,L.qty);say('Lot '+code+' matches reservation. Confirm issue');
+  }
+  function spareView(){
+    var w=cur(),f=S.sp.found.split(':'),kind=f[0],code=f[1],L=LOTS[code];
+    var h='<div class="acc">'+woHead(w,'backWo')+'<div class="acc-body"><section class="card" aria-label="Reserved spares"><h4>Issue spares</h4>'+resLines(w)+'</section>';
+    h+='<section class="card scanwrap" aria-label="Scan spare"><form class="sform" data-scan="sp"><label class="fld" for="'+FID+'-spq">'+ICON.scan+'<span class="sr">Scan or type the lot or bin label</span><input id="'+FID+'-spq" data-f="spq" value="'+esc(S.spq)+'" placeholder="'+(isDesk()?'USB scanner or type: lot or bin':'Scan or type: lot or bin')+'" autocomplete="off"></label><button class="b b-sec" type="submit">Go</button></form>'+scanExtras()+
+      '<p class="m" style="margin:6px 0 0">A lot on QC hold cannot be issued.</p>'+(S.sp.bad?'<p class="err" role="alert">'+ICON.alert+'<span>'+esc(S.sp.bad)+'</span></p>':'')+'</section>';
+    var ready=false;
+    if(kind==='ok'){ready=true;var r=w.res.filter(function(x){return x.item===L.item;})[0],mx=Math.min(r.qty-r.issued,L.qty);
+      h+='<div class="okcard" role="status"><b>Lot '+code+' matches the reservation</b><div class="m">'+L.item+' · bin '+L.bin+' · '+L.qty+' in lot · not on hold</div>'+
+        '<div class="qtyl"><label for="sp-q">Quantity</label><button class="stp" data-a="spDec" aria-label="Decrease quantity">-</button><output class="qv" id="sp-q" aria-live="polite">'+S.sp.qty+'</output><button class="stp" data-a="spInc" aria-label="Increase quantity"'+(S.sp.qty>=mx?' disabled':'')+'>+</button><span class="m">of '+mx+' to issue</span></div></div>';
+    } else if(kind==='held'){
+      h+='<div class="blocked" role="alert">'+ICON.lock+'<div><b>Blocked - lot '+code+' is on QC hold</b><span>'+esc(L.hold)+'</span><p class="m" style="margin:6px 0 0">Not issuable. Take a lot from bin '+L.bin+' that is not on hold, or ask stores.</p></div></div>'+
+        '<button class="b b-sec b-full" data-a="scanBin" data-b="'+L.bin+'">'+ICON.scan+'Show other lots in bin '+L.bin+'</button>';
+    } else if(kind==='bin'){
+      h+='<section class="card" aria-label="Lots in bin '+code+'"><h4>Bin '+code+'</h4><div style="display:flex;flex-direction:column;gap:6px">';
+      BINS[code].forEach(function(l){var x=LOTS[l];
+        h+=x.hold?'<button class="lotrow" disabled aria-disabled="true">'+ICON.lock+'<span class="tx"><b>'+l+'</b><span class="m">'+x.item+' · '+x.qty+' nos</span></span><span class="pill p-err">On QC hold - blocked</span></button>'
+                  :'<button class="lotrow" data-a="pickLot" data-l="'+l+'"><span class="tx"><b>'+l+'</b><span class="m">'+x.item+' · '+x.qty+' nos</span></span><span class="pill p-ok">Available</span></button>';});
+      h+='</div></section>';
+    } else if(kind==='nores'){
+      h+='<div class="blocked" role="alert">'+ICON.alert+'<div><b>Lot '+code+' is not reserved for this work order</b><span class="m">'+L.item+'. Ask the supervisor to add a reservation.</span></div></div>';
+    } else if(kind==='full'){
+      h+='<p class="dest g" role="status">'+ICON.info+'<span><b>Already issued in full</b></span></p>';
+    }
+    if(S.sp.msg)h+='<p class="dest g" role="status">'+ICON.info+'<span><b>'+esc(S.sp.msg)+'</b></span></p>';
+    h+='</div><div class="acc-foot"><button class="b b-pri b-full" data-a="spIssue"'+dis(!ready)+'>Confirm issue</button><button class="b b-ghost" data-a="backWo">Back to work order</button></div></div>';
+    return h;
+  }
+
+  /* ---- closure ---- */
+  function clTodo(w){var t=[];if(!S.cl.f)t.push('fault code');if(!S.cl.c)t.push('cause code');if(!S.cl.r)t.push('remedy code');if(w.type==='Breakdown'&&!S.cl.photo)t.push('photo');return t;}
+  function tileGroup(label,list,key){
+    var h='<fieldset class="card" style="margin:0"><legend class="sr">'+label+'</legend><h4>'+label+' '+(S.cl[key]?'<span class="pill p-ok">'+S.cl[key]+'</span>':'<span class="pill p-err">Required</span>')+'</h4><div class="tiles">';
+    list.forEach(function(x){h+='<button type="button" class="tile" data-a="code" data-k="'+key+'" data-v="'+x+'" aria-pressed="'+(S.cl[key]===x)+'">'+x+'</button>';});
+    return h+'</div></fieldset>';
+  }
+  function closeView(){
+    var w=cur(),t=clTodo(w),left=w.res.filter(function(r){return r.issued<r.qty;}).length;
+    var h='<div class="acc">'+woHead(w,'backWo')+'<div class="acc-body"><p class="m" style="margin:0">All three closure codes are required'+(w.type==='Breakdown'?'; a photo is required on breakdown work orders':'')+'.</p>';
+    h+=tileGroup('Fault code',FAULT,'f')+tileGroup('Cause code',CAUSE,'c')+tileGroup('Remedy code',REMEDY,'r');
+    var camLbl=isDesk()?'Attach photo':'Take photo';
+    h+='<section class="card" aria-label="Notes and photo"><label class="fl" for="'+FID+'-cn">Notes (optional)</label><textarea class="ta" id="'+FID+'-cn" data-f="clnotes" placeholder="What you found and did">'+esc(S.cl.notes)+'</textarea>'+
+      '<div class="row gap">'+(S.cl.photo?'<span class="photo" role="img" aria-label="Closure photo saved"></span><span class="pill p-ok">Photo saved</span><button class="b b-ghost" data-a="clPhoto">'+(isDesk()?'Replace':'Retake')+'</button>'
+      :'<button class="b b-sec b-full" data-a="clPhoto">'+ICON.cam+camLbl+(w.type==='Breakdown'?' (required)':'')+'</button>')+'</div></section>';
+    if(left)h+='<p class="dest w" role="note">'+ICON.info+'<span><b>'+left+' reserved spare not fully issued</b><span class="m">Unissued reservations are released back to stores on closure.</span></span></p>';
+    h+='<p class="dest w" role="note">'+ICON.lock+'<span><b>'+w.asset+' stays out of service</b><span class="m">until the supervisor signs return to service.</span></span></p>';
+    h+='</div><div class="acc-foot"><div class="todo"><span>Close '+w.id+'</span><span>'+(t.length?'Left: <b>'+t.join(', ')+'</b>':'<b>Ready to close</b>')+'</span></div>'+
+      '<button class="b b-pri b-full" data-a="closeDo"'+dis(t.length)+'>Close work order</button></div></div>';
+    return h;
+  }
+  function closedView(w){
+    var pend=pendingIds()[w.id],c=w.closure||{};
+    var h='<div class="donev">'+(isHand()?'<button class="backbtn" data-a="home" aria-label="Back to worklist">'+ICON.back+'</button>':'')+'<div class="donehead"><div class="check" aria-hidden="true">&#10003;</div><div><h2 role="status">'+(pend?'Captured - pending sync':'Closed - synced')+'</h2><span class="m">'+w.id+' · '+esc(w.title)+' · closed '+esc(w.closedAt)+'</span></div></div>';
+    if(w.rts==='signed')h+='<p class="dest g" role="status">'+ICON.sign+'<span><b>Returned to service</b><span class="m">Signed by '+w.rtsBy+' at '+w.rtsAt+'. '+w.asset+' is back in production.</span></span></p>';
+    else h+='<p class="dest w" role="status">'+ICON.lock+'<span><b>Return to service - awaiting supervisor signature</b><span class="m">'+w.asset+' stays out of service until '+SUP+' signs.'+(pend?' The closure reaches the supervisor when this device syncs.':'')+'</span></span></p>';
+    h+='<table class="tbl"><caption class="sr">Closure</caption><tbody><tr><td>Fault</td><td>'+c.f+'</td></tr><tr><td>Cause</td><td>'+c.c+'</td></tr><tr><td>Remedy</td><td>'+c.r+'</td></tr><tr><td>Notes</td><td>'+esc(c.notes||'-')+'</td></tr><tr><td>Photo</td><td>'+(c.photo?'<span class="photo" role="img" aria-label="Closure photo" style="display:inline-block"></span>':'-')+'</td></tr></tbody></table>';
+    return h+'<button class="b b-pri b-full" data-a="home">Back to worklist</button></div>';
+  }
+
+  /* ---- report fault + asset scan ---- */
+  function assetView(){
+    var a=S.asset,open=S.loc.filter(function(w){return w.asset===a&&w.status!=='done';});
+    var h='<div class="donev">'+(isHand()?'<button class="backbtn" data-a="home" aria-label="Back to worklist">'+ICON.back+'</button>':'')+'<span class="kind">Asset tag scanned</span><h2 style="margin:0;font-size:20px">'+a+'</h2><p class="m" style="margin:0">'+esc(ASSETS[a])+'</p>';
+    h+='<section class="card"><h4>Open work orders</h4>'+(open.length?open.map(function(w){return '<button class="b b-sec b-full gap" data-a="open" data-t="'+w.id+'">'+w.id+' · '+esc(w.title)+'</button>';}).join(''):'<p class="m" style="margin:0">None on this device.</p>')+'</section>';
+    return h+'<button class="b b-pri b-full" data-a="faultFor" data-t="'+a+'">'+ICON.alert+'Report fault on '+a+'</button><button class="b b-ghost" data-a="home">Close</button></div>';
+  }
+  function faultView(){
+    var F=S.fl;
+    if(F.sent){
+      return '<div class="donev"><div class="donehead"><div class="check" aria-hidden="true">&#10003;</div><div><h2 role="status">'+(pendingIds()[F.sent]||S.up.some(function(u){return u.neww&&u.neww.id===F.sent;})?'Captured - pending sync':'Fault reported - synced')+'</h2><span class="m">'+F.tag+' · '+esc(F.desc)+'</span></div></div>'+
+        '<p class="dest" role="note">'+ICON.info+'<span><b>The fault will reach the supervisor when connected.</b><span class="m">'+SUP+' sets priority and assigns a technician.</span></span></p>'+
+        '<button class="b b-pri b-full" data-a="home">Back to worklist</button></div>';
+    }
+    var ok=F.tag.trim()&&F.desc.trim();
+    var h='<div class="acc"><div class="acc-head">'+(isHand()?'<button class="backbtn" data-a="home" aria-label="Back to worklist">'+ICON.back+'</button>':'')+'<div class="tx"><b>Report a fault</b><span class="m">Scan the asset tag and describe the fault.</span></div></div><div class="acc-body">';
+    h+='<section class="card scanwrap"><label class="fl" for="'+FID+'-ft">Asset tag - '+(isDesk()?'USB scanner or type':'scan, camera or type it')+'</label><input class="inp" id="'+FID+'-ft" data-f="ftag" value="'+esc(F.tag)+'" placeholder="e.g. CNC-04" autocomplete="off">'+
+      scanExtras()+(ASSETS[F.tag]?'<p class="m" style="margin:6px 0 0">'+esc(ASSETS[F.tag])+'</p>':'')+'</section>';
+    h+='<section class="card"><label class="fl" for="'+FID+'-fd">Fault description</label><textarea class="ta" id="'+FID+'-fd" data-f="fdesc" placeholder="What is wrong, when it started">'+esc(F.desc)+'</textarea>'+
+      '<label class="chk gap"><input type="checkbox" data-f="fsafe"'+(F.safety?' checked':'')+'><span>Safety hazard</span>'+(F.safety?'<span class="pill p-err">Hazard flagged</span>':'')+'</label>'+
+      '<div class="row gap">'+(F.photo?'<span class="photo" role="img" aria-label="Fault photo saved"></span><span class="pill p-ok">Photo saved</span>':'<button class="b b-plain b-full" data-a="fPhoto">'+ICON.cam+(isDesk()?'Attach photo (optional)':'Photo (optional)')+'</button>')+'</div></section>';
+    return h+'</div><div class="acc-foot"><button class="b b-pri b-full" data-a="fSend"'+dis(!ok)+'>Report fault</button><button class="b b-ghost" data-a="home">Cancel</button></div></div>';
+  }
+  function detail(){
+    switch(S.view){
+      case 'spare':return spareView();
+      case 'close':return closeView();
+      case 'fault':return faultView();
+      case 'asset':return assetView();
+      default:return woView();
+    }
+  }
+
+  /* ---- supervisor ---- */
+  var COLS=[['To triage',function(w){return w.status==='new';}],['Assigned / accepted',function(w){return w.status==='assigned'||w.status==='accepted';}],
+    ['In progress',function(w){return w.status==='progress';}],['Waiting spares',function(w){return w.status==='waiting';}],['Done - sign-off',function(w){return w.status==='done'&&w.rts!=='signed';}]];
+  function deskCounts(){var s=S.srv;return {rts:s.filter(function(w){return w.status==='done'&&w.rts==='awaiting';}).length,conf:S.conflict.res?0:1,
+    war:s.filter(function(w){return w.warranty&&!w.wov;}).length,tri:s.filter(function(w){return w.status==='new';}).length};}
+  function attChips(){
+    var c=deskCounts();
+    return '<button class="att '+(c.rts?'w':'z')+'" data-a="attRts">'+ICON.sign+'Awaiting signature ('+c.rts+')</button>'+
+      '<button class="att '+(c.conf?'e':'z')+'" data-a="navConf">'+ICON.alert+'Sync conflicts ('+c.conf+')</button>'+
+      '<button class="att '+(c.war?'i':'z')+'" data-a="attWar">'+ICON.info+'Warranty-flagged ('+c.war+')</button>'+
+      '<span class="devnote" role="status">'+ICON.wifi+ME+' device: '+(S.offline?'offline - captures arrive when it reconnects':'online - synced')+'</span>';
+  }
+  function kpills(w){
+    var pl='';
+    if(w.safety)pl+='<span class="pill p-err">Safety hazard</span>';
+    if(w.warranty&&!w.wov)pl+='<span class="pill p-info">Warranty-flagged</span>';
+    if(w.status==='done'&&w.rts==='awaiting')pl+='<span class="pill p-warn">Awaiting signature</span>';
+    if(w.status==='waiting')pl+='<span class="pill p-warn">'+esc(w.note||'Waiting spares')+'</span>';
+    return pl;
+  }
+  function kcard(w){
+    var sel=S.dsel===w.id;
+    return '<li><button class="kc" data-a="dsel" data-t="'+w.id+'"'+(sel?' aria-current="true"':'')+'><span class="id"><span style="white-space:nowrap">'+w.id+'</span>'+(w.pri?'<span class="pill '+PRI[w.pri][2]+'">'+PRI[w.pri][0]+'</span>':'<span class="pill p-off">Unset</span>')+'</span>'+
+      '<b>'+esc(w.title)+'</b><span class="m">'+(w.tech?esc(w.tech):'Unassigned')+(w.status==='assigned'?' · not accepted':'')+'</span>'+kpills(w)+'</button></li>';
+  }
+  function board(){
+    var h='<section class="board" aria-label="Work order board"><div class="bhead"><h2>Work order board</h2>'+attChips()+'</div><div class="cols">';
+    COLS.forEach(function(col,ci){
+      var list=S.srv.filter(col[1]).sort(function(a,b){return (a.pri||0)-(b.pri||0);});
+      h+='<section class="col" aria-label="'+col[0]+', '+list.length+'"><h3>'+col[0]+'<span>'+list.length+'</span></h3><ul>'+list.map(kcard).join('')+'</ul>';
+      if(ci===4){var sg=S.srv.filter(function(w){return w.rts==='signed';}).length;h+='<div class="cf">Returned to service today: '+sg+'</div>';}
+      h+='</section>';
+    });
+    return h+'</div></section>';
+  }
+  function supTask(w){
+    var sel=!isHand()&&S.dsel===w.id;
+    return '<li><button class="task" data-a="dsel" data-t="'+w.id+'"'+(sel?' aria-current="true"':'')+'><span class="prio pr'+w.pri+'" aria-hidden="true">'+(w.pri?'P'+w.pri:'-')+'</span>'+
+      '<span class="tx"><b>'+esc(w.title)+'</b><span class="m">'+w.id+' · '+(w.tech?esc(w.tech):'Unassigned')+(w.status==='assigned'?' · not accepted':'')+'</span><span class="pl">'+(kpills(w)||'<span class="pill p-off">'+STAT[w.status]+'</span>')+'</span></span><span class="go" aria-hidden="true">&rsaquo;</span></button></li>';
+  }
+  function supList(){
+    var h='<section class="lp" aria-label="Work order board"><div class="attn">'+attChips()+'</div><div class="inbox">';
+    COLS.forEach(function(col){
+      var list=S.srv.filter(col[1]).sort(function(a,b){return (a.pri||0)-(b.pri||0);});
+      h+='<section class="grp" aria-label="'+col[0]+', '+list.length+'"><h3>'+col[0]+' <span class="cnt'+(list.length?'':' zero')+'">'+list.length+'</span></h3><ul>'+(list.length?list.map(supTask).join(''):'<li class="empty-g">None</li>')+'</ul></section>';
+    });
+    var sg=S.srv.filter(function(w){return w.rts==='signed';}).length;
+    return h+'<p class="m" style="margin:10px 2px">Returned to service today: '+sg+'</p></div></section>';
+  }
+  function offNote(){return S.supOff?'<p class="dest e" role="status">'+ICON.wifi+'<span><b>Offline - needs a live connection</b><span class="m">Showing the board from the last sync. Signing, overrides, conflict resolution and triage are disabled until you reconnect.</span></span></p>':'';}
+  function panel(label,head,body,foot){
+    var back=isHand()?'<button class="backbtn" data-a="sHome" aria-label="Back to board">'+ICON.back+'</button>':'';
+    return '<aside class="dpanel" aria-label="'+label+'"><div class="dh">'+back+'<div class="tx">'+head+'</div></div><div class="body">'+offNote()+body+'</div>'+(foot?'<div class="acc-foot">'+foot+'</div>':'')+'</aside>';
+  }
+  function deskDetail(){
+    if(S.dsel==='conflict')return conflictPanel();
+    var w=find(S.srv,S.dsel);if(!w)return '<aside class="dpanel"><div class="body"><p class="m">Select a work order.</p></div></aside>';
+    var off=S.supOff,head='<span class="kind">'+(w.status==='new'?'Fault report - to triage':STAT[w.status])+'</span><b>'+w.id+' · '+esc(w.title)+'</b><span class="m">'+w.asset+' · '+esc(w.an)+'<br>'+esc(w.origin)+'</span>';
+    var h='',foot='';
+    if(w.safety)h+='<p class="dest e" role="note">'+ICON.alert+'<span><b>Safety hazard flagged by reporter</b><span class="m">Isolate the asset before work starts.</span></span></p>';
+    if(w.status==='done'){
+      h+=rtsSection(w);
+      if(w.rts!=='signed'){var ck=S.rtsChk[w.id]||[false,false,false],all=ck.every(Boolean);
+        foot='<button class="b b-pri b-full" data-a="signRts"'+dis(!all||off)+'>'+ICON.sign+'Sign return to service</button>'+(off?'<p class="m" style="margin:0">Reconnect to sign. Approvals need a live connection.</p>':(all?'':'<p class="m" style="margin:0">Confirm all three checks to sign.</p>'));}
+    } else {
+      h+='<div class="dsec"><h4 id="'+FID+'-ph">Priority</h4><div class="seg" role="group" aria-labelledby="'+FID+'-ph">';
+      [1,2,3,4].forEach(function(p){h+='<button data-a="setPri" data-p="'+p+'" aria-pressed="'+(w.pri===p)+'"'+dis(off)+'>'+PRI[p][0]+'<small>'+PRI[p][1]+'</small></button>';});
+      h+='</div></div><div class="dsec"><label class="fl" for="'+FID+'-as">Assign technician</label><select class="sel" id="'+FID+'-as" data-f="assign"'+dis(off)+'><option value=""'+(w.tech?'':' selected')+'>Unassigned</option>';
+      TECHS.forEach(function(t){h+='<option'+(w.tech===t?' selected':'')+'>'+t+'</option>';});
+      h+='</select>'+(w.status!=='new'&&w.tech===ME?'<p class="m" style="margin:6px 0 0">Changes reach '+ME+' on their next device sync.</p>':'')+'</div>';
+      if(w.status==='new')foot='<button class="b b-pri b-full" data-a="createWo"'+dis(!(w.pri&&w.tech)||off)+'>Create work order</button>'+(w.pri&&w.tech?'':'<p class="m" style="margin:0">Set priority and assign a technician first.</p>');
+      if(w.warranty){h+=warrantySection(w);
+        if(!w.wov)foot='<button class="b b-pri b-full" data-a="wOver"'+dis(!S.wr.trim()||off)+'>Override - repair in-house</button><button class="b b-sec b-full" data-a="nr" data-what="Call OEM under warranty">Call OEM under warranty</button>';}
+      h+='<div class="dsec"><h4>From the technician (last sync)</h4>'+techInfo(w)+'</div>';
+    }
+    return panel('Work order detail',head,h,foot);
+  }
+  function techInfo(w){
+    var t=[];
+    w.mlog.forEach(function(l){t.push(l.n+' '+fmt(l.v)+' '+l.u+' at '+l.t);});
+    w.res.forEach(function(r){if(r.issued)t.push('Issued '+r.issued+' x '+r.item+' from '+r.lot);});
+    if(w.status==='waiting'&&w.note)t.push(w.note);
+    return t.length?'<ul class="log" style="margin:0">'+t.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>':'<p class="m" style="margin:0">Nothing received yet.</p>';
+  }
+  function warrantySection(w){
+    var h='<div class="dsec"><h4>Warranty</h4>';
+    if(w.wov)return h+'<p class="dest g" role="status">'+ICON.info+'<span><b>Warranty overridden - repair in-house</b><span class="m">By '+SUP+': '+esc(w.wov)+'</span></span></p></div>';
+    return h+'<p class="dest" role="note">'+ICON.info+'<span><b>Warranty-flagged</b><span class="m">'+esc(w.warranty)+'</span></span></p>'+
+      '<label class="fl gap" for="'+FID+'-wr">Reason for override (required)</label><input class="inp" id="'+FID+'-wr" data-f="wr" value="'+esc(S.wr)+'" placeholder="e.g. Dispatch line stopped, OEM visit 4 days away"'+dis(S.supOff)+'></div>';
+  }
+  var RTSC=['Guards and covers refitted','Trial run done, readings normal','Area clean, LOTO tags removed'];
+  function rtsSection(w){
+    var c=w.closure||{},h='<div class="dsec"><h4>Closure by '+esc(w.tech)+' · '+esc(w.closedAt)+'</h4><table class="tbl"><tbody><tr><td>Fault</td><td>'+c.f+'</td></tr><tr><td>Cause</td><td>'+c.c+'</td></tr><tr><td>Remedy</td><td>'+c.r+'</td></tr><tr><td>Notes</td><td>'+esc(c.notes||'-')+'</td></tr></tbody></table>'+
+      (c.photo?'<div class="row gap"><span class="photo" role="img" aria-label="Closure photo"></span><span class="m">Closure photo</span></div>':'')+'</div>';
+    if(w.meters.length||w.res.length)h+='<div class="dsec"><h4>From the technician</h4>'+techInfo(w)+'</div>';
+    if(w.rts==='signed')return h+'<p class="dest g" role="status">'+ICON.sign+'<span><b>Returned to service</b><span class="m">Signed by '+w.rtsBy+' at '+w.rtsAt+'.</span></span></p>';
+    var ck=S.rtsChk[w.id]||[false,false,false];
+    h+='<div class="dsec" role="group" aria-labelledby="'+FID+'-rh"><h4 id="'+FID+'-rh">Return to service - awaiting your signature</h4><p class="dest w" role="status" style="margin-bottom:8px">'+ICON.lock+'<span><b>'+w.asset+' is out of service</b><span class="m">Confirm the checks, then sign.</span></span></p><div style="display:flex;flex-direction:column;gap:6px">';
+    RTSC.forEach(function(t,k){h+='<label class="chk"><input type="checkbox" data-f="rts" data-i="'+k+'"'+(ck[k]?' checked':'')+'><span>'+t+'</span></label>';});
+    return h+'</div></div>';
+  }
+  function conflictPanel(){
+    var C=S.conflict,head='<span class="kind">Sync conflict</span><b>WO-2026-0141 · AC-03 run hours</b><span class="m">Meter reading captured offline disagrees with the server</span>';
+    var h='<table class="tbl"><thead><tr><th>Source</th><th class="num">Reading</th></tr></thead><tbody><tr><td>'+ME+' device<br><span class="m">captured offline 08:40</span></td><td class="num"><b>8,210 h</b></td></tr><tr><td>Technician 2 - night shift<br><span class="m">server, 09:05</span></td><td class="num"><b>8,305 h</b></td></tr></tbody></table>';
+    h+='<p class="dest w" role="note">'+ICON.alert+'<span><b>Device reading is lower than the server reading</b><span class="m">Run hours cannot go backwards. Choose how to resolve.</span></span></p>';
+    if(C.res)return panel('Sync conflict',head,h+'<p class="dest g" role="status">'+ICON.info+'<span><b>Resolved</b><span class="m">'+esc(C.res)+' - by '+SUP+' at '+C.at+'</span></span></p>','');
+    var O=['Keep server reading 8,305 h (discard device value)','Keep both - record 8,210 h as the 08:40 reading','Send back to '+ME+' to recheck the meter'];
+    h+='<div class="dsec" role="group" aria-label="Resolution"><h4>Resolution</h4><div style="display:flex;flex-direction:column;gap:6px">';
+    O.forEach(function(o){h+='<button class="tile" data-a="cPick" data-v="'+esc(o)+'" aria-pressed="'+(C.pick===o)+'"'+dis(S.supOff)+'>'+esc(o)+'</button>';});
+    h+='</div></div>';
+    return panel('Sync conflict',head,h,'<button class="b b-pri b-full" data-a="cResolve"'+dis(!C.pick||S.supOff)+'>Resolve conflict</button>'+(S.supOff?'<p class="m" style="margin:0">Reconnect to resolve. Needs a live connection.</p>':''));
+  }
+
+  /* ---- frame render: role decides what, device class decides how ---- */
+  function content(){
+    var tech=S.role==='tech';
+    if(isHand()){
+      if(tech)return S.tpage==='list'?techList():'<section class="rp" aria-label="Work order detail">'+detail()+'</section>';
+      return S.spage==='list'?supList():deskDetail();
+    }
+    if(tech)return techList()+'<section class="rp" aria-label="Work order detail">'+detail()+'</section>';
+    if(S.dev==='tab')return supList()+deskDetail();
+    return board()+deskDetail();
+  }
+  function render(el){
+    var d=DEV[S.dev],touch=S.dev!=='desk';
+    el.className='screen '+d.scr+' '+(touch?'touch':'compact')+' d-'+S.dev;
+    var h;
+    if(isHand())h=hTop()+'<div class="content">'+content()+'</div>'+bnav();
+    else if(S.dev==='tab')h=rail()+'<div class="dmain">'+tTop()+'<div class="content">'+content()+'</div></div>';
+    else h=side()+'<div class="dmain">'+dtop()+'<div class="content">'+content()+'</div></div>';
+    el.innerHTML=h;
+    var wrap=document.getElementById('fwrap'),bz=document.getElementById('bezel');
+    wrap.className='fwrap '+d.wrap;
+    bz.className=isDesk()?'':'bezel';
+    document.getElementById('dev-cap').innerHTML=d.cap+' <span>- '+(S.role==='tech'?ME+', maintenance technician':SUP+', maintenance supervisor')+'</span>';
+    [].forEach.call(document.querySelectorAll('[data-dev]'),function(b){b.setAttribute('aria-pressed',String(b.dataset.dev===S.dev));});
+    [].forEach.call(document.querySelectorAll('[data-role]'),function(b){b.setAttribute('aria-pressed',String(b.dataset.role===S.role));});
+  }
+  var SCR='.acc-body,.inbox,.donev,.body,.col ul';
+  function renderAll(noRestore){
+    var el=document.getElementById(FID);
+    var a=document.activeElement,inF=a&&a.closest&&a.closest('#'+FID),f=inF?a.dataset.f:null,i=inF?a.dataset.i:null,ac=inF?a.dataset.a:null;
+    var scr=noRestore?[]:[].map.call(el.querySelectorAll(SCR),function(b){return b.scrollTop;});
+    render(el);
+    [].forEach.call(el.querySelectorAll(SCR),function(b,k){if(scr[k])b.scrollTop=scr[k];});
+    document.getElementById('off-btn').textContent="Arif's device: "+(S.offline?'offline':'online')+' (toggle)';
+    document.getElementById('supoff-btn').textContent="Deepak's device: "+(S.supOff?'offline':'online')+' (toggle)';
+    if(inF){var sel=f?'[data-f="'+f+'"]':(ac?'[data-a="'+ac+'"]':null);if(sel&&i!=null)sel+='[data-i="'+i+'"]';
+      var n=sel&&el.querySelector(sel);
+      if(n){n.focus();if(n.tagName==='TEXTAREA'||(n.tagName==='INPUT'&&n.type!=='checkbox')){var l=n.value.length;try{n.setSelectionRange(l,l);}catch(e){}}}}
+  }
+
+  /* ---- technician scan resolver ---- */
+  function resolve(code){
+    var c=code.trim().toUpperCase();S.msg='';
+    if(!c){S.msg='Nothing scanned. Scan or type an asset tag, spare lot or bin label.';return;}
+    if(/^WO-/.test(c)){if(find(S.loc,c)){S.sel=c;S.view='wo';S.tpage='detail';}else S.msg='Not on your worklist: '+c;return;}
+    if(LOTS[c]||BINS[c]){
+      var w=cur();
+      if(!w||['accepted','progress','waiting'].indexOf(w.status)<0){S.msg='Open a work order you have accepted, then scan spares.';say(S.msg);return;}
+      S.view='spare';S.tpage='detail';spareScan(c);return;
+    }
+    if(ASSETS[c]){S.view='asset';S.asset=c;S.tpage='detail';say('Asset '+c+' scanned. Report fault or open its work orders');return;}
+    S.msg='Not recognised: '+code+'. Try an asset tag, spare lot or bin label.';say(S.msg);
+  }
+  function resetForms(){S.sp={found:'',qty:1,msg:'',bad:''};S.spq='';S.cl={f:'',c:'',r:'',notes:'',photo:false};S.mr={m:0,val:'',err:''};}
+  var LIVE_ONLY={setPri:1,createWo:1,wOver:1,signRts:1,cPick:1,cResolve:1};
+
+  function act(a,t){
+    var w=cur();
+    if(LIVE_ONLY[a]&&S.supOff){say('Offline. This needs a live connection');return;}
+    switch(a){
+      case 'home':S.view='wo';S.msg='';S.tpage='list';if(!w)S.sel=(myWos()[0]||{}).id;break;
+      case 'focusScan':S.msg='';S.tpage='list';if(S.view==='fault'||S.view==='asset')S.view='wo';renderAll();var inp=document.querySelector('#'+FID+' [data-f="scanq"]');if(inp)inp.focus();return;
+      case 'typeIt':var box=t.closest('.scanwrap'),ti=box&&box.querySelector('input');if(ti){ti.focus();say('Type the code, then press Go');}return;
+      case 'cam':say('Camera viewfinder is not rendered in this mock. Use Type it or the Demo controls');return;
+      case 'open':S.sel=t.dataset.t;S.view='wo';S.msg='';S.tpage='detail';resetForms();say('Opened '+S.sel);break;
+      case 'nr':say((t.dataset.what||'This')+' is not rendered in this mock');return;
+      case 'setStatus':
+        var s=t.dataset.s,p={status:s};
+        if(s==='waiting'){p.wasWaiting=true;p.note='Waiting spares - '+(w.res.filter(function(r){return r.issued<r.qty;}).map(function(r){return r.item;}).join(', ')||'awaiting stores');}
+        capture(w.id,p,w.id+' '+STAT[s]);break;
+      case 'meterPick':S.mr.m=+t.dataset.i;S.mr.err='';S.mr.val='';break;
+      case 'meter':
+        var m=w.meters[S.mr.m],v=parseFloat(String(S.mr.val).replace(/,/g,''));
+        if(isNaN(v)){S.mr.err='Enter a numeric reading.';say(S.mr.err);break;}
+        if(m.u==='h'&&v<m.cur){S.mr.err='Lower than the current reading '+fmt(m.cur)+' h. Run hours cannot go backwards; check the meter.';say(S.mr.err);break;}
+        var ms=clone(w.meters);ms[S.mr.m].cur=v;var lg=clone(w.mlog);lg.push({n:m.n,v:v,u:m.u,t:now()});
+        S.mr.val='';S.mr.err='';capture(w.id,{meters:ms,mlog:lg},m.n+' '+fmt(v)+' '+m.u+' recorded');break;
+      case 'spareOpen':S.view='spare';S.sp={found:'',qty:1,msg:'',bad:''};S.spq='';say('Scan or type the spare lot or bin label');break;
+      case 'backWo':S.view='wo';break;
+      case 'scanBin':spareScan(t.dataset.b);break;
+      case 'pickLot':spareScan(t.dataset.l);break;
+      case 'spInc':S.sp.qty++;break;
+      case 'spDec':S.sp.qty=Math.max(1,S.sp.qty-1);break;
+      case 'spIssue':
+        var code=S.sp.found.split(':')[1],L=LOTS[code],rs=clone(w.res),r=rs.filter(function(x){return x.item===L.item;})[0];
+        r.issued+=S.sp.qty;r.lot=code;var q=S.sp.qty;capture(w.id,{res:rs},'Issued '+q+' x '+L.item+' from '+code);
+        S.sp={found:'',qty:1,bad:'',msg:'Issued '+q+' x '+L.item+' from lot '+code+(S.offline?' - Captured - pending sync':'')};break;
+      case 'closeOpen':S.view='close';say('Close '+w.id+'. Choose fault, cause and remedy codes');break;
+      case 'code':S.cl[t.dataset.k]=t.dataset.v;say(t.dataset.v+' selected');break;
+      case 'clPhoto':S.cl.photo=true;say('Closure photo saved');break;
+      case 'closeDo':
+        if(clTodo(w).length)return;
+        capture(w.id,{status:'done',rts:'awaiting',closedAt:'Today '+now(),closure:clone(S.cl)},w.id+' closed. Return to service awaits supervisor signature');
+        S.view='wo';resetForms();break;
+      case 'fault':S.role='tech';S.view='fault';S.tpage='detail';S.fl={tag:'',desc:'',safety:false,photo:false,sent:''};say('Report a fault. Scan or type the asset tag');break;
+      case 'faultFor':S.view='fault';S.tpage='detail';S.fl={tag:t.dataset.t,desc:'',safety:false,photo:false,sent:''};say('Report fault on '+t.dataset.t);break;
+      case 'fPhoto':S.fl.photo=true;say('Fault photo saved');break;
+      case 'fSend':
+        var F=S.fl,id='WO-2026-0'+(nextNo++),tag=F.tag.trim().toUpperCase();F.tag=tag;
+        S.up.push({neww:norm({id:id,title:tag+' - '+F.desc.trim().slice(0,40),asset:tag,an:ASSETS[tag]||'Asset '+tag,pri:0,type:'Breakdown',origin:'Fault report by '+ME+', '+now(),due:'-',status:'new',tech:'',safety:F.safety})});
+        F.sent=id;say('Fault on '+tag+(S.offline?' captured - pending sync':' reported'));scheduleSync();break;
+      /* supervisor */
+      case 'sHome':S.spage='list';break;
+      case 'dsel':S.dsel=t.dataset.t;S.wr='';S.spage='detail';break;
+      case 'navConf':S.dsel='conflict';S.spage='detail';break;
+      case 'attRts':var x=S.srv.filter(function(v){return v.status==='done'&&v.rts==='awaiting';})[0];if(x){S.dsel=x.id;S.spage='detail';}else{say('Nothing awaiting signature');return;}break;
+      case 'attWar':var y=S.srv.filter(function(v){return v.warranty&&!v.wov;})[0];if(y){S.dsel=y.id;S.spage='detail';}else{say('No warranty-flagged work orders');return;}break;
+      case 'setPri':sup(S.dsel,{pri:+t.dataset.p},S.dsel+' priority set to '+PRI[+t.dataset.p][0]);break;
+      case 'createWo':var nw=find(S.srv,S.dsel);sup(S.dsel,{status:'assigned'},'Work order '+S.dsel+' created and assigned to '+nw.tech);break;
+      case 'wOver':sup(S.dsel,{wov:S.wr.trim()},'Warranty overridden on '+S.dsel);S.wr='';break;
+      case 'signRts':sup(S.dsel,{rts:'signed',rtsBy:SUP,rtsAt:now()},'Return to service signed for '+S.dsel);break;
+      case 'cPick':S.conflict.pick=t.dataset.v;break;
+      case 'cResolve':S.conflict.res=S.conflict.pick;S.conflict.at=now();say('Conflict resolved: '+S.conflict.res);break;
+    }
+    renderAll();
+  }
+
+  document.addEventListener('click',function(e){
+    var dv=e.target.closest('[data-dev]');
+    if(dv){S.dev=dv.dataset.dev;say('Device class: '+dv.textContent.replace(/\s+/g,' ').trim()+'. Current step kept');renderAll(true);return;}
+    var rl=e.target.closest('[data-role]');
+    if(rl){S.role=rl.dataset.role;say('Role: '+rl.textContent.replace(/\s+/g,' ').trim());renderAll(true);return;}
+    var t=e.target.closest('[data-a]');if(t&&!t.disabled){e.preventDefault();act(t.dataset.a,t);return;}
+    var d=e.target.closest('[data-demo]');if(!d)return;
+    var w=find(S.loc,'WO-2026-0144');
+    function ensureProgress(){if(w.status==='accepted'||w.status==='waiting'||w.status==='assigned')capture(w.id,{status:'progress'},w.id+' In progress');}
+    function techGo(){S.role='tech';S.sel=w.id;S.tpage='detail';}
+    switch(d.dataset.demo){
+      case 'open':techGo();S.view='wo';resetForms();say('Opened '+w.id);break;
+      case 'start':techGo();S.view='wo';if(w.status==='done'){say('Already closed. Reset to try again');break;}ensureProgress();break;
+      case 'lot':case 'held':case 'bin':
+        techGo();if(w.status==='done'){S.view='wo';say('Already closed. Reset to try again');break;}
+        S.view='spare';spareScan(d.dataset.demo==='lot'?'L-2609-117':(d.dataset.demo==='held'?'L-2608-092':'R-M1-03'));break;
+      case 'closefill':
+        techGo();if(w.status==='done'){S.view='wo';say('Already closed. Reset to try again');break;}
+        ensureProgress();S.view='close';S.cl={f:'Vibration',c:'Bearing wear',r:'Replaced part',notes:'Front spindle bearings replaced, vibration 1.9 mm/s after run-in',photo:true};say('Closure filled. Ready to close');break;
+      case 'asset':S.role='tech';S.msg='';resolve('CNC-04');break;
+      case 'offline':S.offline=!S.offline;say(S.offline?"Arif's device offline. Captures stay on the device":"Arif's device back online. Syncing");scheduleSync();break;
+      case 'supoff':S.supOff=!S.supOff;say(S.supOff?"Deepak's device offline. Approvals need a live connection":"Deepak's device back online");break;
+      case 'rts':S.role='sup';S.spage='detail';var x=S.srv.filter(function(v){return v.status==='done'&&v.rts==='awaiting';});S.dsel=(x[x.length-1]||{id:'WO-2026-0135'}).id;say('Return to service for '+S.dsel);break;
+      case 'conf':S.role='sup';S.spage='detail';S.dsel='conflict';say('Sync conflict opened');break;
+      case 'war':S.role='sup';S.spage='detail';S.dsel='WO-2026-0146';S.wr='';say('Warranty-flagged WO-2026-0146 opened');break;
+      case 'reset':clearTimeout(syncT);nextNo=148;var dev=S.dev;S=fresh();S.dev=dev;say('Reset');break;
+    }
+    renderAll(true);
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key!=='Enter')return;var t=e.target;
+    if(t.dataset&&t.dataset.f==='ftag'){e.preventDefault();}
+  });
+  document.addEventListener('submit',function(e){
+    var k=e.target.dataset.scan;if(!k)return;e.preventDefault();
+    var v=e.target.querySelector('input').value;
+    if(k==='sp'){var c=v.trim().toUpperCase();S.spq='';
+      if(LOTS[c]||BINS[c])spareScan(c);else{S.sp.bad=c?'Not a spare lot or bin label: '+c:'Nothing scanned. Scan or type the lot or bin label.';say(S.sp.bad);}}
+    else{S.scanq='';resolve(v);}
+    renderAll();
+  });
+  document.addEventListener('input',function(e){
+    var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
+    var v=e.target.value;
+    if(f==='scanq')S.scanq=v;
+    else if(f==='spq')S.spq=v;
+    else if(f==='mval'){S.mr.val=v.replace(/[^0-9.,]/g,'');S.mr.err='';}
+    else if(f==='clnotes')S.cl.notes=v;
+    else if(f==='ftag')S.fl.tag=v.toUpperCase();
+    else if(f==='fdesc')S.fl.desc=v;
+    else if(f==='wr')S.wr=v;
+    else return;
+    renderAll();
+  });
+  document.addEventListener('change',function(e){
+    var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
+    if(f==='fsafe'){S.fl.safety=e.target.checked;say(S.fl.safety?'Safety hazard flagged':'Safety hazard cleared');}
+    else if(f==='rts'){var c=S.rtsChk[S.dsel]||[false,false,false];c[+e.target.dataset.i]=e.target.checked;S.rtsChk[S.dsel]=c;}
+    else if(f==='assign'){if(S.supOff)return;var w=find(S.srv,S.dsel),nt=e.target.value,was=w.tech;
+      Object.assign(w,{tech:nt});
+      if(w.status!=='new'){if(nt===ME||was===ME)S.down.push({id:w.id,patch:{tech:nt}});scheduleSync();}
+      say(w.id+(nt?' assigned to '+nt:' unassigned'));}
+    else return;
+    renderAll();
+  });
+  renderAll(true);
+})();
+</script>
+</body>
+</html>

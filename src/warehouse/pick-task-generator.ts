@@ -14,7 +14,7 @@ import type { PickLineInput } from '../events/schema.js';
 /**
  * Story 3.6 Task 4: pick task generation. Loads Story 2.9 sales-order lines as Phase-1 outbound
  * demand, selects lots by FEFO (stock_balance joined to lot_master, expiry ASC NULLS LAST,
- * lot_number ASC tiebreaker), resolves each lot's bin (preferring the Story 3.5 velocity-class
+ * lot_number ASC tiebreaker; lot-less balances of items that are not lot-controlled sort last), resolves each lot's bin (preferring the Story 3.5 velocity-class
  * preferred bin when a lot sits in several bins), sequences bins per zone by
  * location_register.pick_sequence (location_code lexicographic fallback), and emits one
  * pick_task.created event per generated task through persistEvent - so the projection insert and
@@ -37,8 +37,9 @@ export interface GeneratePickTasksResult {
 }
 
 interface LotAllocation {
-  lotUuid: string;
-  lotNumber: string;
+  /** null for a lot-less balance (stock that is not lot-controlled, Pilot B3). */
+  lotUuid: string | null;
+  lotNumber: string | null;
   locationId: string;
   zoneId: string;
   quantity: string;
@@ -52,8 +53,8 @@ interface AllocatedLine {
 }
 
 interface FefoCandidateRow {
-  lot_uuid: string;
-  lot_number: string;
+  lot_uuid: string | null;
+  lot_number: string | null;
   location_id: string;
   location_code: string;
   zone_id: string | null;
@@ -95,6 +96,12 @@ function isNonNegativeMicro(value: string | number): boolean {
  * FEFO candidates for a SKU at a site: owned stock with availability, joined to lot_master for
  * expiry ordering and to location_register for the bin's pick_sequence and zone ancestor. The
  * zone ancestor walks the bin -> rack -> aisle -> zone parent chain.
+ *
+ * Pilot B3: stock that is not lot-controlled sits in balance rows with lot_id NULL and has no
+ * lot_master row, so the lot join is a LEFT JOIN. A lot-less row is a candidate only when the item
+ * is not lot-controlled (a stray lot-less balance of a lot-controlled item must not slip past the
+ * lot hold and expiry rules); a row naming a lot still requires its lot_master row, as before.
+ * Lot-less rows carry no expiry, so NULLS LAST orders them after every lot.
  */
 async function fefoCandidates(
   sku: string,
@@ -121,7 +128,7 @@ async function fefoCandidates(
             lr.pick_sequence AS bin_pick_sequence,
             lm.expiry_date
        FROM stock_balance sb
-       JOIN lot_master lm ON lm.lot_number = sb.lot_id AND lm.sku = sb.sku
+       LEFT JOIN lot_master lm ON lm.lot_number = sb.lot_id AND lm.sku = sb.sku
        JOIN location_register lr ON lr.location_id = sb.location_id AND lr.site_id = $2
        LEFT JOIN LATERAL (
          SELECT z.location_id FROM zone_of z WHERE z.start_id = lr.location_id AND z.level = 'zone' LIMIT 1
@@ -129,12 +136,17 @@ async function fefoCandidates(
        WHERE sb.sku = $1
          AND sb.stock_class = 'owned'
          AND sb.available > 0
-         AND lm.quality_hold_status = 'none'
-         AND (lm.expiry_date IS NULL OR lm.expiry_date >= CURRENT_DATE)
+         AND (
+           (sb.lot_id IS NULL AND NOT EXISTS (
+              SELECT 1 FROM item_master im WHERE im.sku = sb.sku AND im.lot_controlled = true))
+           OR (lm.lot_id IS NOT NULL
+               AND lm.quality_hold_status = 'none'
+               AND (lm.expiry_date IS NULL OR lm.expiry_date >= CURRENT_DATE))
+         )
          AND lr.status = 'active'
          AND lr.quarantine = false
          AND lr.access_restricted = false
-       ORDER BY lm.expiry_date ASC NULLS LAST, lm.lot_number ASC, lr.pick_sequence ASC NULLS LAST, lr.location_code ASC`,
+       ORDER BY lm.expiry_date ASC NULLS LAST, lm.lot_number ASC NULLS LAST, lr.pick_sequence ASC NULLS LAST, lr.location_code ASC`,
     [sku, siteId],
   );
   return result.rows as FefoCandidateRow[];
@@ -169,18 +181,20 @@ async function allocateForLine(
   // preferred bin for this (sku, site) - the first read of velocity data for pick-path use.
   const velocity = await getVelocityClass(line.sku, siteId, client);
   const preferredLocationId = velocity?.preferred_location_id ?? null;
+  // Lot-less rows group under the empty key (a lot UUID is never empty).
+  const lotKey = (c: FefoCandidateRow): string => c.lot_uuid ?? '';
   const byLot = new Map<string, FefoCandidateRow[]>();
   for (const c of candidates) {
-    const rows = byLot.get(c.lot_uuid) ?? [];
+    const rows = byLot.get(lotKey(c)) ?? [];
     rows.push(c);
-    byLot.set(c.lot_uuid, rows);
+    byLot.set(lotKey(c), rows);
   }
   const ordered: FefoCandidateRow[] = [];
   const seenLots = new Set<string>();
   for (const c of candidates) {
-    if (seenLots.has(c.lot_uuid)) continue;
-    seenLots.add(c.lot_uuid);
-    const rows = [...(byLot.get(c.lot_uuid) ?? [])];
+    if (seenLots.has(lotKey(c))) continue;
+    seenLots.add(lotKey(c));
+    const rows = [...(byLot.get(lotKey(c)) ?? [])];
     rows.sort((a, b) => {
       const aPref = a.location_id === preferredLocationId ? 0 : 1;
       const bPref = b.location_id === preferredLocationId ? 0 : 1;
@@ -197,7 +211,7 @@ async function allocateForLine(
   const allocations: LotAllocation[] = [];
   for (const c of ordered) {
     if (remaining <= 0n) break;
-    const key = `${c.lot_number}\0${c.location_id}`;
+    const key = `${c.lot_number ?? ''}\0${c.location_id}`;
     const alreadyConsumed = consumed.get(key) ?? 0n;
     const available = numericToMicro(c.available) - alreadyConsumed;
     if (available <= 0n) continue;

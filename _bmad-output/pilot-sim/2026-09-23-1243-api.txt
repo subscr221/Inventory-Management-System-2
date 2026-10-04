@@ -1,0 +1,33 @@
+
+Simulated pilot day (CMF-ALIGARH, 2026-09-23T04:43:59.908Z)
+PASS  ERP feed: purchase order MK-PO-D2609230443                   1.89 s  1 applied, 4 lines
+PASS  ERP feed: sales order MK-SO-D2609230443                      1.97 s  2 applied, 2 dispatch-order ids read on the box
+PASS  inbound: gate entry                                          0.74 s  binding matched to MK-PO-D2609230443
+PASS  inbound: weighbridge (net within the PO line band)           0.34 s  net 5000.000 kg accepted
+PASS  inbound: GRN plain item                                      0.78 s  50 BRG-6204 at RECV-DOCK, line posted, putaway task ready
+PASS  inbound: GRN lot item                                        0.38 s  100 RM-COIL-2MM at RECV-DOCK, line posted, putaway task ready
+PASS  inbound: GRN consignment item (ownership agreement)          0.36 s  500 FAST-M8-BOLT at RECV-DOCK, line posted, putaway task ready
+PASS  inbound: putaway into a storage bin                          1.76 s  3 tasks completed into BIN-A03
+PASS  job-work: receive customer material against the challan (~   1.43 s  120 CUST-SHEET-3MM of JW-MK-0001 at RECV-DOCK, receipt 2ac569ec-925b-4579-9ee6-9f2e3b8cff61, no PO, no ticket
+PASS  job-work: the same challan and lot again is refused          0.36 s  JOBWORK_CHALLAN_DUPLICATE for DC-SMOKE-CMF-ALIGARH-MUDMBQQT
+PASS  count: cycle count with a variance                           0.98 s  system 197, counted 196, adjustment pending
+PASS  count: counter cannot approve, another person approves       1.09 s  self-approval refused (COUNT_ENTERER_CANNOT_APPROVE), approved by the warehouse manager
+PASS  outbound: generate picks for a seeded sales order            0.70 s  MK-SO-D2609230443: 2.000 BRG-6204 + 10.000 RM-COIL-2MM, 2 task(s)
+PASS  outbound: confirm pick lines (lot item FEFO, plain item)     2.39 s  2 BRG-6204 from 0bb81048-016c-4433-b6d6-c60aadbd31fd, 10 RM-COIL-2MM (lot) from 25882d6c-71c3-41ac-8b9e-912e09434618
+PASS  outbound: pack refuses a lot that was not picked             1.14 s  PACKED_LINE_NOT_PICKED for RM-COIL-2MM with a lot that was not picked, no packing record
+PASS  outbound: pack                                               0.70 s  2 dispatch order lines packed
+PASS  outbound: IRN, shipping documents                            1.07 s  one IRN covers 2 lines, 8 documents
+PASS  outbound: dispatch                                           0.70 s  2 lines dispatched
+PASS  production: planner reads stock, creates the order           2.40 s  2 x FG-PUMP-12
+PASS  production: release                                          0.97 s  status released
+PASS  production: stage components from storage bins               1.69 s  3 lines staged
+PASS  production: issue components                                 1.41 s  3 components issued, order in process
+PASS  production: complete (inspection plan resolved)              0.38 s  lot ?, QC task raised
+PASS  indent: raise                                                0.96 s  approval required from 4eec160d-f8f0-472c-94da-06fbc2d4181e
+PASS  indent: raiser cannot approve, department head approves      0.66 s  self-approval refused (INDENT_RAISER_CANNOT_APPROVE), approved
+PASS  maintenance: technician reports a fault                      0.69 s  on AST-PRESS-01
+PASS  maintenance: supervisor accepts, work order with SLA         0.69 s  priority p2, resolution due 2026-09-24T04:46:36.791Z
+PASS  maintenance: technician works and completes                  1.06 s  status completed
+
+PASS: 28/28 steps passed
+report: D:\WINCODE\Inventory Management System_2\_bmad-output\pilot-sim\2026-09-23-04-43-api.json

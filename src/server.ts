@@ -22,7 +22,7 @@ import {
 } from './api/v1/business-stream.js';
 import { getCurrentLocationHandler, seedExpectedLocationHandler } from './api/v1/location.js';
 import { createItemHandler, updateItemHandler, getItemHandler } from './api/v1/items.js';
-import { getStockHandler } from './api/v1/stock.js';
+import { getStockHandler, getStockAvailabilityHandler } from './api/v1/stock.js';
 import {
   getValuationHandler,
   nrvWriteDownHandler,
@@ -126,6 +126,7 @@ import {
   handleListVelocityClassification,
   handleReslottingJob,
 } from './api/v1/putaway.js';
+import { createBinMoveHandler } from './api/v1/bin-moves.js';
 import {
   handleListWarehouseTasks,
   handleGetProductivity,
@@ -166,6 +167,23 @@ import {
   rejectIndentHandler,
   cancelIndentHandler,
 } from './api/v1/indents.js';
+import {
+  createDamageReportHandler,
+  listDamageReportsHandler,
+  getDamageReportHandler,
+  markArrivedHandler,
+  sendExternalHandler,
+  markReturnedHandler,
+  markReturnedToStockHandler,
+  inspectDamageHandler,
+  decideWholeLotHandler,
+  turnKeyHandler,
+  withdrawKeyHandler,
+  disagreeKeyHandler,
+  decideEscalationHandler,
+  recordOutcomeHandler,
+} from './api/v1/damage-reports.js';
+import { putAttachmentHandler, getAttachmentHandler } from './api/v1/attachments.js';
 import {
   draftPurchaseOrderHandler,
   getNativePurchaseOrderHandler,
@@ -252,6 +270,7 @@ import {
   rejectFaultReportHandler,
   sweepGraceWindowsHandler,
   addAssetPartHandler,
+  amendSpareHandler,
   cancelSpareReservationHandler,
   createSpareHandler,
   issueSpareHandler,
@@ -557,6 +576,7 @@ export function createAppRouter(): Router {
   router.patch('/api/v1/locations/:locationId', updateLocationHandler);
   router.get('/api/v1/locations/:locationId', getLocationHandler);
   router.get('/api/v1/stock/:sku', getStockHandler);
+  router.get('/api/v1/stock/:sku/availability', getStockAvailabilityHandler);
   router.get('/api/v1/stock/:sku/valuation', getValuationHandler);
   router.post('/api/v1/stock/:sku/valuation/nrv-write-down', nrvWriteDownHandler);
   router.post('/api/v1/stock/:sku/valuation/nrv-recovery', nrvRecoveryHandler);
@@ -738,6 +758,8 @@ export function createAppRouter(): Router {
   router.post('/api/v1/putaway-tasks/:putawayTaskId/complete', handleCompletePutaway);
   router.get('/api/v1/velocity-classification', handleListVelocityClassification);
   router.post('/api/v1/velocity-classification/reslot', handleReslottingJob);
+  // Pilot G3: same-site bin-to-bin move
+  router.post('/api/v1/stock/bin-moves', createBinMoveHandler);
 
   // Story 3.8: Warehouse Task Management and Productivity Tracking
   router.post('/api/v1/putaway-tasks/:putawayTaskId/assign', handleAssignPutawayTask);
@@ -785,6 +807,28 @@ export function createAppRouter(): Router {
   router.post('/api/v1/indents/:indentId/approve', approveIndentHandler);
   router.post('/api/v1/indents/:indentId/reject', rejectIndentHandler);
   router.post('/api/v1/indents/:indentId/cancel', cancelIndentHandler);
+
+  // Story 8.9: report damage - universal capture, QC task, two keys and the commercial outcome.
+  router.post('/api/v1/damage-reports', createDamageReportHandler);
+  router.get('/api/v1/damage-reports', listDamageReportsHandler);
+  router.get('/api/v1/damage-reports/:reportId', getDamageReportHandler);
+  router.post('/api/v1/damage-reports/:reportId/custody/arrived', markArrivedHandler);
+  router.post('/api/v1/damage-reports/:reportId/custody/sent-external', sendExternalHandler);
+  router.post('/api/v1/damage-reports/:reportId/custody/returned', markReturnedHandler);
+  router.post(
+    '/api/v1/damage-reports/:reportId/custody/returned-to-stock',
+    markReturnedToStockHandler,
+  );
+  router.post('/api/v1/damage-reports/:reportId/inspection', inspectDamageHandler);
+  router.post('/api/v1/damage-reports/:reportId/whole-lot', decideWholeLotHandler);
+  router.post('/api/v1/damage-reports/:reportId/keys/:key/turn', turnKeyHandler);
+  router.post('/api/v1/damage-reports/:reportId/keys/:key/withdraw', withdrawKeyHandler);
+  router.post('/api/v1/damage-reports/:reportId/keys/:key/disagree', disagreeKeyHandler);
+  router.post('/api/v1/damage-reports/:reportId/escalation/decide', decideEscalationHandler);
+  router.post('/api/v1/damage-reports/:reportId/outcome', recordOutcomeHandler);
+  // Story 8.9 (AC 7, D14): the photo store; the PUT body is the raw image (router RAW_BODY_PATH_PREFIX).
+  router.put('/api/v1/attachments/:attachmentId', putAttachmentHandler);
+  router.get('/api/v1/attachments/:attachmentId', getAttachmentHandler);
 
   // Story 4.4: Purchase Order Management
   router.post('/api/v1/purchase-orders', draftPurchaseOrderHandler);
@@ -904,6 +948,7 @@ export function createAppRouter(): Router {
   router.post('/api/v1/maintenance/spares', createSpareHandler);
   router.get('/api/v1/maintenance/spares', listSparesHandler);
   router.post('/api/v1/maintenance/spares/scan', scanSparesHandler);
+  router.post('/api/v1/maintenance/spares/amend', amendSpareHandler);
   router.get('/api/v1/maintenance/spares/alerts', listSpareAlertsHandler);
   router.get('/api/v1/maintenance/spares/:sku/where-used', whereUsedHandler);
   router.post('/api/v1/maintenance/assets/:assetId/parts', addAssetPartHandler);

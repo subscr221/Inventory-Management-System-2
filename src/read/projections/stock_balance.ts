@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
 import { qcGateExclusionSql } from './qc_inspection_task.js';
 import { AppError } from '../../middleware/error.js';
+import { isQuarantineLocation } from '../../compliance/stock-relocation.js';
+import { assertDamageHeldQuantity } from './damage_report.js';
 
 /**
  * Stock balance read model (Story 2.2). Derived state only: every row is rebuildable by
@@ -80,6 +82,28 @@ export interface StockIssueInput {
   occurred_at?: string | null;
   /** Story 8.1 (Task 6): see StockAllocationInput.qc_gate_cleared. */
   qc_gate_cleared?: boolean;
+  /**
+   * Pilot B2 review: set ONLY by the relocation seams (putaway, bin move) for a lot-scoped
+   * relocation of a QC-gated or manually held lot into a quarantine bin, after the seam has checked
+   * the hold and the destination itself. A relocation is not a consumption, so the drain-window QC
+   * predicate is dropped for this one issue. Ignored without a lot_id - a lot-less drain can never
+   * see gated or held stock.
+   */
+  qc_gate_relocation?: boolean;
+  /**
+   * Pilot F2: true when the issue is the outbound leg of an internal relocation (putaway,
+   * cross-dock, replenishment) whose quantity is received at another location in the same
+   * transaction. A relocation is not a consumption, so last_issue_at - the obsolescence clock - is
+   * left untouched and occurred_at is ignored.
+   */
+  relocation?: boolean;
+  /**
+   * Story 8.9 (D5): the destination of a relocation leg, when the caller knows it. The damage hold
+   * guard lets held units move between quarantine locations; any other issue out of quarantine
+   * (a consumption, or a relocation that does not say where it lands) is checked against the
+   * quantity open damage cases hold.
+   */
+  relocation_target_location_id?: string | null;
 }
 
 export interface StockDeallocationInput {
@@ -109,6 +133,11 @@ export interface StockPickInput {
   sku: string;
   location_id: string;
   lot_id?: string | null;
+  /**
+   * Pilot B3: true scopes the move to the lot-less row (lot_id IS NULL) only. Without it a null
+   * lot_id keeps the any-lot contract below, which could move another lot's allocation.
+   */
+  lot_less?: boolean;
   stock_class?: string;
   /** NUMERIC string preferred to avoid JS float precision loss; a number is coerced via String(). */
   quantity: string | number;
@@ -153,6 +182,49 @@ export async function getStockBalancesBySku(
     [sku],
   );
   return result.rows.map(mapRow);
+}
+
+export interface RequestableStock {
+  location_id: string;
+  location_code: string | null;
+  in_stock: boolean;
+}
+
+/**
+ * Story 1.15 (D4), corrected by code review 2026-09-27: per bin location the caller may see,
+ * whether any of `sku` could be handed to a requester. Enumerated from `location_register`
+ * (active bins only), LEFT JOINed to `stock_balance`, so a location the caller is scoped to that
+ * has never received or moved this SKU still appears with `in_stock: false` - not silently
+ * absent, as Table 2 requires ("one entry per location the caller may see"). A row counts toward
+ * `in_stock` only when its class is `owned` (consignment/VMI/prototype/job_work/offcut stock is
+ * never requestable through this endpoint, matching the rule `getStockBase`'s consolidated total
+ * already uses), its location is not a quarantine location, and its lot passes the same QC gate
+ * and lot-hold predicate the stock drains use. The sum of `available` over counted rows must be
+ * above zero. Only the boolean leaves SQL: no quantity is returned.
+ */
+export async function getRequestableStockBySku(
+  sku: string,
+  client?: PoolClient,
+): Promise<RequestableStock[]> {
+  const result = await runner(client).query(
+    `SELECT lr.location_id,
+            lr.location_code,
+            COALESCE(SUM(sb.available) FILTER (
+              WHERE sb.stock_class = 'owned'
+                AND COALESCE(lr.quarantine, false) = false
+                AND ${qcGateExclusionSql('sb', false)}
+            ), 0) > 0 AS in_stock
+       FROM location_register lr
+       LEFT JOIN stock_balance sb ON sb.location_id = lr.location_id AND sb.sku = $1
+      WHERE lr.level = 'bin' AND lr.status = 'active'
+      GROUP BY lr.location_id, lr.location_code`,
+    [sku],
+  );
+  return result.rows.map((row) => ({
+    location_id: row['location_id'] as string,
+    location_code: (row['location_code'] as string | null) ?? null,
+    in_stock: row['in_stock'] === true,
+  }));
 }
 
 /**
@@ -378,7 +450,10 @@ export async function applyStockIssue(
   // stock only; an explicit consignment/vmi issue drains that class only.
   const stockClass = input.stock_class ?? 'owned';
   // Story 8.1 (Task 6): see applyStockAllocation - QC-gated lots are invisible to the drain.
-  const qcGate = qcGateExclusionSql('stock_balance', input.qc_gate_cleared === true);
+  const qcGate =
+    input.qc_gate_relocation === true && lotId !== null
+      ? 'TRUE'
+      : qcGateExclusionSql('stock_balance', input.qc_gate_cleared === true);
   await client.query(
     `SELECT balance_id FROM stock_balance
      WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)
@@ -433,20 +508,37 @@ export async function applyStockIssue(
     [input.sku, input.location_id, lotId, input.quantity, stockClass],
   );
 
+  // Story 8.9 (D5): after the drain, units held by an open damage case must still be in the site's
+  // quarantine pool. One check here covers every issue, pick, putaway, bin move and replenishment
+  // that leaves quarantine; it is a no-op unless an open quarantined case holds this SKU.
+  await assertDamageHeldQuantity(
+    {
+      sku: input.sku,
+      sourceLocationId: input.location_id,
+      targetLocationId: input.relocation_target_location_id ?? null,
+      stockClass,
+    },
+    client,
+    isQuarantineLocation,
+  );
+
   // Story 2.7: stamp last_issue_at for every balance row at this (sku, location_id) so the
   // obsolescence scan reads MAX(last_issue_at) across lots. GREATEST keeps the value monotonic - a
   // late or out-of-order issue never moves the obsolescence clock backwards. Touches only
   // last_issue_at/updated_at, never on_hand/allocated/available/in_transit (Story 2.2 invariants).
   // Story 2.8: scoped to the issued stock class - a consignment/vmi issue must not reset the OWNED
   // obsolescence clock (the scan reads owned rows only).
-  const occurredAt = input.occurred_at ?? new Date().toISOString();
-  await client.query(
-    `UPDATE stock_balance
-     SET last_issue_at = GREATEST(COALESCE(last_issue_at, $4::timestamptz), $4::timestamptz),
-         updated_at = now()
-     WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)`,
-    [input.sku, input.location_id, lotId, occurredAt, stockClass],
-  );
+  // Pilot F2: a relocation leg moves stock, it does not consume it, so the clock is not touched.
+  if (input.relocation !== true) {
+    const occurredAt = input.occurred_at ?? new Date().toISOString();
+    await client.query(
+      `UPDATE stock_balance
+       SET last_issue_at = GREATEST(COALESCE(last_issue_at, $4::timestamptz), $4::timestamptz),
+           updated_at = now()
+       WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)`,
+      [input.sku, input.location_id, lotId, occurredAt, stockClass],
+    );
+  }
 
   // Filtered to rows that actually drained: a fully-reserved row inside the window contributes a
   // zero delta and is not a posting grain.
@@ -581,6 +673,21 @@ export async function applyStockIssueUnderSite(
     [siteLocationId, input.sku, lotId, input.quantity, stockClass],
   );
 
+  // Story 8.9 (D5): the plant-wide backflush drains every bin under the site, quarantine included,
+  // without going through applyStockIssue - so it takes the same damage-hold guard for every
+  // location it actually drained. A no-op unless an open quarantined case holds this SKU.
+  for (const locationId of new Set(
+    drained.rows
+      .filter((row) => row['drained_quantity'] !== null && row['drained_quantity'] !== '0')
+      .map((row) => row['location_id'] as string),
+  )) {
+    await assertDamageHeldQuantity(
+      { sku: input.sku, sourceLocationId: locationId, targetLocationId: null, stockClass },
+      client,
+      isQuarantineLocation,
+    );
+  }
+
   // Same last_issue_at stamping contract as applyStockIssue (Story 2.7): monotonic GREATEST, scoped
   // to the issued stock class, touching only last_issue_at/updated_at.
   const occurredAt = input.occurred_at ?? new Date().toISOString();
@@ -653,9 +760,10 @@ export async function applyStockPick(input: StockPickInput, client: PoolClient):
         SET allocated = allocated - $1::numeric,
             picked = picked + $1::numeric,
             updated_at = now()
-      WHERE sku = $2 AND location_id = $3 AND stock_class = $5 AND ($4::text IS NULL OR lot_id = $4)
+      WHERE sku = $2 AND location_id = $3 AND stock_class = $5
+        AND CASE WHEN $6::boolean THEN lot_id IS NULL ELSE ($4::text IS NULL OR lot_id = $4) END
         AND allocated >= $1::numeric`,
-    [quantity, input.sku, input.location_id, lotId, stockClass],
+    [quantity, input.sku, input.location_id, lotId, stockClass, input.lot_less === true],
   );
   if ((result.rowCount ?? 0) === 0) {
     throw new AppError(

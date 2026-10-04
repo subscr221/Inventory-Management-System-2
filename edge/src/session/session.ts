@@ -25,6 +25,8 @@ export interface SessionUser {
   /** oidc-client-ts: `undefined` when the token carries no expiry. */
   expired?: boolean | undefined;
   state?: unknown;
+  /** ID-token claims (scope `openid profile email`). */
+  profile?: { name?: string; preferred_username?: string; email?: string };
 }
 
 /** The subset of oidc-client-ts's `UserManager` the session drives (structurally satisfied). */
@@ -146,6 +148,16 @@ export class EdgeSession {
     if (!this.manager) return this.devToken;
     const user = await this.manager.getUser();
     return user?.access_token ?? null;
+  }
+
+  /**
+   * Who the identity provider says is signed in, for the header when the API has not confirmed a
+   * user (bootstrap refused the account's site). Null in local mode or with no user.
+   */
+  async getDisplayName(): Promise<string | null> {
+    if (!this.manager) return null;
+    const profile = (await this.manager.getUser())?.profile;
+    return profile?.name || profile?.preferred_username || profile?.email || null;
   }
 
   /**

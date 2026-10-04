@@ -343,6 +343,29 @@ export async function hasUpstreamStreamConflict(
   return head ? { parked_behind_event_id: head.id } : null;
 }
 
+/**
+ * Story 8.9 (Task 9.3): where one capture stands. A retained refusal is 'refused'; a row parked for
+ * its owner, or still queued, is 'pending'; a synced row, or one the checkpoint already removed,
+ * is 'synced'.
+ */
+export async function readCaptureSettlement(
+  db: QueryExecutor,
+  eventId: string,
+): Promise<'pending' | 'synced' | 'refused'> {
+  const retained = await db.getAll<{ retained_reason: string }>(
+    `SELECT retained_reason FROM edge_outbox_retained WHERE id = ?`,
+    [eventId],
+  );
+  if (retained[0]) return retained[0].retained_reason === 'refused' ? 'refused' : 'pending';
+  const rows = await db.getAll<{ local_status: EdgeLocalStatus }>(
+    `SELECT local_status FROM edge_outbox WHERE id = ?`,
+    [eventId],
+  );
+  const status = rows[0]?.local_status;
+  if (status === undefined || status === 'synced') return 'synced';
+  return status === 'needs_attention' ? 'refused' : 'pending';
+}
+
 export async function readFailures(db: QueryExecutor): Promise<FailureRow[]> {
   // Retained refusals, plus any needs_attention row not yet salvaged (see readOutboxCounts).
   return db.getAll<FailureRow>(

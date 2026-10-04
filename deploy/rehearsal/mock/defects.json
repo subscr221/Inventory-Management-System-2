@@ -1,0 +1,29 @@
+{
+  "_comment": "Defects the generator plants on purpose. Known defects in, same defects out = the rehearsal passed. Edit the counts, or set a count to 0 to switch a defect off. The kinds are fixed by generate.mjs; the mix is the site's call.",
+  "opening_stock": {
+    "quantity_mismatch": 6,
+    "missing_in_import": 3,
+    "missing_in_source": 2,
+    "serial_missing_in_source": 1,
+    "serial_missing_in_import": 1,
+    "duplicate_lot_serial": 2,
+    "unknown_sku": 2,
+    "wrong_uom": 2,
+    "owned_without_cost": 1,
+    "lot_missing_on_lot_item": 1
+  },
+  "active_boms": {
+    "quantity_per_off": 1,
+    "component_missing_in_platform": 1
+  },
+  "open_pos": {
+    "received_qty_off": 1,
+    "po_missing_in_platform": 1
+  },
+  "jobwork_challans": {
+    "challan_qty_off": 1
+  },
+  "custody_registers": {
+    "custody_qty_off": 1
+  }
+}

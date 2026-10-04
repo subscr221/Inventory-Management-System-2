@@ -31,6 +31,11 @@ import type pg from 'pg';
  *   - DELEGATION_COLLAPSES_PAIR: `resolveApprover` honours active vacation delegations, so a
  *     delegation from the approver to the setter (or the reverse) hands both halves back to one
  *     person for the life of the delegation.
+ *   - ROLE_UNHELD_AT_SITE (Story 1.16): a pair check asks whether ANYBODY holds a role. Alerts and
+ *     escalations are already routed to the holders at the site (resolveTargetUserIds), so a role
+ *     held only at another site reaches no one here while the pair lines above read healthy.
+ *     Approvals do not resolve at the site yet: `findRoleHolder` accepts a location since Story
+ *     1.16 and Story 4.8 is its first caller, so this check is in place before they do.
  */
 
 export interface SegregatedRolePair {
@@ -82,16 +87,32 @@ export const SEGREGATED_ROLE_PAIRS: readonly SegregatedRolePair[] = [
   },
 ];
 
+/**
+ * Story 1.16 (D5, owner ruling 2026-09-30): the roles every active site must have a holder for.
+ * Each is a site authority something resolves at the transaction site: `site_head` receives the
+ * job-work escalations, `warehouse_manager` approves count adjustments, transfers, quarantine and
+ * putaway release, `department_head` approves indents, purchase orders and supplier onboarding,
+ * and `qc_head` turns the QC key on damage cases and lot disposition.
+ */
+export const REQUIRED_SITE_ROLES: readonly string[] = [
+  'site_head',
+  'warehouse_manager',
+  'department_head',
+  'qc_head',
+];
+
 export type SegregationViolationCode =
   | 'ROLE_UNHELD'
   | 'ROLES_SHARE_HOLDER'
   | 'DOA_BAND_MISSING'
   | 'DOA_TYPE_MULTI_ROLE'
-  | 'DELEGATION_COLLAPSES_PAIR';
+  | 'DELEGATION_COLLAPSES_PAIR'
+  | 'ROLE_UNHELD_AT_SITE';
 
 export interface SegregationViolation {
   code: SegregationViolationCode;
-  transaction_type: string;
+  /** Null for ROLE_UNHELD_AT_SITE, which is about a site and not about a transaction type. */
+  transaction_type: string | null;
   /** Operator-facing sentence naming the fix, not just the fault. */
   message: string;
   details: Record<string, unknown>;
@@ -107,8 +128,17 @@ export interface SegregatedPairReport {
   ok: boolean;
 }
 
+export interface RequiredSiteRoleReport {
+  role: string;
+  site_id: string;
+  site_code: string;
+  holder_user_ids: string[];
+  ok: boolean;
+}
+
 export interface VerifySegregatedRolesResult {
   pairs: SegregatedPairReport[];
+  required_roles: RequiredSiteRoleReport[];
   violations: SegregationViolation[];
   ok: boolean;
 }
@@ -127,6 +157,38 @@ async function activeHoldersOf(pool: pg.Pool, role: string): Promise<HolderRow[]
       WHERE a.role = $1 AND u.active = true
       ORDER BY u.external_id ASC`,
     [role],
+  );
+  return result.rows as HolderRow[];
+}
+
+/** Active site-level locations, the convention service orders check a site_id against. */
+async function activeSites(pool: pg.Pool): Promise<{ site_id: string; site_code: string }[]> {
+  const result = await pool.query(
+    `SELECT location_id AS site_id, location_code AS site_code
+       FROM location_register
+      WHERE level = 'site' AND status = 'active'
+      ORDER BY location_code ASC, location_id ASC`,
+  );
+  return result.rows as { site_id: string; site_code: string }[];
+}
+
+/**
+ * Active holders of a role whose assignment covers the site: at the site itself or at every site.
+ * The same rule findRoleHolder applies when it is given a location.
+ */
+async function activeHoldersAtSite(
+  pool: pg.Pool,
+  role: string,
+  siteId: string,
+): Promise<HolderRow[]> {
+  const result = await pool.query(
+    `SELECT DISTINCT u.user_id, u.external_id
+       FROM user_role_assignments a
+       JOIN users u ON u.user_id = a.user_id
+      WHERE a.role = $1 AND u.active = true
+        AND (a.location_id = $2 OR a.location_id = '*')
+      ORDER BY u.external_id ASC`,
+    [role, siteId],
   );
   return result.rows as HolderRow[];
 }
@@ -179,16 +241,19 @@ async function collapsingDelegations(
 }
 
 /**
- * Verifies every declared pair. Returns the findings rather than throwing: the CLI decides the exit
- * code, and an integration test can assert on the structure.
+ * Verifies every declared pair, then every required site role at every active site. Returns the
+ * findings rather than throwing: the CLI decides the exit code, and an integration test can assert
+ * on the structure.
  *
  * `today` is passed in so a test can exercise a delegation window without waiting for the calendar
- * (the Story 8.7 sweep idiom).
+ * (the Story 8.7 sweep idiom). With no active site registered the required-role section is empty
+ * and fails nothing, so a fresh database reads as it did before Story 1.16.
  */
 export async function verifySegregatedRoles(
   pool: pg.Pool,
   pairs: readonly SegregatedRolePair[] = SEGREGATED_ROLE_PAIRS,
   today: string = new Date().toISOString().slice(0, 10),
+  requiredRoles: readonly string[] = REQUIRED_SITE_ROLES,
 ): Promise<VerifySegregatedRolesResult> {
   const reports: SegregatedPairReport[] = [];
   const violations: SegregationViolation[] = [];
@@ -270,7 +335,37 @@ export async function verifySegregatedRoles(
     });
   }
 
-  return { pairs: reports, violations, ok: violations.length === 0 };
+  const requiredReports: RequiredSiteRoleReport[] = [];
+  // De-duplicated, first occurrence kept: a repeated role must not double its lines.
+  const uniqueRoles = [...new Set(requiredRoles)];
+  const sites = uniqueRoles.length > 0 ? await activeSites(pool) : [];
+  for (const role of uniqueRoles) {
+    for (const site of sites) {
+      const holders = await activeHoldersAtSite(pool, role, site.site_id);
+      if (holders.length === 0) {
+        violations.push({
+          code: 'ROLE_UNHELD_AT_SITE',
+          transaction_type: null,
+          message: `No active user holds "${role}" at site ${site.site_code}. Assign it at that site through the roles file before go-live: everything that resolves "${role}" at ${site.site_code} has nobody to reach.`,
+          details: { role, site_id: site.site_id, site_code: site.site_code },
+        });
+      }
+      requiredReports.push({
+        role,
+        site_id: site.site_id,
+        site_code: site.site_code,
+        holder_user_ids: holders.map((row) => row.user_id),
+        ok: holders.length > 0,
+      });
+    }
+  }
+
+  return {
+    pairs: reports,
+    required_roles: requiredReports,
+    violations,
+    ok: violations.length === 0,
+  };
 }
 
 /** Operator-facing rendering, shared by the CLI so the format is covered by the same tests. */
@@ -279,6 +374,11 @@ export function formatSegregatedRolesReport(result: VerifySegregatedRolesResult)
   for (const pair of result.pairs) {
     lines.push(
       `${pair.ok ? 'OK  ' : 'FAIL'} ${pair.transaction_type}: ${pair.setter_role} (${pair.setter_holder_user_ids.length} holder(s)) signed off by ${pair.approver_role} (${pair.approver_holder_user_ids.length} holder(s)), ${pair.active_band_count} active band(s)`,
+    );
+  }
+  for (const entry of result.required_roles) {
+    lines.push(
+      `${entry.ok ? 'OK  ' : 'FAIL'} ${entry.role} at ${entry.site_code}: ${entry.holder_user_ids.length} holder(s)`,
     );
   }
   for (const violation of result.violations) {

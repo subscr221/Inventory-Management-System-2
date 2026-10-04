@@ -172,7 +172,7 @@ async function resolveDispatchOrderLineSite(
 function parsePackingLines(body: Record<string, unknown>): Array<{
   sku: string;
   packed_qty: string;
-  lot_id: string;
+  lot_id: string | null;
   carton_count: number;
   actual_weight_kg: number | null;
   label_ref: string | null;
@@ -192,7 +192,8 @@ function parsePackingLines(body: Record<string, unknown>): Array<{
     const obj = line as Record<string, unknown>;
     const sku = obj['sku'];
     const packedQty = obj['packed_qty'] ?? obj['packedQty'];
-    const lotId = obj['lot_id'] ?? obj['lotId'];
+    // Not `??`: an explicit null lot_id is a value (the lot-less form), only an absent key falls back.
+    const lotId = obj['lot_id'] !== undefined ? obj['lot_id'] : obj['lotId'];
     const cartonCount = obj['carton_count'] ?? obj['cartonCount'];
     const actualWeightKg = obj['actual_weight_kg'] ?? obj['actualWeightKg'];
     const labelRef = obj['label_ref'] ?? obj['labelRef'];
@@ -211,11 +212,13 @@ function parsePackingLines(body: Record<string, unknown>): Array<{
         `packingLines[${idx}].packed_qty is required and must be a non-empty string`,
       );
     }
-    if (typeof lotId !== 'string' || !UUID_REGEX.test(lotId)) {
+    // Pilot B3: an explicit null is the lot-less form (stock that is not lot-controlled); the
+    // compliance seam decides whether the item and the confirmed pick allow it.
+    if (lotId !== null && (typeof lotId !== 'string' || !UUID_REGEX.test(lotId))) {
       throw new AppError(
         400,
         'INVALID_PARAMS',
-        `packingLines[${idx}].lot_id is required and must be a valid UUID`,
+        `packingLines[${idx}].lot_id is required and must be a valid UUID, or null for stock that is not lot-controlled`,
       );
     }
     if (typeof cartonCount !== 'number' || !Number.isInteger(cartonCount) || cartonCount < 0) {
@@ -309,34 +312,48 @@ export const postPacked: RouteHandler = async (req, res) => {
 
   const auditCtx = auditCtxFor(req, actor, 200);
 
+  // A multi-line request is all-or-nothing: every line's event joins ONE transaction, so a line the
+  // seam refuses (PACKED_LINE_NOT_PICKED, a lot-less record for a lot-controlled item) rolls back
+  // the lines before it. There is no unpack path, so a half-packed order could never be retried.
   const eventIds: string[] = [];
-  for (const line of packingLines) {
-    const result = await persistEvent(
-      {
-        stream_type: 'warehouse',
-        stream_id: dispatchOrderId,
-        event_type: 'dispatch.packed',
-        payload: {
-          packing_record_id: randomUUID(),
-          dispatch_order_id: dispatchOrderId,
-          sku: line.sku,
-          packed_qty: line.packed_qty,
-          lot_id: line.lot_id,
-          actual_weight_kg:
-            line.actual_weight_kg != null ? String(line.actual_weight_kg) : undefined,
-          label_ref: line.label_ref ?? undefined,
-          carton_count: line.carton_count,
-          packed_by: actor.userId,
+  const client = await pool.connect();
+  let committed = false;
+  try {
+    await client.query('BEGIN');
+    for (const line of packingLines) {
+      const result = await persistEvent(
+        {
+          stream_type: 'warehouse',
+          stream_id: dispatchOrderId,
+          event_type: 'dispatch.packed',
+          payload: {
+            packing_record_id: randomUUID(),
+            dispatch_order_id: dispatchOrderId,
+            sku: line.sku,
+            packed_qty: line.packed_qty,
+            lot_id: line.lot_id,
+            actual_weight_kg:
+              line.actual_weight_kg != null ? String(line.actual_weight_kg) : undefined,
+            label_ref: line.label_ref ?? undefined,
+            carton_count: line.carton_count,
+            packed_by: actor.userId,
+          },
+          metadata: {
+            correlation_id: randomUUID(),
+            actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+            occurred_at: new Date().toISOString(),
+          },
         },
-        metadata: {
-          correlation_id: randomUUID(),
-          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
-          occurred_at: new Date().toISOString(),
-        },
-      },
-      auditCtx,
-    );
-    eventIds.push(result.event_id);
+        auditCtx,
+        client,
+      );
+      eventIds.push(result.event_id);
+    }
+    await client.query('COMMIT');
+    committed = true;
+  } finally {
+    if (!committed) await client.query('ROLLBACK').catch(() => undefined);
+    client.release();
   }
 
   sendJson(res, 200, {

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../middleware/error.js';
 import { AppError, sendRequestError, withErrorHandler } from '../middleware/error.js';
-import { readJsonBody } from '../middleware/body.js';
+import { readJsonBody, readRawBody } from '../middleware/body.js';
 import { authenticateRequest } from '../middleware/auth.js';
 import { setParsedBody, setAuthContext, setTraceId } from '../middleware/context.js';
 
@@ -20,6 +20,8 @@ interface Route {
 }
 
 const BODY_BEARING_METHODS = new Set(['POST', 'PUT', 'PATCH']);
+/** Story 8.9: the one path whose PUT body is raw bytes (a photo as taken), never JSON. */
+const RAW_BODY_PATH_PREFIX = '/api/v1/attachments/';
 
 // Paths that do not require a user SSO session. SCIM authenticates via its own static
 // bearer token inside the handler; the dev-token endpoint is how a token is obtained in
@@ -110,7 +112,11 @@ export class Router {
 
     if (BODY_BEARING_METHODS.has(method)) {
       try {
-        const body = await readJsonBody(req);
+        // Story 8.9 (D14): a photo upload is the raw image as the body; every other body is JSON.
+        const body =
+          method === 'PUT' && pathname.startsWith(RAW_BODY_PATH_PREFIX)
+            ? await readRawBody(req)
+            : await readJsonBody(req);
         setParsedBody(req, body);
       } catch (err) {
         if (err instanceof AppError) {

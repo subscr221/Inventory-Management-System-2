@@ -133,8 +133,12 @@ export async function summarizeDowntime(
        JOIN asset a ON a.asset_id = d.asset_id
       WHERE w.origin = 'breakdown'
         AND d.ended_at IS NOT NULL
-        AND d.ended_at >= ($1::date AT TIME ZONE 'UTC')
-        AND d.ended_at < (($2::date + 1) AT TIME ZONE 'UTC')${assetFilter}
+        -- The explicit ::timestamp cast before AT TIME ZONE is required: Postgres resolves a bare
+        -- date AT TIME ZONE 'UTC' via the direct date->timestamptz implicit cast (which applies
+        -- the SESSION timezone, e.g. IST) rather than the intended "naive midnight interpreted as
+        -- UTC" overload, silently shifting this boundary by the session's UTC offset.
+        AND d.ended_at >= ($1::date::timestamp AT TIME ZONE 'UTC')
+        AND d.ended_at < (($2::date + 1)::timestamp AT TIME ZONE 'UTC')${assetFilter}
       GROUP BY ${scopeExpr}
       ORDER BY ${scopeExpr} ASC`,
     values,

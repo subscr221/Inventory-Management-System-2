@@ -30,6 +30,7 @@ import {
   QC_BATCH_RELEASE_RECORDED,
   QC_NCR_OUTCOME_RECORDED,
   QC_HOLD_PLACED,
+  buildQcHoldPlacedEnvelope,
   QC_HOLD_RELEASED,
   QC_NCR_RAISED,
   QC_CAPA_OPENED,
@@ -87,6 +88,8 @@ import type { QcNcrOutcome } from '../../read/projections/qc_ncr.js';
 import { listQcLotSplitsByParent } from '../../read/projections/qc_lot_split.js';
 import { getQcBatchReleaseByLotId } from '../../read/projections/qc_batch_release.js';
 import { getQcRetentionSampleByLotId } from '../../read/projections/qc_retention_sample.js';
+import { getLocationById } from '../../read/projections/location_register.js';
+import { stampActedLocation } from './actor-stamp.js';
 import { getLotById, getLotByNumberAndSku } from '../../read/projections/lot_master.js';
 import { getQcInspectionTaskByLotId } from '../../read/projections/qc_inspection_task.js';
 import {
@@ -1893,7 +1896,7 @@ async function releaseView(task: {
 const logRetentionSampleBase: RouteHandler = async (req, res, params) => {
   const body = requireBody(req, res);
   if (!body) return;
-  const actor = actorContext(req);
+  let actor = actorContext(req);
   const now = new Date().toISOString();
   let taskId = '';
   let lotId: string | null = null;
@@ -1904,6 +1907,14 @@ const logRetentionSampleBase: RouteHandler = async (req, res, params) => {
     lotId = task.lot_id;
     siteId = task.site_id;
     assertWriteSiteAccess(req, task.site_id);
+    // Pilot G2 (owner ruling 2026-09-22): the log acts at ONE location, the bin the sample is kept
+    // in, so that bin is the audit stamp. Only an ACTIVE location of the task's own site is
+    // stamped; anything else keeps the site stamp and is left to the seam's refusal.
+    if (isUuid(body['location_id'])) {
+      const storage = await getLocationById(body['location_id']);
+      const valid = storage && storage.status === 'active' && storage.site_id === task.site_id;
+      actor = stampActedLocation(req, actor, 'qc', valid ? storage.location_id : undefined);
+    }
 
     if (!isPositiveQuantityInput(body['quantity'])) {
       throw new AppError(400, 'INVALID_PARAMS', 'quantity must be a positive decimal string', {
@@ -2317,20 +2328,15 @@ const placeQcHoldBase: RouteHandler = async (req, res, _params) => {
     const defectCode = optionalNullableString(body, 'defect_code');
     const holdId = randomUUID();
     const persisted = await persistEvent(
-      {
-        stream_type: 'qc',
-        stream_id: holdId,
-        event_type: QC_HOLD_PLACED,
-        payload: {
-          hold_id: holdId,
-          lot_id: lot.lot_id,
-          hold_reason: (body['hold_reason'] as string).trim(),
-          ...(defectCode !== null ? { defect_code: defectCode } : {}),
-        },
-        metadata: qcMetadata(actor, now),
-        idempotency_key: idempotencyKeyFrom(body),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
+      buildQcHoldPlacedEnvelope({
+        holdId,
+        lotId: lot.lot_id,
+        holdReason: (body['hold_reason'] as string).trim(),
+        defectCode,
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurredAt: now,
+        idempotencyKey: idempotencyKeyFrom(body),
+      }),
       auditCtxFor(req, actor, 201),
     );
     const persistedHoldId = replayIdOrReject(persisted, QC_HOLD_PLACED, 'hold_id');

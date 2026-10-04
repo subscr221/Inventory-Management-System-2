@@ -1,0 +1,15 @@
+Simulated pilot day  2026-09-23-1243
+
+== password-grant client
+   compose-keycloak-1 Copying /opt/ims/deploy/keycloak/client-ims-cli.json to compose-keycloak-1:/tmp/client-ims-cli.json
+== API day (pilot-day.ts)
+  PASS: 28/28 steps passed
+== Daily check
+  WARN  refused    2 open refused captures (department head to resolve)
+  FAIL  backup     newest nightly is 55 h old: ims-basebackup-202609210230-nightly.tar.gz
+  FAIL  backuplog  /bin/sh: 1: /opt/ims/deploy/backup/staging-basebackup.sh: Permission denied
+  WARN  tasks      open tasks with nobody assigned (type, count, oldest in hours):
+  RESULT: FAIL, act before users start
+
+DAY RESULT: FAIL (api=0 browser=0 check=2), details in _bmad-output/pilot-sim/2026-09-23-1243-*.txt
+== password-grant client removal

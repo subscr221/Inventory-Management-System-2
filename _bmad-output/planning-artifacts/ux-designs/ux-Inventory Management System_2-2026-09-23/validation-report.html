@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UX Design Validation: Inventory Management System_2</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --surface: #ffffff;
+    --border: #e7e5e4;
+    --text: #1c1917;
+    --muted: #78716c;
+
+    --verdict-strong: #16a34a;
+    --verdict-adequate: #65a30d;
+    --verdict-thin: #d97706;
+    --verdict-broken: #dc2626;
+
+    --sev-low: #64748b;
+    --sev-medium: #ca8a04;
+    --sev-high: #ea580c;
+    --sev-critical: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    font-size: 15px;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  header.report-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .title h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .title .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  .synthesis {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin-bottom: 24px;
+    font-size: 15.5px;
+  }
+  .synthesis p { margin: 0 0 10px; }
+  .synthesis p:last-child { margin-bottom: 0; }
+
+  .dimension-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+  .dim-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .dim-card .dim-name { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .dim-card .dim-verdict { font-size: 14px; font-weight: 600; }
+
+  section.dimension, section.reviewer-section { margin-bottom: 14px; }
+  section.dimension details, section.reviewer-section details {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  section summary {
+    padding: 14px 20px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  section summary::-webkit-details-marker { display: none; }
+  section summary::before {
+    content: "▸";
+    display: inline-block;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+  }
+  section details[open] summary::before { transform: rotate(90deg); }
+  section summary h2 {
+    display: inline;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    flex: 1;
+  }
+  .verdict-pill {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: white;
+  }
+  .verdict-strong { background: var(--verdict-strong); }
+  .verdict-adequate { background: var(--verdict-adequate); }
+  .verdict-thin { background: var(--verdict-thin); }
+  .verdict-broken { background: var(--verdict-broken); }
+
+  .dim-body { padding: 4px 20px 18px; }
+  .dim-judgment { color: var(--text); font-size: 14.5px; }
+  .dim-judgment p { margin: 0 0 10px; }
+
+  .findings-list { padding: 0 20px 4px; }
+  article.finding {
+    padding: 14px 0;
+    border-top: 1px solid var(--border);
+  }
+  article.finding:first-child { border-top: none; }
+  article.finding header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .badge {
+    font-size: 10.5px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+  }
+  .badge-sev-low { background: rgba(100, 116, 139, 0.12); color: var(--sev-low); }
+  .badge-sev-medium { background: rgba(202, 138, 4, 0.14); color: var(--sev-medium); }
+  .badge-sev-high { background: rgba(234, 88, 12, 0.14); color: var(--sev-high); }
+  .badge-sev-critical { background: rgba(220, 38, 38, 0.14); color: var(--sev-critical); }
+  .finding-title { margin: 0; font-size: 15px; font-weight: 500; flex: 1; min-width: 200px; }
+  .finding-location { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; color: var(--muted); }
+  .finding-note, .finding-fix { margin-top: 6px; font-size: 14px; }
+  .finding-fix strong { color: var(--muted); font-weight: 500; }
+
+  .reviewer-source {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  .mechanical {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-top: 24px;
+    font-size: 14px;
+  }
+  .mechanical h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .mechanical ul { margin: 0; padding-left: 20px; }
+  .mechanical li { margin-bottom: 4px; color: var(--text); }
+
+  footer.report-footer {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  footer .meta { display: flex; gap: 24px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+  <div class="container">
+
+    <header class="report-header">
+      <div class="title">
+        <h1>Inventory Management System_2 — UX Design Validation Report</h1>
+        <div class="subtitle">_bmad-output/planning-artifacts/ux-designs/ux-Inventory Management System_2-2026-09-23/ (DESIGN.md + EXPERIENCE.md)</div>
+      </div>
+    </header>
+
+    <div class="synthesis">
+      <p>The spine pair is a usable contract: tokens are complete and hex-committed, contrast targets are stated, every mock is linked and accounted for, and the decision trail to <code>.memlog.md</code> is real. Two gaps carry downstream weight: UJ-WEIGH-01 has behavioural rules but no Key Flow, and 13 [ASSUMPTION] tags remain in what is presented as a resolved contract, so a consumer cannot tell committed rules from guesses. With the weighbridge flow written, the match card given a visual spec, and the assumptions either ruled or moved to open items, this pair finalizes cleanly.</p>
+    </div>
+
+    <div class="dimension-summary">
+      <div class="dim-card">
+        <div class="dim-name">Flow coverage</div>
+        <div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Token completeness</div>
+        <div class="dim-verdict" style="color: var(--verdict-strong)">strong</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Component coverage</div>
+        <div class="dim-verdict" style="color: var(--verdict-thin)">thin</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">State coverage</div>
+        <div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Visual reference coverage</div>
+        <div class="dim-verdict" style="color: var(--verdict-strong)">strong</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Bloat &amp; overspecification</div>
+        <div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Inheritance discipline</div>
+        <div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Shape fit</div>
+        <div class="dim-verdict" style="color: var(--verdict-strong)">strong</div>
+      </div>
+    </div>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Flow coverage</h2>
+          <span class="verdict-pill verdict-adequate">adequate</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>Checked the four PRD user journeys (UJ-GATE-01, UJ-WEIGH-01, UJ-PUT-01, UJ-IND-01, per epics.md "UX Design Requirements", line 280, and the FR lines that realize them) against the five Key Flows in EXPERIENCE.md. UJ-GATE-01 is fully covered by "Ramesh at the gate at 6am" (named protagonist, sequenced beats, labelled climax, offline and no-QR and unlisted-supplier failure paths). UJ-PUT-01 is covered as the closing beat of "Suresh accepts a delivery" plus the Suggested rack pattern. The damage-concurrence and standing-approval flows cover the governance rules that dominate this product.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-high">high</span>
+              <h3 class="finding-title">UJ-WEIGH-01 has no Key Flow</h3>
+              <span class="finding-location">EXPERIENCE.md Tables 3 and 4</span>
+            </header>
+            <div class="finding-note">Weighbridge capture exists only as a Component Patterns row and the "Stamp overdue" state; there is no protagonist, sequence, climax or failure walk for weigh-in, weigh-out, AUTO vs MANUAL, or a tolerance breach. It was folded in on 2026-09-26 without a flow.</div>
+            <div class="finding-fix"><strong>Fix:</strong> add a sixth flow (weighbridge operator, gross then tare, breach raises the exception task, offline queue as the climax or failure).</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">UJ-IND-01's normal approval path has no flow</h3>
+              <span class="finding-location">EXPERIENCE.md Key Flows</span>
+            </header>
+            <div class="finding-note">"Ramu collects cleaning gear" covers only the standing-approval bypass; raising a requisition that goes to the head of department, the approver deciding in the inbox, and the requester seeing live status (the "never chase, never raise it twice" promise in epics.md Epic 4 goal) is never walked.</div>
+            <div class="finding-fix"><strong>Fix:</strong> extend the Ramu flow with a non-granted line, or add a short approver-side flow.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Flows are prose paragraphs, not numbered steps</h3>
+              <span class="finding-location">EXPERIENCE.md Key Flows</span>
+            </header>
+            <div class="finding-note">The calibration examples number every step; numbered steps are what story-dev extracts acceptance criteria from.</div>
+            <div class="finding-fix"><strong>Fix:</strong> renumber each flow as an ordered list, keeping the climax marker.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Flow 5 has no named protagonist</h3>
+              <span class="finding-location">EXPERIENCE.md Key Flow 5</span>
+            </header>
+            <div class="finding-note">"The site head grants and prunes" names no actor.</div>
+            <div class="finding-fix"><strong>Fix:</strong> name the site head as the other flows name their actors.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Flows 4 and 5 carry no failure path</h3>
+              <span class="finding-location">EXPERIENCE.md Key Flows 4 and 5</span>
+            </header>
+            <div class="finding-note">Over-cap fallback and offline grant attempt exist in Tables 3 and 4 but not in the flows.</div>
+            <div class="finding-fix"><strong>Fix:</strong> one failure sentence each.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Token completeness</h2>
+          <span class="verdict-pill verdict-strong">strong</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>Extracted every frontmatter token in DESIGN.md and every <code>{path.to.token}</code> reference in the prose of both spines. All references resolve: colors (including the four preset accent families), typography roles, rounded scale, spacing scale and named targets, and all 13 component token objects referenced from EXPERIENCE.md. Every color token has a hex value; no CRITICAL misses. Contrast targets are stated for the load-bearing pairs (side-text 11.1:1, side-muted 5.5:1, text 15.3:1, text-muted 6.3:1, white on all four accents at 4.5:1, and the 3:1 non-text rationale behind <code>accent-on-dark</code>). No dark mode is declared, so light/dark pairs are not applicable; the dark sidebar is handled by dedicated <code>side-*</code> tokens.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Sidebar prose hard-codes pixel values that tokens already cover</h3>
+              <span class="finding-location">DESIGN.md Components, Sidebar</span>
+            </header>
+            <div class="finding-note">Sidebar prose hard-codes "232px wide with 52px items and 16px labels" although <code>{spacing.sidebar-width-touch}</code>, <code>{spacing.nav-item-touch}</code> and <code>{typography.body-touch}</code> exist.</div>
+            <div class="finding-fix"><strong>Fix:</strong> reference the tokens; <code>sidebar-width-touch</code> is currently defined but never referenced.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Elevation values are raw with no shadow tokens</h3>
+              <span class="finding-location">DESIGN.md Elevation &amp; Depth</span>
+            </header>
+            <div class="finding-note">Elevation values are raw ("0 -4px 12px at 6% ink") with no shadow tokens. Acceptable under the spec, but a consumer building the token layer must invent names.</div>
+            <div class="finding-fix"><strong>Fix:</strong> optionally add a <code>shadow</code> scale or state that shadows stay literal.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details open>
+        <summary>
+          <h2>Component coverage</h2>
+          <span class="verdict-pill verdict-thin">thin</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>Listed every component name used in either spine and checked for a DESIGN.md Components visual spec and an EXPERIENCE.md Table 3 behavioural spec. Both sides exist for: buttons, status pills, scan bar, inbox card, stepper, sync badge, bottom nav, icon rail, sidebar, approval-class chips, concurrence keys card. Behaviour-only rows with no visual spec: match card, supplier picker, counted-qty line, weighbridge capture, label print queue, inspect-on-opening flag, suggested rack. Of these, the last three are actions or flags that plausibly compose from existing components; the first four are drawn surfaces a builder must render.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-high">high</span>
+              <h3 class="finding-title">Match card has no visual spec</h3>
+              <span class="finding-location">DESIGN.md Components; EXPERIENCE.md Table 3, Flow 1</span>
+            </header>
+            <div class="finding-note">It is the primary gate feedback (the toast was removed in its favour), appears in Table 3, Interaction Primitives, Accessibility Floor and Flow 1, yet DESIGN.md Components never describes its anatomy, colors or sizing.</div>
+            <div class="finding-fix"><strong>Fix:</strong> add a Match card entry (surface card, accept and reject affordances, side-by-side "Scan again" and "Type challan number" at 48px, states for matched, no match, typed).</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Weighbridge capture has no visual spec</h3>
+              <span class="finding-location">EXPERIENCE.md Table 3</span>
+            </header>
+            <div class="finding-note">The "Trucks on site" list, weigh-in and weigh-out cards, AUTO vs MANUAL reading and the breach banner are behaviour-only.</div>
+            <div class="finding-fix"><strong>Fix:</strong> one Components entry naming which existing primitives it composes and what is bespoke.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Counted-qty line and supplier picker have behavioural rules but no visual rows</h3>
+              <span class="finding-location">EXPERIENCE.md Table 3</span>
+            </header>
+            <div class="finding-note">The counted-qty line carries the tolerance-band computation and its excess message; the picker carries the "Unlisted supplier" affordance.</div>
+            <div class="finding-fix"><strong>Fix:</strong> add both to DESIGN.md Components or state explicitly that they compose from listed primitives.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Scan component naming drifts</h3>
+              <span class="finding-location">DESIGN.md Components; EXPERIENCE.md Table 3</span>
+            </header>
+            <div class="finding-note">DESIGN.md says "Scan bar", EXPERIENCE.md Table 3 says "Scan sink" and separately "Scan anything bar", all apparently the same <code>{components.scan-bar}</code> in different placements.</div>
+            <div class="finding-fix"><strong>Fix:</strong> one name, with the stores-home pinned instance described as a placement of it.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>State coverage</h2>
+          <span class="verdict-pill verdict-adequate">adequate</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>Walked the nine surfaces of Table 1 against Table 4 (State Patterns) and the per-surface rules of Table 5. Offline and pending sync, approval-offline, on hold, printer not ready, IRN block, empty inbox, over cap and stamp overdue are all specified with concrete treatments and exact microcopy. Empty and offline are covered generically for every surface; focus treatment lives in DESIGN.md (focus halo).</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">No permission-denied state anywhere</h3>
+              <span class="finding-location">EXPERIENCE.md Table 4</span>
+            </header>
+            <div class="finding-note">Module visibility derives from the access matrix (Q10), so a denied deep link or a hat switch mid-task will happen; no surface says what renders.</div>
+            <div class="finding-fix"><strong>Fix:</strong> one Table 4 row (plain statement of the missing permission, route home).</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Floor tasks offline behaviour is unstated</h3>
+              <span class="finding-location">EXPERIENCE.md Table 4, offline row</span>
+            </header>
+            <div class="finding-note">Table 4's offline row enumerates gate, stores, QC observations, requisitions and damage reports; picking, packing and dispatch are absent, and the IRN row already says the IRN check needs the network.</div>
+            <div class="finding-fix"><strong>Fix:</strong> state whether pick and pack capture queue offline or require connection.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">No cold-load or skeleton treatment for data-heavy desk surfaces</h3>
+              <span class="finding-location">EXPERIENCE.md Table 4</span>
+            </header>
+            <div class="finding-note">The manager overview and other data-heavy desk surfaces have no cold-load treatment.</div>
+            <div class="finding-fix"><strong>Fix:</strong> one row (cached tiles with age stamp, or skeleton).</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Sync failure shows the err badge but no recovery behaviour</h3>
+              <span class="finding-location">DESIGN.md Sync badge; EXPERIENCE.md Table 4</span>
+            </header>
+            <div class="finding-note">Sync failure shows the <code>err</code> badge but no recovery behaviour (retry, surfaced where).</div>
+            <div class="finding-fix"><strong>Fix:</strong> one sentence in Table 4.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Visual reference coverage</h2>
+          <span class="verdict-pill verdict-strong">strong</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>Listed all ten files in <code>.working/</code>: color-themes-1, key-approvals, key-desk, key-floor, key-gate-entry, key-maintenance, key-qc, key-requisitions, key-stores, key-shopfloor. Nine are linked inline: Table 1 links each surface mock and names the surface it renders, the colour board is linked from DESIGN.md Colors and EXPERIENCE.md IA, and DESIGN.md links gate-entry, stores, desk, requisitions, approvals and qc at the exact sections they illustrate. key-shopfloor is named as retired in EXPERIENCE.md IA, so no orphans. Spine-wins-on-conflict is stated once in each spine's opening paragraph. No unspecific references found.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">All links point into .working/; promotion will break them</h3>
+              <span class="finding-location">both spines, 11 links</span>
+            </header>
+            <div class="finding-note">Promotion to <code>mockups/</code> is a pending Finalize step and will break every link in both spines.</div>
+            <div class="finding-fix"><strong>Fix:</strong> rewrite paths at promotion time as one mechanical pass (11 links across the two files).</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Bloat &amp; overspecification</h2>
+          <span class="verdict-pill verdict-adequate">adequate</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>Both spines are lean (298 and 235 lines) and table-first. DESIGN.md prose carries editorial voice where allowed and stays behind tokens; the only pixel restatement is the sidebar (noted in Token completeness). The invented domain sections (Receiving and Damage Governance, Requisitions and Standing Approvals, Approvals and Delegation of Authority) carry rules that gate UI states, so they earn their place. Backend Dependencies is genuinely useful to architecture and story-dev.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Resolved Questions table restates 14 rulings already folded into the body</h3>
+              <span class="finding-location">EXPERIENCE.md Resolved Questions</span>
+            </header>
+            <div class="finding-note">The rulings are already folded into the body and recorded in <code>.memlog.md</code>. No downstream consumer extracts from it, and it will drift from the body.</div>
+            <div class="finding-fix"><strong>Fix:</strong> replace with one line pointing at <code>.memlog.md</code>, or delete once status goes final.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Remaining Actions is process state, not contract</h3>
+              <span class="finding-location">EXPERIENCE.md Remaining Actions</span>
+            </header>
+            <div class="finding-note">Process state does not belong in the contract document.</div>
+            <div class="finding-fix"><strong>Fix:</strong> move to <code>.memlog.md</code>.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Device switcher row documents a mock-only control</h3>
+              <span class="finding-location">EXPERIENCE.md Table 3</span>
+            </header>
+            <div class="finding-note">It is flagged "Not a product feature", but a table a consumer source-extracts should not need per-row exclusions.</div>
+            <div class="finding-fix"><strong>Fix:</strong> move to a mock legend or a footnote under Table 1.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Inheritance discipline</h2>
+          <span class="verdict-pill verdict-adequate">adequate</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>All four sources in the EXPERIENCE.md frontmatter resolve on disk (epics.md, ARCHITECTURE-SPINE.md, the access matrix draft, the PRD folder). Role names in Table 1 use the access-matrix snake_case forms, and the Backend Dependencies section correctly flags the receiving_supervisor vs unloading_supervisor gap. EXPERIENCE.md token references all resolve to DESIGN.md tokens by name. Every ruled decision traces to a <code>.memlog.md</code> entry.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-high">high</span>
+              <h3 class="finding-title">13 [ASSUMPTION] tags remain across the pair</h3>
+              <span class="finding-location">DESIGN.md (3); EXPERIENCE.md (10)</span>
+            </header>
+            <div class="finding-note">3 in DESIGN.md: sync badge, approval-chip colours, concurrence pill colours; 10 in EXPERIENCE.md: stepper lock, maintenance offline, lot-wide accept block, IRN block, mixed-requisition split, forward-above-band, and four Table 5 layout cells. The spine presents itself as resolved (all 14 questions ruled), so a consumer cannot tell committed contract from educated guess, and several are load-bearing (IRN block gates dispatch; the mixed-requisition split shapes the requisition data model).</div>
+            <div class="finding-fix"><strong>Fix:</strong> rule each one in <code>.memlog.md</code> and drop the tag, or collect them in an explicit Open Assumptions list so the contract's committed surface is unambiguous.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Source UJ identifiers never appear in EXPERIENCE.md</h3>
+              <span class="finding-location">EXPERIENCE.md Key Flows</span>
+            </header>
+            <div class="finding-note">UJ-GATE-01, UJ-WEIGH-01, UJ-PUT-01 and UJ-IND-01 never appear, so flows cannot be mapped to requirements without inference.</div>
+            <div class="finding-fix"><strong>Fix:</strong> cite the UJ id in each Key Flow heading or first line.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Component names drift between the spines</h3>
+              <span class="finding-location">both spines</span>
+            </header>
+            <div class="finding-note">"Scan bar" vs "Scan sink" vs "Scan anything bar", "Inbox card" vs "Task inbox", "Approval-class chips" vs "Standing approval chips". Token references keep them resolvable, but a text search on the name misses half the spec.</div>
+            <div class="finding-fix"><strong>Fix:</strong> pick one name per component and use it in both files.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Role name forms mix registry and prose</h3>
+              <span class="finding-location">EXPERIENCE.md tables</span>
+            </header>
+            <div class="finding-note">"department_head" vs "head of department", "site head / warehouse_manager", and the Standing approvals row uses prose-only names.</div>
+            <div class="finding-fix"><strong>Fix:</strong> registry name first, prose alias in parentheses.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Neither spine carries a glossary</h3>
+              <span class="finding-location">EXPERIENCE.md Foundation</span>
+            </header>
+            <div class="finding-note">Terms (standing approval, self-approval limit, concurrence keys) are used consistently, but the identical-glossary check cannot be performed.</div>
+            <div class="finding-fix"><strong>Fix:</strong> optional short glossary in EXPERIENCE.md Foundation.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Shape fit</h2>
+          <span class="verdict-pill verdict-strong">strong</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>DESIGN.md body sections are exactly the canonical eight in canonical order: Brand &amp; Style, Colors, Typography, Layout &amp; Spacing, Elevation &amp; Depth, Shapes, Components, Do's and Don'ts. EXPERIENCE.md carries every required default: Foundation, Information Architecture, Voice and Tone, Component Patterns, State Patterns, Interaction Primitives, Accessibility Floor, Key Flows, plus Responsive and Platform (present in the shadcn example, appropriate for a four-class product). The invented domain sections earn their place as ruled behaviour; the two process sections do not (see Bloat &amp; overspecification).</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Resolved Questions and Remaining Actions dilute the contract's ending</h3>
+              <span class="finding-location">EXPERIENCE.md, after Key Flows</span>
+            </header>
+            <div class="finding-note">They sit after Key Flows; the examples end on flows.</div>
+            <div class="finding-fix"><strong>Fix:</strong> covered by the Bloat &amp; overspecification fixes.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <div class="mechanical">
+      <h3>Mechanical notes</h3>
+      <ul>
+        <li>All four frontmatter sources resolve. Note that the PRD folder's top level holds only addendum.md, reconcile-scm-requirements.md and review-rubric-walker.md; the main prd.md (where the four UJs are worked) sits in <code>archive/</code>. A consumer pointed at the folder may miss it; consider citing <code>archive/prd.md</code> explicitly.</li>
+        <li>All <code>{path.to.token}</code> cross-references in both files resolve against DESIGN.md frontmatter; no broken token paths found. <code>spacing.sidebar-width-touch</code> is defined but never referenced.</li>
+        <li>Name inconsistencies to normalize: Scan bar / Scan sink / Scan anything bar; Inbox card / Task inbox; Approval-class chips / Standing approval chips; department_head / head of department.</li>
+        <li>Eleven mock links across the two spines point into <code>.working/</code> and must be rewritten when mocks are promoted to <code>mockups/</code>.</li>
+        <li>No Mermaid blocks in either file; nothing to validate there.</li>
+        <li>Frontmatter completeness: DESIGN.md has name, description, status, created, updated; EXPERIENCE.md has name, status, created, updated, sources. Both consistent with the examples (EXPERIENCE.md needs no description).</li>
+        <li>key-shopfloor.html remains on disk in <code>.working/</code> although retired; harmless now, but exclude it from promotion.</li>
+      </ul>
+    </div>
+
+    <footer class="report-footer">
+      <div class="meta">
+        <span>Rubric: review-rubric.md</span>
+        <span>Generated: 2026-09-26T02:38:55</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

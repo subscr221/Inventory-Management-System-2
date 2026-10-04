@@ -1,4 +1,8 @@
+'use client';
+
 import { SyncStatusBadge } from './sync-status-badge';
+import { BottomNav } from './bottom-nav';
+import { IconRail } from './icon-rail';
 import { TestCaptureButton } from './test-capture-button';
 import { SyncFailureList, type SyncFailureItem } from './sync-failure-list';
 import { ServiceWorkerRegistration } from './service-worker-registration';
@@ -18,17 +22,21 @@ import {
   type ClosureCatalogue,
   type WorkOrderClosureSubmitInput,
 } from './work-order-closure-capture';
+import { GlobalSearch } from './search/global-search';
+import { EnhancedDashboard } from './dashboard/enhanced-dashboard';
+import { WorkflowsView } from './enterprise/workflows-view';
+import { AccessControlView } from './enterprise/access-control-view';
+import { ReportsView } from './enterprise/reports-view';
+import { SampleDataNotice } from './enterprise/sample-data-notice';
+import { CheckStock } from './check-stock';
+import { MyRequests } from './my-requests';
+import { ReportDamage, type ReportDamageProps } from './report-damage';
+import { DamageCases } from './damage-cases';
+import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
+import { useDeviceClass, type DeviceClass } from '../lib/use-device-class';
 import type { SyncUiState } from '../sync/sync-status';
 import type { CachedReservationRow, CachedWorkOrderRow, WorklistMeter } from '../local-db/worklist';
-
-const NAVIGATION: Record<string, { href: string; label: MessageKey }> = {
-  Dashboard: { href: '#dashboard', label: 'nav.dashboard' },
-  Frontline: { href: '#frontline', label: 'nav.frontline' },
-  // Story 1.14 (Binding Decision 4): a real path, rendered only when the server's bootstrap
-  // `navigation` names it (the filter below drops every name the server did not send).
-  'Refused captures': { href: '/supervisor/refused-captures', label: 'nav.refusedCaptures' },
-};
 
 /**
  * Story 7.8: everything the maintenance view needs, injected by the edge client. The bootstrap
@@ -56,8 +64,11 @@ export interface MaintenanceShellProps {
 export interface AppShellProps {
   userName: string;
   siteName: string;
+  role?: string;
   syncState: SyncUiState;
   firstSyncRequired?: boolean;
+  /** The account has no single concrete site: bootstrap refused, nothing will sync until fixed. */
+  siteRefusal?: 'no_site' | 'ambiguous_site' | null;
   failures?: SyncFailureItem[];
   navigation?: string[];
   pendingCount?: number;
@@ -69,11 +80,33 @@ export interface AppShellProps {
   onLoadCrossDockTask?: (taskId: string) => Promise<CrossDockTaskContext | null>;
   onConfirmCrossDock?: (task: CrossDockTaskContext, stagingBinCode: string) => Promise<string>;
   onSubmitIndent?: (input: IndentSubmitInput) => Promise<string>;
+  /** Story 8.9: the report-damage capture and its outbox settlement, injected by the edge client. */
+  reportDamage?: ReportDamageProps;
+  /** Story 8.9: the signed-in user, for the damage cases workbench grouping. */
+  userId?: string;
   /**
    * Story 7.8: 'frontline' (default, the Story 1.8 shell) or 'maintenance' (the technician page).
    * Story 1.14: 'refused-captures' (the site supervisor's screen).
+   * Enterprise: 'workflows', 'access-control', and 'reports' (Phase 3/4 management views).
+   * Story 1.15: 'new-requisition', 'check-stock' and 'my-requests' (the employee base screens).
+   * Story 8.9: 'report-damage' and 'damage-cases'.
    */
-  view?: 'frontline' | 'maintenance' | 'refused-captures';
+  view?:
+    | 'frontline'
+    | 'dashboard'
+    | 'maintenance'
+    | 'refused-captures'
+    | 'workflows'
+    | 'access-control'
+    | 'reports'
+    | BaseView;
+  /** Story 1.15: navigator.onLine as last seen by the edge client (the base screens are online-only). */
+  online?: boolean;
+  /**
+   * Story 1.15 (Task 3.6): true once `navigation` came from a live bootstrap. Only then does a
+   * missing entry mean "no access"; the offline cached menu is a placeholder, not a verdict.
+   */
+  navigationConfirmed?: boolean;
   maintenance?: MaintenanceShellProps;
   /** Story 1.14: what the refused-captures screen needs, injected by the edge client. */
   refusedCaptures?: RefusedCapturesScreenProps;
@@ -93,6 +126,44 @@ export interface AppShellProps {
   waitingForOthers?: Array<{ userName: string; count: number }>;
 }
 
+type BaseView = 'new-requisition' | 'check-stock' | 'my-requests' | 'report-damage' | 'damage-cases';
+
+/** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
+const BASE_VIEW_ENTRY: Record<BaseView, string> = {
+  'new-requisition': 'New requisition',
+  'check-stock': 'Check stock',
+  'my-requests': 'My requests',
+  // Story 8.9 (Task 11.1): a deep link without the entry gets the same no-access card.
+  'report-damage': 'Report damage',
+  'damage-cases': 'Damage cases',
+};
+
+function isBaseView(view: string): view is BaseView {
+  return view in BASE_VIEW_ENTRY;
+}
+
+/** The nav registry entry each view belongs to (null: reached from a link, not from the nav). */
+const VIEW_NAV_ENTRY: Record<NonNullable<AppShellProps['view']>, string | null> = {
+  ...BASE_VIEW_ENTRY,
+  frontline: 'Frontline',
+  dashboard: 'Dashboard',
+  maintenance: null,
+  'refused-captures': 'Refused captures',
+  workflows: 'Workflows',
+  'access-control': 'Access control',
+  reports: 'Reports',
+};
+
+type NavSurface = 'bottom-nav' | 'icon-rail' | 'sidebar';
+
+/** EXPERIENCE.md navigation by class: the device class picks the surface, never the role. */
+const NAV_SURFACE: Record<DeviceClass, NavSurface> = {
+  handheld: 'bottom-nav',
+  tablet: 'icon-rail',
+  desktop: 'sidebar',
+  'desktop-touch': 'sidebar',
+};
+
 function countMessage(count: number, one: MessageKey, many: MessageKey): string {
   return t(count === 1 ? one : many).replace('{count}', String(count));
 }
@@ -100,8 +171,10 @@ function countMessage(count: number, one: MessageKey, many: MessageKey): string 
 export function AppShell({
   userName,
   siteName,
+  role = '',
   syncState,
   firstSyncRequired = false,
+  siteRefusal = null,
   failures = [],
   navigation = ['Dashboard', 'Frontline'],
   pendingCount = 0,
@@ -113,7 +186,11 @@ export function AppShell({
   onLoadCrossDockTask,
   onConfirmCrossDock,
   onSubmitIndent,
+  reportDamage,
+  userId = '',
   view = 'frontline',
+  online = true,
+  navigationConfirmed = false,
   maintenance,
   refusedCaptures,
   onDismissFailure,
@@ -124,63 +201,102 @@ export function AppShell({
   signOutIncomplete = false,
   waitingForOthers = [],
 }: AppShellProps) {
-  const links = navigation.flatMap((item) => (NAVIGATION[item] ? [NAVIGATION[item]] : []));
+  const navEntries = entriesFor(navigation);
+  const deviceClass = useDeviceClass();
+  const navSurface = NAV_SURFACE[deviceClass];
+  const activeEntry = VIEW_NAV_ENTRY[view];
+  const activeHref = navEntries.find((entry) => entry.name === activeEntry)?.href ?? null;
   return (
-    <div className="edge-shell">
+    <div className="edge-shell" data-device-class={deviceClass}>
       <ServiceWorkerRegistration />
       <a className="skip-link" href="#main-content">
         {t('app.skipToContent')}
       </a>
-      <header className="edge-header">
-        <div className="edge-brand">
-          <h1>{t('app.title')}</h1>
-          <p>
-            {userName} · {siteName}
-          </p>
-        </div>
-        <div className="edge-header-actions">
-          <SyncStatusBadge state={syncState} />
+      <div className="edge-layout">
+        {navSurface === 'icon-rail' ? (
+          <IconRail
+            entries={navEntries}
+            activeHref={activeHref}
+            onSignOut={onSignOut}
+            signingOut={signingOut}
+          />
+        ) : null}
+        {navSurface === 'sidebar' ? (
+        <aside className="edge-sidebar">
+          <div className="edge-sidebar-brand">
+            <h1 className="brand-name">{t('app.title')}</h1>
+          </div>
+          <p className="edge-sidebar-site">{siteName}</p>
+          <div className="edge-sidebar-section">
+            <p className="edge-sidebar-caption">{userName}</p>
+            {navEntries.length > 0 ? (
+              <ul className="edge-sidebar-nav">
+                {navEntries.map((link) => (
+                  <li key={link.href}>
+                    <a className="edge-sidebar-item" href={link.href}>
+                      {t(link.label as MessageKey)}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
           {onSignOut ? (
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={onSignOut}
-              disabled={signingOut}
-              aria-busy={signingOut}
-            >
-              {t('auth.signOut')}
-            </button>
+            <div className="edge-sidebar-footer">
+              <button
+                type="button"
+                className="edge-sidebar-item"
+                onClick={onSignOut}
+                disabled={signingOut}
+                aria-busy={signingOut}
+              >
+                {t('auth.signOut')}
+              </button>
+            </div>
           ) : null}
-        </div>
-      </header>
-      {signOutBlockedCount > 0 ? (
-        <p className="auth-sign-out-blocked" role="status" aria-live="polite">
-          {countMessage(signOutBlockedCount, 'auth.signOutBlockedOne', 'auth.signOutBlocked')}
-        </p>
-      ) : null}
-      {signOutIncomplete ? (
-        <p className="auth-sign-out-blocked" role="alert">
-          {t('auth.signOutIncomplete')}
-        </p>
-      ) : null}
-      {waitingForOthers.map((entry, index) => (
-        <p key={`${entry.userName}-${index}`} className="auth-sign-out-blocked" role="status">
-          {countMessage(entry.count, 'auth.waitingForOwnerOne', 'auth.waitingForOwner').replace(
-            '{name}',
-            entry.userName || t('auth.unknownOwner'),
-          )}
-        </p>
-      ))}
-      {links.length > 0 ? (
-        <nav className="edge-nav" aria-label={t('nav.label')}>
-          {links.map((link) => (
-            <a key={link.href} href={link.href}>
-              {t(link.label)}
-            </a>
+        </aside>
+        ) : null}
+        <div className="edge-content">
+          <header className="edge-header">
+            <div className="edge-header-search">
+              <GlobalSearch currentRole={role} navigation={navigation} />
+            </div>
+            <div className="edge-header-actions">
+              <span className="edge-site-switcher">{siteName}</span>
+              <SyncStatusBadge state={syncState} />
+              <a className="quick-create" href="/requisitions/new">
+                + {t('nav.quickCreate')}
+              </a>
+            </div>
+          </header>
+          {signOutBlockedCount > 0 ? (
+            <p className="auth-sign-out-blocked" role="status" aria-live="polite">
+              {countMessage(signOutBlockedCount, 'auth.signOutBlockedOne', 'auth.signOutBlocked')}
+            </p>
+          ) : null}
+          {signOutIncomplete ? (
+            <p className="auth-sign-out-blocked" role="alert">
+              {t('auth.signOutIncomplete')}
+            </p>
+          ) : null}
+          {waitingForOthers.map((entry, index) => (
+            <p key={`${entry.userName}-${index}`} className="auth-sign-out-blocked" role="status">
+              {countMessage(entry.count, 'auth.waitingForOwnerOne', 'auth.waitingForOwner').replace(
+                '{name}',
+                entry.userName || t('auth.unknownOwner'),
+              )}
+            </p>
           ))}
-        </nav>
-      ) : null}
-      <main id="main-content" className="edge-main" tabIndex={-1}>
+          {navEntries.length > 0 ? (
+            <nav className="edge-nav" aria-label={t('nav.label')}>
+              {navEntries.map((link) => (
+                <a key={link.href} href={link.href}>
+                  {t(link.label as MessageKey)}
+                </a>
+              ))}
+            </nav>
+          ) : null}
+          <main id="main-content" className="edge-main" tabIndex={-1}>
         {authRequired ? (
           <div className="auth-required" role="alert">
             {t('sync.authRequired')}
@@ -196,7 +312,14 @@ export function AppShell({
             {t('auth.offlineNoSession')}
           </div>
         ) : null}
-        {firstSyncRequired ? (
+        {siteRefusal ? (
+          <section className="edge-card" role="alert" aria-labelledby="site-refusal-heading">
+            <h2 id="site-refusal-heading">
+              {t(siteRefusal === 'no_site' ? 'bootstrap.noSiteTitle' : 'bootstrap.ambiguousSiteTitle')}
+            </h2>
+            <p>{t(siteRefusal === 'no_site' ? 'bootstrap.noSiteBody' : 'bootstrap.ambiguousSiteBody')}</p>
+          </section>
+        ) : firstSyncRequired ? (
           <section className="edge-card" aria-labelledby="first-sync-heading">
             <h2 id="first-sync-heading">{t('bootstrap.firstSyncTitle')}</h2>
             <p>{t('bootstrap.firstSyncBody')}</p>
@@ -204,6 +327,31 @@ export function AppShell({
               {t('bootstrap.checkConnection')}
             </button>
           </section>
+        ) : isBaseView(view) &&
+          navigationConfirmed &&
+          !navigation.includes(BASE_VIEW_ENTRY[view]) ? (
+          <section className="edge-card" role="alert" aria-labelledby="base-denied-heading">
+            <h2 id="base-denied-heading">{t('nav.deniedTitle')}</h2>
+            <p>{t('nav.deniedBody')}</p>
+            <a className="secondary-action" href="/">
+              {t('nav.home')}
+            </a>
+          </section>
+        ) : view === 'new-requisition' ? (
+          <div className="card-grid" id="new-requisition">
+            <IndentCapture
+              syncState={syncState}
+              {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
+            />
+          </div>
+        ) : view === 'check-stock' ? (
+          <CheckStock online={online} />
+        ) : view === 'my-requests' ? (
+          <MyRequests online={online} />
+        ) : view === 'report-damage' ? (
+          <ReportDamage {...(reportDamage ?? {})} />
+        ) : view === 'damage-cases' ? (
+          <DamageCases online={online} userId={userId} />
         ) : view === 'refused-captures' ? (
           refusedCaptures ? (
             <RefusedCapturesScreen {...refusedCaptures} />
@@ -269,6 +417,30 @@ export function AppShell({
               </section>
             )}
           </div>
+        ) : view === 'dashboard' ? (
+          <>
+            <SampleDataNotice />
+            <EnhancedDashboard
+              role={role}
+              pendingCount={pendingCount}
+              failedCount={failedCount}
+            />
+          </>
+        ) : view === 'workflows' ? (
+          <>
+            <SampleDataNotice />
+            <WorkflowsView currentUserName={userName} />
+          </>
+        ) : view === 'access-control' ? (
+          <>
+            <SampleDataNotice />
+            <AccessControlView />
+          </>
+        ) : view === 'reports' ? (
+          <>
+            <SampleDataNotice />
+            <ReportsView currentUserName={userName} />
+          </>
         ) : (
           <div className="card-grid">
             <section className="edge-card" id="dashboard" aria-labelledby="ready-heading">
@@ -302,12 +474,22 @@ export function AppShell({
             </section>
           </div>
         )}
-        <SyncFailureList
-          failures={failures}
-          {...(onRetry ? { onRetry } : {})}
-          {...(onDismissFailure ? { onDismiss: onDismissFailure } : {})}
+            <SyncFailureList
+              failures={failures}
+              {...(onRetry ? { onRetry } : {})}
+              {...(onDismissFailure ? { onDismiss: onDismissFailure } : {})}
+            />
+          </main>
+        </div>
+      </div>
+      {navSurface === 'bottom-nav' ? (
+        <BottomNav
+          entries={navEntries}
+          activeHref={activeHref}
+          onSignOut={onSignOut}
+          signingOut={signingOut}
         />
-      </main>
+      ) : null}
     </div>
   );
 }

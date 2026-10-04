@@ -88,6 +88,12 @@ jobs:
   deploy-staging:
     name: deploy-staging
     needs: build-and-push
+    # The self-hosted staging runner (vps-inarl-staging) cannot start: /home on the shared
+    # box is mode 711 and the listener needs read access to every parent directory, and the
+    # runner user has no docker access. Staging is deployed by hand with
+    # /root/staging-deploy-sha.sh <sha> (see docs/migration/pilot-cutover-runbook.md, section 2). Set the repository variable
+    # STAGING_RUNNER_ENABLED=true once a runner exists to switch this job back on.
+    if: vars.STAGING_RUNNER_ENABLED == 'true'
     runs-on: [self-hosted, staging]
     environment: staging
     permissions:

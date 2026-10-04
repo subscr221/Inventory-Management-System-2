@@ -1,0 +1,20 @@
+IMS staging daily check  2026-09-24 08:50 IST
+
+OK    stack      6 containers running
+OK    events     1106 total, 428 in last 24 h
+            notification.created 81
+            goods.received 24
+            putaway.completed 18
+            production_order.material_issued 18
+            indent.raised 16
+OK    refused    0 open refused captures
+OK    backup     newest nightly 6 h old, 12M: ims-basebackup-202609240230-nightly.tar.gz
+FAIL  backuplog  archive  cut at 000000010000000700000026: 1059 -> 1059 files
+            21 labelled backups kept (never rotated; they also pin the WAL archive)
+WARN  disk       82% used, 36G free, WAL archive 18G
+OK    sync       slot powersync_2_5d93 active, behind by 0.0 MB
+WARN  tasks      open tasks with nobody assigned (type, count, oldest in hours):
+            putaway 12 59
+            4 QC inspection tasks not yet inspected (QC tasks have no assignee field)
+
+RESULT: FAIL, act before users start

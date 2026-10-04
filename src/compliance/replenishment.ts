@@ -411,7 +411,17 @@ export async function applyReplenishmentTaskCompletedProjection(
       },
     );
   }
-  if (task.status === 'completed') return;
+  // Pilot F4 (bug 13): a completed task is refused rather than skipped. The old silent return let
+  // persistEvent append a second replenishment_task.completed for a no-op, on the REST path and on
+  // a direct event post alike. The REST handler turns this code into its 200 replay answer.
+  if (task.status === 'completed') {
+    throw new AppError(
+      409,
+      'REPLENISHMENT_TASK_ALREADY_COMPLETED',
+      `Replenishment task "${p.replenishment_task_id}" is already completed`,
+      { replenishment_task_id: p.replenishment_task_id },
+    );
+  }
   if (task.status !== 'ready') {
     throw new AppError(
       409,
@@ -474,19 +484,32 @@ export async function applyReplenishmentTaskCompletedProjection(
 
   const completedBy = envelope.metadata.actor.user_id;
 
-  await applyStockIssue(
-    { sku: task.sku, location_id: task.from_location_id, quantity: Number(task.quantity) },
-    client,
-  );
-  await applyStockReceipt(
+  // Pilot review R6: a task is generated lot-less (the check job sizes it on the bin's balance, no
+  // lot ranking), so the lot is decided HERE by the drain - which skips QC-gated and held lots -
+  // and every drained (lot, quantity) grain is received under the SAME lot. Receiving the total
+  // lot-less, as this did, erased the lot identity of lot-controlled stock at the destination.
+  const drained = await applyStockIssue(
+    // Pilot F2: a replenishment move is a relocation, not a consumption - the issue clock stays.
     {
       sku: task.sku,
-      location_id: destination.location_id,
-      location_code: destination.location_code,
+      location_id: task.from_location_id,
       quantity: Number(task.quantity),
+      relocation: true,
     },
     client,
   );
+  for (const grain of drained) {
+    await applyStockReceipt(
+      {
+        sku: task.sku,
+        location_id: destination.location_id,
+        location_code: destination.location_code,
+        lot_id: grain.lot_id,
+        quantity: grain.quantity,
+      },
+      client,
+    );
+  }
 
   const completed = await completeReplenishmentTask(
     {

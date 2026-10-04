@@ -330,6 +330,14 @@ export async function transitionQcTaskStatus(
  * true for rows whose lot is NOT under a blocked QC gate. When `cleared` is true the caller has
  * already run assertQcGateAllows on the specific lot and only the hard qc_hold state is re-excluded
  * (defense in depth).
+ *
+ * Pilot review R6: the lot-level hold (lot_master.quality_hold_status, the manual or recall axis)
+ * is part of the same predicate. It used to be read only by assertQcGateAllows, which a lot-less
+ * drain never calls, so backflush, lot-less staging and replenishment could consume or move a lot
+ * someone had put on hold by hand. It applies whether or not `cleared` is set: assertQcGateAllows
+ * refuses a held lot outright, so no cleared caller can legitimately be draining one. The one
+ * sanctioned movement of a held lot - a relocation into quarantine - drops this whole predicate
+ * through StockIssueInput.qc_gate_relocation.
  */
 export function qcGateExclusionSql(alias: string, cleared: boolean): string {
   const vocabulary = cleared ? QC_GATE_HARD_BLOCKED_STATUSES : QC_GATE_BLOCKED_STATUSES;
@@ -338,5 +346,9 @@ export function qcGateExclusionSql(alias: string, cleared: boolean): string {
       SELECT 1 FROM qc_inspection_task qt
        WHERE qt.lot_number = ${alias}.lot_id
          AND qt.sku = ${alias}.sku AND qt.gate_status IN ${statuses}
+    ) AND NOT EXISTS (
+      SELECT 1 FROM lot_master lm
+       WHERE lm.lot_number = ${alias}.lot_id
+         AND lm.sku = ${alias}.sku AND lm.quality_hold_status <> 'none'
     )`;
 }

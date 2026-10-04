@@ -1,0 +1,1168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manager Overview</title>
+<style>
+/*
+  KEY SCREEN: Manager overview - role-aware home for site head (warehouse_manager), inventory_controller,
+  finance_controller, internal_auditor (read-only) and migration_lead, on EVERY device class
+  Governing spine sections:
+    EXPERIENCE.md
+      - Key Flows > Manager overview (today strip, stock lookup to lot trace, valuation and variances,
+        audit trail search, migration domain sign-off)
+      - Component Patterns: desk shell (dark module sidebar, top bar search, site switcher, + New
+        quick-create, notifications, user menu with hats), tablet icon rail, handheld top bar +
+        bottom nav + pinned action bar, status chips, detail drawer / pane / page, read-only badge
+      - State Patterns: loading skeleton, empty search result, offline banner with last-synced time,
+        approvals blocked offline
+    DESIGN.md
+      - Density by input: Handheld / Tablet / Desktop touch = touch-roomy (56px primary, 48px secondary);
+        Desktop mouse = compact (34px controls, 44px table rows, as key-stores.html)
+      - Accent token family: theme A Ledger Blue (--accent, --accent-strong, --accent-soft,
+        --on-accent, --accent-on-dark) exactly as in color-themes-1.html; dark sidebar #1B2230
+  Decision source: .memlog.md (2026-09-25). Typeface Lato (bundled locally in production);
+  this mock loads nothing from the network.
+*/
+:root{
+  --side:#1B2230; --side-hover:#252E3F; --side-text:#C9D1DD; --side-muted:#8C97A8;
+  --bg:#F4F6F9; --surface:#FFFFFF; --border:#DDE2E9; --text:#1C2430; --text-muted:#566173;
+  --ok:#1E7A3C; --ok-bg:#E6F4EA; --warn:#8A5300; --warn-bg:#FFF3DC;
+  --err:#B3261E; --err-bg:#FCE8E6; --info:#1F5FAD; --info-bg:#E7F0FB;
+  --off:#4A5568; --off-bg:#ECEFF3;
+  /* A. Ledger Blue (default for CMF-ALIGARH) */
+  --accent:#1E6BC6; --accent-strong:#1656A3; --accent-soft:#E8F1FC; --on-accent:#FFFFFF; --accent-on-dark:#5AA2F0;
+  --font: Lato, "Segoe UI", Roboto, system-ui, sans-serif;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.4}
+button,input,select{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.side :focus-visible{outline-color:var(--accent-on-dark)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.page{padding:16px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.intro{flex:0 0 100%}
+.intro h1{font-size:22px;margin:0 0 4px}
+.intro p{margin:0;color:var(--text-muted);max-width:980px}
+
+/* ---------- device switcher + one frame ---------- */
+.devbar{flex:0 0 100%;display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.devsw{display:inline-flex;border:1px solid #B9C1CC;border-radius:8px;overflow:hidden;background:var(--surface)}
+.devsw button{border:0;border-right:1px solid #B9C1CC;background:none;min-height:44px;padding:0 16px;font-weight:700;color:var(--text)}
+.devsw button:last-child{border-right:0}
+.devsw button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.devnote{font-size:13px;color:var(--text-muted);flex:1;min-width:260px}
+.device{display:flex;flex-direction:column;gap:6px}
+.device-label{font-size:13px;font-weight:700}
+.device-label span{font-weight:400;color:var(--text-muted)}
+.fwrap{overflow:hidden;flex:none}
+.w-hand{width:410px;height:820px;padding:10px;background:#1F2937;border-radius:26px}
+.w-tab{width:471px;height:669px;padding:10px;background:#1F2937;border-radius:22px}
+.w-desk{width:896px;height:560px;border-radius:8px;border:1px solid var(--border)}
+.screen{background:var(--bg);overflow:hidden;display:flex;position:relative}
+.d-hand{width:390px;height:800px;flex-direction:column;border-radius:14px}
+.d-tab{width:820px;height:1180px;transform:scale(.55);transform-origin:0 0}
+.d-desk,.d-dtouch{width:1280px;height:800px;transform:scale(.7);transform-origin:0 0}
+
+/* ---------- buttons, compact density ---------- */
+.b{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid transparent;border-radius:6px;font-weight:700;padding:0 12px;height:34px;font-size:13px;white-space:nowrap}
+.b-pri{background:var(--accent);color:var(--on-accent)}
+.b-pri:hover{background:var(--accent-strong)}
+.b-sec{background:var(--surface);color:var(--accent-strong);border-color:var(--accent)}
+.b-sec:hover{background:var(--accent-soft)}
+.b-plain{background:var(--surface);color:var(--text);border-color:#B9C1CC}
+.b-ghost{background:transparent;color:var(--accent-strong);text-decoration:underline;text-underline-offset:2px;padding:0 4px}
+.icon{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;flex:none}
+.compact{font-size:13px}
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.pill .icon{width:12px;height:12px;stroke-width:2.4}
+.p-ok{background:var(--ok-bg);color:var(--ok)}
+.p-warn{background:var(--warn-bg);color:var(--warn)}
+.p-err{background:var(--err-bg);color:var(--err)}
+.p-info{background:var(--info-bg);color:var(--info)}
+.p-off{background:var(--off-bg);color:var(--off)}
+.ro{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:6px;background:var(--off-bg);color:var(--off);border:1px solid #C3CAD4;font-weight:700;font-size:12.5px;white-space:nowrap}
+
+/* ---------- desk shell (from key-stores.html / color-themes-1 desk shell) ---------- */
+.side{width:208px;flex:none;background:var(--side);color:var(--side-text);display:flex;flex-direction:column}
+.brand{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;font-weight:900;font-size:15px;border-bottom:1px solid #2A3345}
+.brand .mark{width:26px;height:26px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:12px;flex:none}
+.side nav{padding:8px 0;flex:1;overflow:auto}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 16px 0 13px;border:0;border-left:3px solid transparent;background:transparent;color:var(--side-text);text-align:left;font-size:13px}
+.nav-item:hover{background:var(--side-hover)}
+.nav-item svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.nav-item[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff;font-weight:700}
+.nav-item[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 7px;font-weight:700}
+.side-foot{padding:12px 16px;border-top:1px solid #2A3345;font-size:12px;color:var(--side-muted)}
+.side-foot b{color:var(--side-text);display:block}
+/* tablet: icon rail with icons + short labels */
+.irail{width:88px;flex:none;background:var(--side);display:flex;flex-direction:column;overflow:auto}
+.irail .brand{height:64px;padding:0;justify-content:center}
+.irail nav{display:flex;flex-direction:column;padding:4px 0}
+.irail nav button{border:0;border-left:3px solid transparent;background:none;color:var(--side-text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:64px;font-size:12px;font-weight:700;position:relative;padding:0 2px}
+.irail nav button:hover{background:var(--side-hover)}
+.irail svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.8}
+.irail nav button[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff}
+.irail nav button[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.irail .count{position:absolute;top:6px;right:14px;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+.irail :focus-visible{outline-color:var(--accent-on-dark);outline-offset:-3px}
+
+.dmain{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+.dtop{height:52px;flex:none;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 16px;position:relative;z-index:5}
+.search{flex:1;max-width:400px;display:flex;align-items:center;gap:8px;height:34px;border:1px solid #B9C1CC;border-radius:6px;padding:0 10px;background:#FAFBFC;margin:0}
+.search input{border:0;background:transparent;flex:1;min-width:0;outline:none}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.site{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-weight:700}
+.spacer{flex:1}
+.dsync{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--off-bg);color:var(--off);white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.dsync .d{width:8px;height:8px;border-radius:50%;background:#7A8596}
+.dsync.on{background:var(--ok-bg);color:var(--ok)}
+.dsync.on .d{background:var(--ok)}
+.ib{width:34px;height:34px;border:1px solid var(--border);border-radius:6px;background:var(--surface);display:grid;place-items:center;position:relative;color:var(--text)}
+.ib .icon{width:17px;height:17px}
+.ib .cnt{position:absolute;top:-6px;right:-6px;background:var(--err);color:#fff;border-radius:999px;font-size:10.5px;font-weight:700;padding:0 5px;line-height:16px}
+.avatar{height:34px;border:1px solid var(--border);border-radius:999px;background:var(--surface);display:flex;align-items:center;gap:6px;padding:0 8px 0 2px}
+.avatar .av{width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);display:grid;place-items:center;font-weight:900;font-size:11.5px}
+.mw{position:relative}
+.menu{position:absolute;right:0;top:40px;min-width:240px;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(20,30,50,.18);padding:6px;z-index:20}
+.menu h3{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:6px 8px 4px}
+.menu button,.menu .mi{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;border:0;background:none;text-align:left;padding:4px 8px;border-radius:5px}
+.menu button:hover{background:var(--accent-soft)}
+.menu button[aria-checked="true"]{font-weight:700;color:var(--accent-strong)}
+.menu .mi{display:block;color:var(--text)}
+.menu .mi small{display:block;color:var(--text-muted);font-size:12px}
+.menu hr{border:0;border-top:1px solid var(--border);margin:6px 0}
+.who{padding:6px 8px 2px}
+.who b{display:block;font-size:14px}
+.who span{font-size:12px;color:var(--text-muted)}
+
+.banner{flex:none;display:flex;align-items:center;gap:8px;padding:7px 16px;font-size:13px;border-bottom:1px solid}
+.banner.off{background:var(--warn-bg);color:var(--text);border-color:#E8C27A}
+.banner.off .icon{color:var(--warn)}
+.banner.note{background:var(--info-bg);border-color:#BCD3F0}
+.banner.note .icon{color:var(--info)}
+.banner .x{margin-left:auto}
+.dbody{flex:1;overflow:auto;padding:16px 20px;min-height:0;overflow-x:hidden}
+.phead{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.phead h1{margin:0;font-size:19px}
+.phead .sub{color:var(--text-muted);font-size:12.5px;flex-basis:100%}
+
+/* ---------- cards, strip, lists ---------- */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+.card h2{margin:0 0 8px;font-size:14px;display:flex;align-items:center;gap:8px}
+.card h2 .r{margin-left:auto;font-weight:400}
+.grid2{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:14px;align-items:start}
+.strip{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:10px}
+.tile{text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;min-height:84px;display:flex;flex-direction:column;gap:2px}
+.tile:hover{border-color:var(--accent)}
+.tile[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 -3px 0 var(--accent);background:var(--accent-soft)}
+.tile .n{font-size:26px;font-weight:900;line-height:1.1;display:flex;align-items:center;gap:8px}
+.tile .n .icon{width:18px;height:18px;color:var(--text-muted)}
+.tile .l{font-size:12.5px;color:var(--text-muted);font-weight:700}
+.tile.alert .n{color:var(--err)}
+.tile.alert .n .icon{color:var(--err)}
+.linkrow{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;background:var(--warn-bg);border:1px solid #E8C27A;margin-bottom:14px;font-size:13px}
+.linkrow .icon{color:var(--warn)}
+.list{list-style:none;margin:0;padding:0}
+.list li{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #EDF0F4;min-height:44px}
+.list li:last-child{border-bottom:0}
+.list .t{font-variant-numeric:tabular-nums;color:var(--text-muted);font-size:12px;width:44px;flex:none;padding-top:1px}
+.list .tx{flex:1;min-width:0}
+.list .tx b{font-weight:700}
+.list .m{display:block;color:var(--text-muted);font-size:12px}
+.mono{font-family:Consolas,monospace;font-size:12.5px}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface)}
+.tbl caption{text-align:left;font-size:12px;color:var(--text-muted);padding:0 0 6px}
+.tbl th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);text-align:left;padding:8px;border-bottom:1px solid var(--border);background:#FAFBFC;white-space:nowrap}
+.tbl td{padding:0 8px;height:44px;border-bottom:1px solid #EDF0F4;vertical-align:middle}
+.tbl .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tbl tr.click{cursor:pointer}
+.tbl tr.click:hover td{background:#F7FAFE}
+.tbl tr.sel td{background:var(--accent-soft)}
+.rowbtn{border:0;background:none;padding:0;font-weight:700;color:var(--accent-strong);text-align:left;text-decoration:underline;text-underline-offset:2px;min-height:32px}
+.tblwrap{border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.filters{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px}
+.fl{display:flex;flex-direction:column;gap:3px;font-size:12px;font-weight:700;color:var(--text-muted)}
+.fl input,.fl select{height:34px;border:1px solid #B9C1CC;border-radius:6px;padding:0 8px;background:#fff;color:var(--text);font-weight:400;font-size:13px;min-width:130px}
+.fl input:focus,.fl select:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.fl.grow{flex:1;min-width:200px}
+.fl.grow input{width:100%}
+.resn{font-size:12.5px;color:var(--text-muted);margin:0 0 8px}
+
+/* ---------- drawer ---------- */
+.scrim{position:absolute;inset:52px 0 0 0;background:rgba(20,30,50,.25);z-index:8}
+.drawer{position:absolute;top:52px;right:0;bottom:0;width:440px;background:var(--surface);border-left:1px solid var(--border);box-shadow:-8px 0 24px rgba(20,30,50,.15);z-index:9;display:flex;flex-direction:column}
+.dh{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;border-bottom:1px solid var(--border)}
+.dh .tx{flex:1;min-width:0}
+.dh h2{margin:0;font-size:16px}
+.dh .m{color:var(--text-muted);font-size:12.5px}
+.db{flex:1;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:14px}
+.db h3{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)}
+.trace{list-style:none;margin:0;padding:0}
+.trace li{position:relative;padding:0 0 12px 28px}
+.trace li::before{content:"";position:absolute;left:8px;top:18px;bottom:0;width:2px;background:var(--border)}
+.trace li:last-child::before{display:none}
+.trace .dot{position:absolute;left:0;top:1px;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;border:2px solid var(--ok);background:var(--ok-bg);color:var(--ok)}
+.trace .dot .icon{width:10px;height:10px;stroke-width:3}
+.trace li.cur .dot{border-color:var(--warn);background:var(--warn-bg);color:var(--warn)}
+.trace li.todo .dot{border-color:#B9C1CC;background:#fff;color:#B9C1CC}
+.trace li.todo{color:var(--text-muted)}
+.trace b{display:block;font-size:13px}
+.trace .m{display:block;font-size:12px;color:var(--text-muted)}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.kv div{border:1px solid var(--border);border-radius:6px;padding:6px 8px}
+.kv span{display:block;font-size:11.5px;color:var(--text-muted)}
+.kv b{font-size:14px;font-variant-numeric:tabular-nums}
+
+/* ---------- finance ---------- */
+.big{font-size:28px;font-weight:900;font-variant-numeric:tabular-nums}
+.bars{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:7px}
+.bars li{display:grid;grid-template-columns:170px 1fr 104px;gap:8px;align-items:center;font-size:12.5px}
+.bar{height:12px;background:#EEF1F5;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.bars .v{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+.split{display:flex;gap:8px;margin-top:10px}
+.split div{flex:1;border:1px solid var(--border);border-radius:6px;padding:6px 8px}
+.split span{display:flex;align-items:center;gap:4px;font-size:11.5px;color:var(--text-muted)}
+.split b{font-variant-numeric:tabular-nums}
+.callout{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:8px;background:var(--accent-soft);border:1px solid #BCD3F0}
+.callout .n{font-size:26px;font-weight:900;color:var(--accent-strong)}
+.callout .tx{flex:1;font-size:13px}
+
+/* ---------- migration ---------- */
+.mcards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.mcard{display:flex;flex-direction:column;gap:8px}
+.mcard .hd{display:flex;align-items:center;gap:8px}
+.mcard .hd h2{margin:0;flex:1}
+.mcard .facts{font-size:12.5px;color:var(--text-muted);margin:0}
+.meter{height:8px;background:#EEF1F5;border-radius:4px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--ok)}
+.signs{list-style:none;margin:0;padding:0;font-size:12.5px;display:flex;flex-direction:column;gap:3px}
+.signs li{display:flex;align-items:center;gap:6px}
+.signs .icon{width:13px;height:13px}
+.signs .y{color:var(--ok)}
+.signs .w{color:var(--text-muted)}
+.mcard .acts{display:flex;gap:8px;margin-top:auto}
+
+/* ---------- empty, stub, skeleton ---------- */
+.empty{text-align:center;padding:40px 20px;color:var(--text-muted)}
+.empty .ei{width:56px;height:56px;margin:0 auto 10px;border-radius:50%;background:var(--off-bg);display:grid;place-items:center}
+.empty .ei .icon{width:26px;height:26px;color:var(--off)}
+.empty h2{color:var(--text);font-size:16px;margin:0 0 6px}
+.empty ul{text-align:left;display:inline-block;margin:6px 0 12px;font-size:13px}
+.sk{background:linear-gradient(90deg,#E6EAF0 0,#F2F4F7 40%,#E6EAF0 80%);background-size:300% 100%;border-radius:6px;animation:sh 1.3s linear infinite}
+@keyframes sh{from{background-position:100% 0}to{background-position:0 0}}
+@media (prefers-reduced-motion:reduce){.sk{animation:none}}
+.skrow{display:flex;gap:12px;margin-bottom:10px}
+
+/* ---------- side panels ---------- */
+.sidep{width:320px;display:flex;flex-direction:column;gap:16px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.panel h2{font-size:15px;margin:0 0 8px}
+.panel h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:10px 0 6px}
+.panel .b{width:100%;margin-bottom:8px;height:auto;min-height:44px;font-size:14px;white-space:normal}
+.rolegrp{display:flex;flex-direction:column;gap:6px}
+.rolegrp .b{margin:0;justify-content:flex-start;text-align:left}
+.rolegrp .b[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.legend{margin:0;padding-left:18px;font-size:13px}
+.legend li{margin-bottom:6px}
+.ltag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--border);background:#F4F6F9}
+.ltag.as{background:var(--warn-bg);color:var(--warn);border-color:#E8C27A}
+.b-pri[disabled]{background:#E3E7ED;color:var(--text-muted);border-color:#C9D0DA;cursor:not-allowed}
+.why{font-size:12.5px;color:var(--text-muted);display:flex;gap:6px;align-items:center}
+
+/* ---------- touch-roomy density (Handheld, Tablet, Desktop touch) ---------- */
+.touch{font-size:15px}
+.touch .b{height:auto;min-height:48px;font-size:15px;border-radius:8px;padding:0 14px}
+.touch .b-pri{min-height:56px;font-size:16px}
+.touch .dtop .b-pri{min-height:48px}
+.touch .b-ghost{min-height:48px}
+.touch .icon{width:18px;height:18px}
+.touch .dtop{height:64px}
+.touch .search{height:48px;max-width:none;min-width:0}
+.touch .site,.touch .ib,.touch .avatar{height:48px}
+.touch .ib{width:48px}
+.touch .avatar .av{width:38px;height:38px}
+.touch .dsync{font-size:13px}
+.touch .nav-item{height:48px;font-size:14px}
+.touch .fl{font-size:13px}
+.touch .fl input,.touch .fl select{height:48px;font-size:15px}
+.touch .tbl{font-size:14px}
+.touch .tbl td{height:56px}
+.touch .rowbtn{min-height:48px}
+.touch .menu{top:54px}
+.touch .menu button{min-height:48px;font-size:15px}
+.touch .scrim{top:64px}
+.touch .drawer{top:64px;width:500px}
+.touch .tile{min-height:96px}
+.touch .tile .l{font-size:13px}
+.touch .ro{height:40px;font-size:13px}
+.touch .resn{font-size:13.5px}
+.touch .list li{min-height:52px}
+.touch .list .m,.touch .trace .m{font-size:13px}
+
+/* shared touch lists: cards instead of table rows */
+.clist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.lcard{width:100%;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px;min-height:72px;display:flex;flex-direction:column;gap:4px}
+.lcard:hover{border-color:var(--accent)}
+.lcard[aria-current="true"],.lcard[aria-expanded="true"]{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+.lcard .r1{display:flex;gap:8px;align-items:center;width:100%}
+.lcard .r1 b{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:15px}
+.lcard .m{font-size:13px;color:var(--text-muted)}
+.lcard .r2{display:flex;justify-content:space-between;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
+.lcard .chev{flex:none;color:var(--accent);font-weight:900;font-size:18px}
+.xp{border:1px solid var(--accent);border-top:0;border-radius:0 0 10px 10px;margin-top:-6px;padding:12px;background:var(--surface);font-size:13.5px}
+.xp .kv{margin-bottom:8px}
+.scanrow{display:flex;gap:10px;margin-bottom:10px}
+.scanrow .b{flex:1}
+
+/* tablet: list pane + detail pane */
+.panes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:14px;align-items:start}
+.dpane{background:var(--surface);border:1px solid var(--border);border-radius:10px;position:sticky;top:0;overflow:hidden}
+.dpane.ph{padding:28px 20px;text-align:center;color:var(--text-muted)}
+.dpane.ph .ei{width:56px;height:56px;margin:0 auto 10px;border-radius:50%;background:var(--off-bg);display:grid;place-items:center}
+.d-tab .filters,.d-hand .filters{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.d-tab .filters .fl.grow,.d-hand .filters .fl.grow,.d-tab .filters>.b,.d-hand .filters>.b{grid-column:1/-1}
+.d-tab .fl input,.d-tab .fl select,.d-hand .fl input,.d-hand .fl select{min-width:0;width:100%}
+.d-tab .strip{grid-template-columns:repeat(3,minmax(0,1fr))}
+.d-tab .mcards{grid-template-columns:repeat(2,minmax(0,1fr))}
+.d-tab .grid2.fin{grid-template-columns:minmax(0,1fr)}
+.d-tab .bars li{grid-template-columns:170px 1fr 120px}
+
+/* handheld: dark top bar, search row, single column, pinned actions, bottom nav */
+.htop{height:56px;flex:none;background:var(--side);color:#fff;display:flex;align-items:center;gap:8px;padding:0 10px 0 14px;position:relative;z-index:6}
+.htop :focus-visible{outline-color:var(--accent-on-dark)}
+.ready{width:10px;height:10px;border-radius:50%;background:#3DD68C;box-shadow:0 0 0 3px rgba(61,214,140,.25);flex:none}
+.rdy{font-size:13px;font-weight:700;white-space:nowrap}
+.hsync{font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;background:#2E3850;color:#E6EAF0;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+.hsync .d{width:8px;height:8px;border-radius:50%;background:#9AA5B6}
+.hsync.on .d{background:#3DD68C}
+.hib{width:48px;height:48px;border:1px solid #3A4458;border-radius:10px;background:#252E3F;color:#fff;display:grid;place-items:center;font-weight:900;font-size:14px}
+.hib .icon{width:20px;height:20px}
+.hro{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;color:#E6EAF0;background:#2E3850;border-radius:999px;padding:4px 10px;white-space:nowrap}
+.hro .icon{width:18px;height:18px}
+.hro{width:48px;height:48px;justify-content:center;padding:0;border-radius:10px;border:1px solid #3A4458}
+.htop .menu{top:54px}
+.hsrch{flex:none;display:flex;gap:8px;padding:8px 12px;background:var(--surface);border-bottom:1px solid var(--border)}
+.hsrch .search{flex:1}
+.hsrch .site{font-size:13px;padding:0 8px}
+.hbody{flex:1;overflow:auto;padding:12px;min-height:0;overflow-x:hidden}
+.d-hand .phead h1{font-size:18px}
+.d-hand .strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.d-hand .grid2,.d-hand .mcards{grid-template-columns:minmax(0,1fr)}
+.d-hand .linkrow{flex-wrap:wrap}
+.d-hand .split{flex-direction:column}
+.d-hand .bars li{grid-template-columns:minmax(0,1fr) auto;row-gap:3px}
+.d-hand .bars .bar{grid-column:1/-1;order:3}
+.d-hand .callout{align-items:flex-start}
+.d-hand .kv{grid-template-columns:1fr 1fr}
+.d-hand .skrow{flex-wrap:wrap}
+.d-hand .skrow .sk{flex:1 1 40%!important}
+.back{margin:-4px 0 8px -4px;padding:0 6px;text-decoration:none}
+.pin{flex:none;background:var(--surface);border-top:1px solid var(--border);padding:10px 12px;display:flex;flex-direction:column;gap:8px;box-shadow:0 -4px 12px rgba(20,30,50,.06)}
+.pin .row{display:flex;gap:8px}
+.pin .row .b{flex:1}
+.pin .b-pri{width:100%}
+.bnav{height:64px;flex:none;display:flex;background:var(--surface);border-top:1px solid var(--border);position:relative}
+.bnav>button,.bnav>.mw>button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-muted);font-size:12.5px;font-weight:700;position:relative;min-height:56px;width:100%;height:100%}
+.bnav>.mw{flex:1;position:static}
+.bnav svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9}
+.bnav button[aria-current="page"]{color:var(--accent)}
+.bnav button[aria-current="page"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+.bnav .count{position:absolute;top:6px;left:calc(50% + 8px);background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+.bnav .menu{top:auto;bottom:70px;right:8px}
+
+/* ---------- standing approvals (EXPERIENCE.md Key Flows > Standing approvals; memlog 2026-09-25) ---------- */
+.strip.s7{grid-template-columns:repeat(7,minmax(0,1fr))}
+.d-tab .strip.s7{grid-template-columns:repeat(3,minmax(0,1fr))}
+.d-tab .tile.wide{grid-column:span 3}
+.d-hand .strip.s7{grid-template-columns:repeat(2,minmax(0,1fr))}
+.d-hand .tile.wide{grid-column:span 2}
+.satabs{display:flex;flex-wrap:wrap;border:1px solid #B9C1CC;border-radius:8px;overflow:hidden;background:var(--surface);margin-bottom:12px;width:fit-content;max-width:100%}
+.satabs button{border:0;border-right:1px solid #B9C1CC;background:none;min-height:34px;padding:0 12px;font-weight:700;color:var(--text)}
+.satabs button:last-child{border-right:0}
+.satabs button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.touch .satabs button{min-height:48px;padding:0 14px}
+.d-hand .satabs{display:grid;grid-template-columns:1fr 1fr;width:100%}
+.d-hand .satabs button{border-bottom:1px solid #B9C1CC}
+.saflag{display:flex;flex-wrap:wrap;gap:4px}
+.sanote{display:flex;gap:6px;align-items:flex-start;font-size:12.5px;color:var(--text-muted)}
+.touch .sanote{font-size:13.5px}
+.saform{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:720px}
+.saform .full{grid-column:1/-1}
+.saform textarea,.saform input,.saform select{width:100%;min-width:0}
+.fl textarea{border:1px solid #B9C1CC;border-radius:6px;padding:6px 8px;font:inherit;font-weight:400;font-size:13px;color:var(--text);min-height:60px;resize:vertical}
+.fl textarea:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.touch .fl textarea{font-size:15px;min-height:80px}
+.d-hand .saform{grid-template-columns:1fr}
+.chk{display:flex;align-items:center;gap:8px;min-height:34px;font-weight:700;font-size:13px;color:var(--text)}
+.chk input{width:18px;height:18px}
+.touch .chk{min-height:48px;font-size:15px}
+.touch .chk input{width:24px;height:24px}
+.errmsg{color:var(--err);font-weight:700;font-size:13px;display:flex;gap:6px;align-items:center}
+.slip{border:1px dashed #B9C1CC;border-radius:6px;padding:8px 10px;background:#FAFBFC;font-size:13px}
+.sapanes{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:14px;align-items:start}
+.d-tab .sapanes{grid-template-columns:minmax(0,1fr) minmax(0,1.1fr)}
+.acts2{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="intro">
+    <h1>Manager overview - role-aware home for site head, inventory control, finance, audit, migration and head of department (standing approvals)</h1>
+    <p>One shared app state in ONE frame. Pick a device class with the switcher and a role in Demo controls (or switch hat from the user menu inside the frame). The role decides what is shown; the device class decides how it is laid out and operated. Switching device mid-flow keeps the current step (open lot trace, expanded audit event, filters, search). The internal auditor sees every control read-only.</p>
+  </div>
+
+  <div class="devbar">
+    <span class="device-label" id="devsw-h">Device class</span>
+    <div class="devsw" role="group" aria-labelledby="devsw-h" id="devsw"></div>
+    <span class="devnote" id="devnote" aria-live="polite"></span>
+  </div>
+
+  <div class="device">
+    <div class="device-label" id="dev-label"></div>
+    <div class="fwrap" id="fwrap"><div class="screen" id="f"></div></div>
+  </div>
+
+  <div class="sidep">
+    <section class="panel" aria-labelledby="demo-h">
+      <h2 id="demo-h">Demo controls</h2>
+      <h3 id="role-h">Role (changes home and modules)</h3>
+      <div class="rolegrp" role="group" aria-labelledby="role-h" id="rolegrp"></div>
+      <h3>States</h3>
+      <button class="b b-sec" data-demo="drawer">Open lot trace (MS Plate 10mm, L-2609-117)</button>
+      <button class="b b-sec" data-demo="sa">Standing approvals (site head)</button>
+      <button class="b b-sec" data-demo="empty">Search with no result</button>
+      <button class="b b-sec" data-demo="loading" id="load-btn">Loading skeleton (now: off)</button>
+      <button class="b b-sec" data-demo="offline" id="off-btn">Offline banner (now: online)</button>
+      <button class="b b-ghost" data-demo="reset">Reset</button>
+      <div class="sr" aria-live="polite" id="live"></div>
+    </section>
+    <section class="panel" aria-labelledby="leg-h">
+      <h2 id="leg-h">Legend - decisions rendered</h2>
+      <ol class="legend">
+        <li><span class="ltag">DECISION</span> Every role on every device: any role can use a handheld (scanner or phone), tablet, desktop or touchscreen desktop. The role decides WHAT is shown, the device class decides HOW. No shared machine terminals.</li>
+        <li><span class="ltag">DECISION</span> Class rules: Handheld 390 x 800 = touch-roomy, dark top bar with Scanner ready and sync badge, single column, bottom nav, list opens a detail page with Back, primary action pinned in the bottom third. Tablet = touch-roomy, icon rail with short labels, list and detail as two panes. Desktop = compact (30-36px controls), dark sidebar, top bar with search, site switcher CMF-ALIGARH and + New, list and detail side by side (drawer). Desktop touch = desktop layout with touch-roomy density.</li>
+        <li><span class="ltag">DECISION</span> Density follows device input, not role: finger = primary 56px, secondary 48px; mouse = compact.</li>
+        <li><span class="ltag">DECISION</span> Scan actions: hardware trigger on Handheld only (Scanner ready shows there only); camera on Handheld and Tablet; Type it (manual entry) always; Desktop says "USB scanner or type".</li>
+        <li><span class="ltag">DECISION</span> Approvals need a live connection on every device: offline, Open Approvals is disabled and says why.</li>
+        <li><span class="ltag">DECISION</span> Manager overview is one of eight role surfaces; it serves warehouse_manager / site head, inventory_controller, finance_controller, internal_auditor (read-only), migration_lead and head of department (standing approvals).</li>
+        <li><span class="ltag">DECISION</span> Zoho-style structure only: dark module sidebar #1B2230, top bar search, site switcher, + New in accent. No Zoho name, logo or icons.</li>
+        <li><span class="ltag">DECISION</span> Accent A Ledger Blue #1E6BC6 with its five-token family; --accent-on-dark marks the active sidebar and rail item. Typeface Lato.</li>
+        <li><span class="ltag">DECISION</span> All received stock goes to the inspection bay first, so stock status is one of Available, On QC hold, In inspection bay (chip with icon and text, never colour alone).</li>
+        <li><span class="ltag">DECISION</span> Damage outcome needs QC and finance concurrence (CEO decides on disagreement); finance home counts cases awaiting its concurrence and links to Approvals.</li>
+        <li><span class="ltag">DECISION</span> Every received lot resolves to its GRN, PO line and location; the lot detail shows that trace (gate, GRN, inspection bay, rack, issues).</li>
+        <li><span class="ltag">DECISION</span> Offline-first: read views keep working from the last sync and say when that was.</li>
+        <li><span class="ltag">DECISION</span> Standing approvals module (ref SA-YYYY-NNN): a per-person grant linking one user to an item or item group so they take it without per-request approval. Replaces all "No approval required" wording. Junior is not defined by grade.</li>
+        <li><span class="ltag">DECISION</span> Site head and head of department assign grants; each needs a one-time approval by the finance department head before it takes effect (status Awaiting finance approval). Finance reads the module and approves via Approvals.</li>
+        <li><span class="ltag">DECISION</span> Grants may carry an optional monthly cap and end date; usage over the cap falls back to normal approval. Requests without a grant go to the requester's head of department by value band.</li>
+        <li><span class="ltag">DECISION</span> Revoke any time by the assigner (with reason); disabling a person's sign-in account revokes all their grants the same day (row "Account disabled 2026-09-20 - all grants revoked"). Statuses: Active, Awaiting finance approval, Revoked - employee exited, Revoked by assigner, Expired.</li>
+        <li><span class="ltag">DECISION</span> Self-approval limit Rs is set per person with the same assign / finance approve / review cycle (separate section).</li>
+        <li><span class="ltag">DECISION</span> Review list for pruning: frequency chosen by each assigner and approver (7/15/30/60/90 days, default 30), in-app plus email, each grant with last-period usage; grants unused 90 days flagged "Unused 90 days - consider revoking". Site head home tile "Standing approvals: 2 unused 90 days".</li>
+        <li><span class="ltag">DECISION</span> Issue slip text: "Standing approval SA-2026-014 for &lt;user&gt; (&lt;item group&gt;). Storekeeper please issue." (shown in grant detail).</li>
+        <li><span class="ltag as">ASSUMPTION</span> Head of department added as a demo role (role title only) whose home is Standing approvals; module sits in sidebar / rail and under More on Handheld for site head and finance.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Sending a new grant and revoking need a live connection (like approvals); revoke reasons list (No longer needed, Role change, Misuse suspected, Other); revoke needs no finance approval.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Review list next send = last send (20 Sep 2026) plus the chosen frequency; preview shows active and pending grants plus active self-approval limits. Grant rows, caps, usage and the former employee Rajesh Kumar are mock data.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Home layouts per role were not elicited with the user; content drafted from role jobs and tagged for review.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Module visibility per role (e.g. auditor sees Home, Audit, Reports only; finance sees Receiving, Stores, Approvals, Reports) and the four bottom-nav picks per role on Handheld (rest under More).</li>
+        <li><span class="ltag as">ASSUMPTION</span> Hats: Pooja Sharma holds Inventory controller only. Migration lead is a separate person, shown by role title. The site head also holds Warehouse manager. Switching hat swaps home, modules and + New.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Handheld pinned primary per role: site head Open Approvals, inventory controller Scan lot or rack label (Reprint lot label on a lot), finance Open damage cases, auditor Scan to find events (a read action), migration lead Review 9 differences.</li>
+        <li><span class="ltag as">ASSUMPTION</span> On Handheld the notifications bell moves into the user menu to fit the top bar.</li>
+        <li><span class="ltag as">ASSUMPTION</span> + New items per role; auditor has no + New and a "Read-only access" badge in its place and on every page header.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Auditor can search and filter (reading) but no control changes data; no export shown.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Sync health counts devices with old last-sync or pending captures; refused captures listed for the site head to resolve.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Migration sign-off domains: opening stock, BOMs, open POs, job-work challans, custody registers; signer roles per domain are placeholders.</li>
+        <li><span class="ltag as">ASSUMPTION</span> All counts, values and people's activity are mock data; time shown is 25 Sep 2026 14:24 IST.</li>
+      </ol>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){
+  function sv(p,c){return '<svg class="icon'+(c?' '+c:'')+'" viewBox="0 0 24 24" aria-hidden="true">'+p+'</svg>';}
+  var P={
+    search:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+    check:'<path d="M5 12l5 5L20 7"/>',
+    lock:'<rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+    bay:'<path d="M3 20V9l9-5 9 5v11"/><path d="M7 20v-7h10v7M7 16h10"/>',
+    bell:'<path d="M6 17V11a6 6 0 0 1 12 0v6l2 2H4z"/><path d="M10 21h4"/>',
+    x:'<path d="M6 6l12 12M18 6L6 18"/>',
+    warn:'<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
+    cloud:'<path d="M7 18h10a4 4 0 0 0 0-8 6 6 0 0 0-11.5 1.5A3.5 3.5 0 0 0 7 18z"/><path d="M4 4l16 16"/>',
+    info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+    truck:'<path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/>',
+    box:'<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>',
+    dev:'<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+    clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    down:'<path d="M6 9l6 6 6-6"/>',
+    left:'<path d="M15 5l-7 7 7 7"/>',
+    scan:'<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M7 12h10"/>',
+    cam:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+    kbd:'<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.5M11 10h.5M15 10h.5M7 14h10"/>',
+    plus:'<path d="M12 5v14M5 12h14"/>',
+    more:'<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>'
+  };
+  var MODS={
+    Home:'<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/>',
+    Gate:'<path d="M3 21V8l9-5 9 5v13"/><path d="M8 21v-8h8v8"/>',
+    Receiving:'<path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/>',
+    Stores:'<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>',
+    Quality:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M8.5 11l2 2 3.5-3.5"/>',
+    Warehouse:'<path d="M3 21V9l9-5 9 5v12"/><path d="M7 21v-8h10v8M7 17h10"/>',
+    Maintenance:'<path d="M14 6a4 4 0 0 0 5 5l-9 9a2 2 0 0 1-3-3l9-9"/>',
+    Indents:'<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7"/>',
+    Approvals:'<path d="M4 12l5 5L20 6"/>',
+    'Standing approvals':'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 12l3 3 5-6M8 7h8"/>',
+    Reports:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+    Audit:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+    Settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>'
+  };
+  var SHORT={Maintenance:'Maint.',Receiving:'Receive',Warehouse:'Floor','Standing approvals':'Standing'};
+  var ROLES={
+    site:{label:'Site head',person:'Site head',ini:'SH',hats:['site'],
+      mods:['Home','Gate','Receiving','Stores','Quality','Warehouse','Maintenance','Indents','Approvals','Standing approvals','Reports','Settings'],
+      bn:['Home','Approvals','Stores','Reports'],nw:['Gate entry','Indent','Stock transfer','Report damage'],appr:5},
+    inv:{label:'Inventory controller',person:'Pooja Sharma',ini:'PS',hats:['inv'],
+      mods:['Home','Receiving','Stores','Quality','Warehouse','Indents','Reports'],
+      bn:['Stores','Receiving','Indents','Reports'],nw:['Item','Cycle count','Stock adjustment request','Indent']},
+    fin:{label:'Finance controller',person:'Finance controller',ini:'FC',hats:['fin'],
+      mods:['Home','Receiving','Stores','Approvals','Standing approvals','Reports'],bn:['Home','Approvals','Stores','Reports'],nw:['Variance query','Valuation snapshot'],appr:3},
+    hod:{label:'Head of department',person:'HOD Maintenance',ini:'HD',hats:['hod'],
+      mods:['Home','Indents','Approvals','Standing approvals','Reports'],bn:['Standing approvals','Indents','Approvals','Reports'],nw:['Standing approval','Indent'],appr:2},
+    aud:{label:'Internal auditor',person:'Rohit Mathur',ini:'RM',hats:['aud'],ro:true,
+      mods:['Home','Audit','Reports'],bn:['Audit','Reports'],nw:null},
+    mig:{label:'Migration lead',person:'Migration lead',ini:'ML',hats:['mig'],
+      mods:['Home','Stores','Receiving','Reports','Settings'],bn:['Home','Stores','Receiving','Reports'],nw:['Import batch','Reconciliation note']}
+  };
+  var HOMEMOD={aud:'Audit',inv:'Stores',hod:'Standing approvals'};
+  var DEVS=[
+    ['hand','Handheld','Scanner or phone - 390 x 800 - finger: touch-roomy, bottom nav, single column, list opens a detail page, primary pinned in the bottom third.'],
+    ['tab','Tablet','820 x 1180 shown at 55% - finger: touch-roomy, icon rail with short labels, list and detail as two panes.'],
+    ['desk','Desktop','1280 x 800 shown at 70% - mouse: compact controls, dark sidebar, top bar search + site switcher + New, list and detail side by side.'],
+    ['dtouch','Desktop touch','1280 x 800 shown at 70% - touchscreen PC: desktop layout with dark sidebar, touch-roomy density.']];
+  var STOCK=[
+    {item:'MS Plate 10mm IS2062',code:'RM-ST-0142',lot:'L-2609-117',loc:'R-A1-02',lt:'rack',qty:'32 nos',st:'ok',val:'2,97,600',grn:'GRN-2026-0981',po:'PO-CMF-2026-04817',cat:'Raw material - steel'},
+    {item:'MS Plate 10mm IS2062',code:'RM-ST-0142',lot:'L-2609-121',loc:'IB-01',lt:'bay',qty:'8 nos',st:'insp',val:'74,400',grn:'GRN-2026-0986',po:'PO-CMF-2026-04817',cat:'Raw material - steel'},
+    {item:'Hex Bolt M16x60',code:'FS-BL-0616',lot:'L-2609-118',loc:'R-C2-11',lt:'rack',qty:'460 nos',st:'ok',val:'11,040',grn:'GRN-2026-0981',po:'PO-CMF-2026-04817',cat:'Fasteners'},
+    {item:'Hex Bolt M16x60',code:'FS-BL-0616',lot:'L-2609-104',loc:'QH-02',lt:'quar',qty:'40 nos',st:'hold',val:'960',grn:'GRN-2026-0962',po:'PO-CMF-2026-04790',cat:'Fasteners'},
+    {item:'Bearing 6205-2RS',code:'BR-62-0205',lot:'L-2609-096',loc:'R-B3-04',lt:'rack',qty:'24 nos',st:'ok',val:'7,440',grn:'GRN-2026-0968',po:'PO-CMF-2026-04802',cat:'Bearings and transmission'},
+    {item:'Bearing 6205-2RS',code:'BR-62-0205',lot:'L-2609-119',loc:'IB-01',lt:'bay',qty:'24 nos',st:'insp',val:'7,440',grn:'GRN-2026-0981',po:'PO-CMF-2026-04817',cat:'Bearings and transmission'},
+    {item:'Contactor 32A 415V',code:'EL-CT-0032',lot:'L-2609-088',loc:'R-E1-06',lt:'rack',qty:'12 nos',st:'ok',val:'26,400',grn:'GRN-2026-0975',po:'PO-CMF-2026-04795',cat:'Electricals'},
+    {item:'Hydraulic oil ISO VG 68',code:'CN-OL-0068',lot:'L-2609-101',loc:'R-F1-01',lt:'rack',qty:'6 drums',st:'ok',val:'1,15,200',grn:'GRN-2026-0971',po:'PO-CMF-2026-04799',cat:'Consumables and oils'},
+    {item:'V-belt B-52',code:'MR-VB-0052',lot:'L-2609-110',loc:'QH-02',lt:'quar',qty:'18 nos',st:'hold',val:'5,760',grn:'GRN-2026-0977',po:'PO-CMF-2026-04806',cat:'MRO spares'}
+  ];
+  var REORDER={'RM-ST-0142':['20 nos','30 nos','40 nos','14 days','40 nos','40 nos (PO-CMF-2026-04817)'],
+    'FS-BL-0616':['200 nos','300 nos','500 nos','7 days','500 nos','none'],'BR-62-0205':['12 nos','20 nos','24 nos','10 days','48 nos','none'],
+    'EL-CT-0032':['4 nos','6 nos','12 nos','21 days','12 nos','none'],'CN-OL-0068':['2 drums','4 drums','6 drums','10 days','6 drums','none'],
+    'MR-VB-0052':['10 nos','15 nos','20 nos','7 days','18 nos','20 nos (PO-CMF-2026-04829)']};
+  var ST={ok:['p-ok','check','Available'],hold:['p-err','lock','On QC hold'],insp:['p-warn','bay','In inspection bay']};
+  var TILES=[
+    {k:'gate',n:4,l:'Trucks at gate',ic:'truck',rows:[['UP81 AT 4521','Shree Balaji Steels - challan DC/2425/0913 - in 06:12, at weighbridge'],['UP80 CT 1180','Verma Traders (unlisted supplier) - challan 4471 - in 07:40'],['HR55 AK 9031','Anand Bearings - PO-CMF-2026-04802 - in 09:05'],['UP81 BT 2210','Kisan Packaging - PO-CMF-2026-04811 - in 10:20']]},
+    {k:'insp',n:9,l:'In inspection bay',ic:'bay',rows:[['L-2609-119','Bearing 6205-2RS, 24 nos - IB-01 - waiting 4 h 10 min'],['L-2609-121','MS Plate 10mm IS2062, 8 nos - IB-01 - inspect on opening, damage suspected'],['L-2609-122','Hex Bolt M16x60, 500 nos - IB-02 - with Neha Saxena'],['+ 6 more','Oldest arrived 23 Sep 16:40']]},
+    {k:'put',n:6,l:'Pending putaway',ic:'box',rows:[['L-2609-096','Bearing 6205-2RS, 24 nos - suggested R-B3-04 - cleared 09:40'],['L-2609-114','Gasket sheet 3mm, 10 nos - suggested R-D1-02'],['+ 4 more','Oldest cleared 11:05 today']]},
+    {k:'exc',n:3,l:'Open exceptions',ic:'warn',alert:true,rows:[['Short delivery','GRN-2026-0979 - Hex Bolt M12x40, 120 of 200 nos - balance to follow'],['Unlisted supplier','Challan 4471 - Verma Traders - stores to match'],['Damage reported','L-2609-104 - Hex Bolt M16x60, 40 nos on hold - reported by Imran Khan 10:15']]},
+    {k:'appr',n:5,l:'Approvals waiting',ic:'check',rows:[['IND-2026-0421','Indent above limit - Maintenance - Rs 84,500'],['ADJ-2026-0033','Stock adjustment - V-belt B-52, +3 nos'],['DMG-2026-0014','Damage case - QC and finance concurred, for information'],['+ 2 more','Open Approvals to decide']]},
+    {k:'sync',n:1,l:'Device needs attention',ic:'dev',alert:true,rows:[['SCN-07','Suresh Verma - last synced 11:48 (2 h 36 min ago) - 14 captures pending - battery 12%'],['11 other devices','Synced in the last 10 minutes']]},
+    {k:'sa',n:2,l:'Standing approvals: 2 unused 90 days',ic:'warn',wide:true,rows:[['SA-2026-017','Imran Khan - Hand gloves, cotton - 0 used in 90 days - consider revoking'],['SA-2026-019','Mahesh Tyagi - Stationery group - 0 used in 90 days - consider revoking'],['Review list','Next pruning list 20 Oct 2026 (every 30 days, in-app and email)']]}
+  ];
+  /* standing approvals (memlog 2026-09-25: STANDING APPROVAL SA-YYYY-NNN, finance one-time approval, auto-revoke on account disable) */
+  var GR0=[
+    {ref:'SA-2026-014',p:'Arif Ansari',pr:'Maintenance technician',it:'Group: Cleaning and PPE (gloves, cotton waste, brooms)',ig:'Cleaning and PPE',cap:'40 units / month',used:'28 units',end:'31 Mar 2027',st:'act',by:'Head of department - Maintenance, 5 Aug 2026',fa:'Finance department head, 12 Aug 2026'},
+    {ref:'SA-2026-017',p:'Imran Khan',pr:'Picker',it:'Item: Hand gloves, cotton (CN-GL-0010)',ig:'Hand gloves, cotton',cap:'20 pairs / month',used:'0 pairs',end:'No end date',st:'act',unused:true,by:'Site head, 2 Jun 2026',fa:'Finance department head, 4 Jun 2026'},
+    {ref:'SA-2026-019',p:'Mahesh Tyagi',pr:'Unloading supervisor',it:'Group: Stationery',ig:'Stationery',cap:'No cap',used:'Rs 0',end:'No end date',st:'act',unused:true,by:'Site head, 10 Jun 2026',fa:'Finance department head, 11 Jun 2026'},
+    {ref:'SA-2026-024',p:'Sanjay Mishra',pr:'Dispatch',it:'Item: Stretch film 500mm (PK-SF-0500)',ig:'Stretch film 500mm',cap:'10 rolls / month',used:'-',end:'31 Dec 2026',st:'wait',by:'Site head, 24 Sep 2026',fa:'Pending - sent 24 Sep 2026'},
+    {ref:'SA-2026-011',p:'Suresh Verma',pr:'Store assistant',it:'Group: Packing consumables',ig:'Packing consumables',cap:'No cap',used:'6 units',end:'No end date',st:'rev',by:'Site head, 3 Apr 2026',fa:'Finance department head, 5 Apr 2026',note:'Revoked by site head 18 Sep 2026 - reason: role change, moved to stores counter'},
+    {ref:'SA-2026-008',p:'Rajesh Kumar',pr:'Helper (former)',it:'Group: Cleaning and PPE (gloves, cotton waste, brooms)',ig:'Cleaning and PPE',cap:'30 units / month',used:'-',end:'No end date',st:'exit',by:'Head of department - Maintenance, 12 Mar 2026',fa:'Finance department head, 14 Mar 2026',note:'Account disabled 2026-09-20 - all grants revoked'},
+    {ref:'SA-2026-004',p:'Neha Saxena',pr:'QC inspector',it:'Item: Marker pen, paint type (ST-MK-0021)',ig:'Marker pen, paint type',cap:'10 nos / month',used:'-',end:'31 Aug 2026',st:'exp',by:'Site head, 1 Feb 2026',fa:'Finance department head, 2 Feb 2026'}];
+  var LIM0=[['Pooja Sharma','Inventory controller','Rs 25,000','Rs 8,400','act'],['Deepak Chauhan','Maintenance supervisor','Rs 50,000','Rs 31,750','act'],['Kavita Singh','Procurement','Rs 15,000','-','wait']];
+  var SAST={act:['p-ok','check','Active'],wait:['p-warn','clock','Awaiting finance approval'],exit:['p-off','lock','Revoked - employee exited'],rev:['p-off','x','Revoked by assigner'],exp:['p-off','clock','Expired']};
+  var PEOPLE=['Arif Ansari - Maintenance technician','Imran Khan - Picker','Mahesh Tyagi - Unloading supervisor','Sanjay Mishra - Dispatch','Suresh Verma - Store assistant','Neha Saxena - QC inspector','Ramesh Yadav - Gate'];
+  var IGRP=['Group: Cleaning and PPE','Group: Stationery','Group: Packing consumables','Item: Hand gloves, cotton (CN-GL-0010)','Item: Safety shoes (PP-SS-0008)','Item: Cotton waste (CN-CW-0001)','Item: Stretch film 500mm (PK-SF-0500)'];
+  var FREQ=[['7','Every 7 days'],['15','Every 15 days'],['30','Every 30 days (default)'],['60','Every 60 days'],['90','Every 90 days']];
+  var REFUSED=[['GRN-2026-0983 line 20','Refused: line already posted from TAB-ST-01 (duplicate) - SCN-07, Suresh Verma, 11:48'],['L-2609-104 issue','Refused: lot is on QC hold, not issuable - SCN-05, Imran Khan, 10:22']];
+  var ACT=[['14:18','Neha Saxena','accepted lot L-2609-096 at QC (QC-2026-0311)'],['14:02','Suresh Verma','put away L-2609-096 to R-B3-04'],['13:47','Pooja Sharma','requested stock adjustment ADJ-2026-0033'],['12:30','Site head','approved IND-2026-0419'],['10:15','Imran Khan','reported damage on L-2609-104 (40 nos on hold)'],['09:05','Ramesh Yadav','logged gate entry GE-2026-2233, HR55 AK 9031'],['07:05','Suresh Verma','completed GRN-2026-0981 to inspection bay IB-01']];
+  var CATS=[['Raw material - steel',14820400],['Bought-out components',6235800],['Electricals',3118500],['Bearings and transmission',2864200],['Consumables and oils',1876300],['MRO spares',1387700],['Fasteners',942700]];
+  var VARS=[
+    ['VAR-2026-0061','Cycle count','Hex Bolt M16x60, L-2609-104','-40 nos','-Rs 960','Stores (Suresh Verma)','3 d'],
+    ['VAR-2026-0063','Price','Contactor 32A 415V, GRN-2026-0975','Rs 2,340 vs PO Rs 2,200','+Rs 1,680','Procurement (Kavita Singh)','2 d'],
+    ['VAR-2026-0064','Cycle count','V-belt B-52, L-2609-110','+3 nos','+Rs 960','Stores (Suresh Verma)','1 d'],
+    ['VAR-2026-0066','Opening stock','MS Plate 12mm IS2062','-2 nos','-Rs 18,600','Migration lead','1 d']];
+  var MIG=[
+    {h:'Opening stock',st:['p-warn','clock','Awaiting sign-off'],f:'1,842 items, 2,316 lots, Rs 3,12,45,600',pct:99.6,pl:'99.6% reconciled - 9 lots differ from legacy count',s:[['y','Inventory controller (Pooja Sharma) - 23 Sep'],['w','Finance controller - pending'],['w','Site head - pending']],a:'Review 9 differences'},
+    {h:'BOMs',st:['p-ok','check','Signed off'],f:'214 BOMs, 3,961 lines',pct:100,pl:'100% matched to item master',s:[['y','Planner (Vikas Gupta) - 21 Sep'],['y','Site head - 22 Sep']],a:'View sign-off'},
+    {h:'Open POs',st:['p-info','info','In reconciliation'],f:'87 POs, 312 open lines',pct:95.4,pl:'4 POs: open qty differs from legacy',s:[['w','Procurement (Kavita Singh) - pending'],['w','Finance controller - pending']],a:'Review 4 POs'},
+    {h:'Job-work challans',st:['p-off','clock','Not started'],f:'23 challans at 6 job workers (loaded, not counted)',pct:0,pl:'Physical confirmation with job workers not started',s:[['w','Stores - pending'],['w','Finance controller - pending']],a:'Start confirmation'},
+    {h:'Custody registers',st:['p-err','warn','Blocked'],f:'146 tools and gauges held by 38 people',pct:88,pl:'5 holders are not in the user list',s:[['w','Maintenance supervisor (Deepak Chauhan) - pending'],['w','Site head - pending']],a:'Resolve 5 holders'}];
+  var AUD=[
+    ['25 Sep 14:18:05','Neha Saxena','QC inspector','qc.disposition.recorded','QC-2026-0311 - L-2609-096 accept','TAB-QC-02','Captured 14:18:05, received 14:18:07. Disposition accept, 24 nos. Quality hold cleared.'],
+    ['25 Sep 14:02:31','Suresh Verma','Store assistant','putaway.completed','L-2609-096 to R-B3-04','SCN-03','Captured 14:02:31, received 14:02:40. Suggested rack used; rack label scanned.'],
+    ['25 Sep 13:47:12','Pooja Sharma','Inventory controller','stock.adjustment.requested','ADJ-2026-0033 - V-belt B-52 +3 nos','DESK-IC-01','Submitted online. Routed to Approvals (site head).'],
+    ['25 Sep 12:30:44','Site head','Site head','approval.decided','IND-2026-0419 approved','PHN-SH-01','Submitted online from a phone. Previous state: awaiting approval.'],
+    ['25 Sep 11:48:03','Suresh Verma','Store assistant','capture.refused','GRN-2026-0983 line 20 - duplicate','SCN-07','Captured 11:48:03, not yet received (device offline). Refusal recorded on device.'],
+    ['25 Sep 10:15:20','Imran Khan','Picker','damage.reported','L-2609-104 - 40 nos on hold','SCN-05','Captured 10:15:20, received 10:15:26. Photo attached. Local hold only; QC task QC-2026-0322 created.'],
+    ['25 Sep 09:05:48','Ramesh Yadav','Gate officer','gate.entry.captured','GE-2026-2233 - HR55 AK 9031','SCN-01','Captured offline 09:05:48, received 09:21:10. Challan photo attached.'],
+    ['25 Sep 08:30:02','Imran Khan','Picker','stock.issued','IND-2026-0412 - 8 nos L-2609-117','SCN-05','Captured 08:30:02, received 08:30:05.'],
+    ['24 Sep 07:05:39','Suresh Verma','Store assistant','goods.received','GRN-2026-0981 - 3 lines to IB-01','TAB-ST-01','Captured 07:05:39, received 07:05:44. Labels queued 3.'],
+    ['24 Sep 06:12:10','Ramesh Yadav','Gate officer','gate.entry.captured','GE-2026-2231 - UP81 AT 4521','SCN-01','Captured 06:12:10, received 06:12:15.']];
+  var DOCS=[['GRN-2026-0981','GRN - Shree Balaji Steels - 3 lines - 24 Sep'],['PO-CMF-2026-04817','Purchase order - Shree Balaji Steels - 3 lines open'],['IND-2026-0412','Indent - Maintenance - 3 items - issued'],['GRN-2026-0975','GRN - contactors - 24 Sep']];
+
+  var S;
+  function fresh(dev){return {dev:dev||'desk',role:'site',view:'home',mod:'',q:'',menu:null,tile:'gate',drawer:null,loading:false,offline:false,note:'',focusId:null,
+    flt:{t:'',st:'all',loc:'all'},af:{t:'',ty:'all',who:'all',dev:'all'},audOpen:null,
+    gr:GR0.map(function(g){var c={};for(var k in g)c[k]=g[k];return c;}),lim:LIM0.map(function(l){return l.slice();}),
+    sa:{tab:'grants',sel:null,rv:false,rvr:'',rvt:'',err:'',f:{p:'',it:'',cap:'',end:'',why:''},freq:'30',app:true,em:true,next:23}};}
+  S=fresh();
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function say(t){var l=document.getElementById('live');l.textContent='';setTimeout(function(){l.textContent=t;},30);}
+  function inr(n){var s=String(n),l=s.slice(-3),r=s.slice(0,-3);if(r)l=','+l;return r.replace(/\B(?=(\d{2})+(?!\d))/g,',')+l;}
+  function R(){return ROLES[S.role];}
+  function H(){return S.dev==='hand';}
+  function T(){return S.dev==='tab';}
+  function DK(){return S.dev==='desk'||S.dev==='dtouch';}
+  function chip(st){var c=ST[st];return '<span class="pill '+c[0]+'">'+sv(P[c[1]])+c[2]+'</span>';}
+  function roBadge(){return '<span class="ro">'+sv(P.lock)+'Read-only access</span>';}
+  function curMod(){return S.view==='sa'?'Standing approvals':S.view==='stub'?S.mod:(S.view==='home'?(HOMEMOD[S.role]||'Home'):'');}
+  function apprBtn(label,cls){
+    if(S.offline)return '<button class="b b-pri'+(cls||'')+'" disabled aria-describedby="f-offap">'+label+'</button><span class="why" id="f-offap">'+sv(P.cloud)+'Approvals need a live connection - you are offline.</span>';
+    return '<button class="b b-pri'+(cls||'')+'" data-a="nav" data-m="Approvals">'+label+'</button>';
+  }
+
+  /* ---- shells ---- */
+  function side(){
+    var r=R(),cur=curMod();
+    var h='<aside class="side"><div class="brand"><span class="mark" aria-hidden="true">IM</span><span class="bt">IMS</span></div><nav aria-label="Modules">';
+    r.mods.forEach(function(m){
+      var cnt=(m==='Approvals'&&r.appr)?'<span class="count">'+r.appr+'</span>':'';
+      h+='<button class="nav-item" data-a="nav" data-m="'+m+'"'+(m===cur?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+MODS[m]+'</svg><span class="nl">'+m+'</span>'+cnt+'</button>';
+    });
+    return h+'</nav><div class="side-foot"><b>'+esc(r.person)+'</b>'+r.label+'</div></aside>';
+  }
+  function irail(){
+    var r=R(),cur=curMod();
+    var h='<aside class="irail"><div class="brand"><span class="mark" aria-hidden="true">IM</span><span class="sr">IMS</span></div><nav aria-label="Modules">';
+    r.mods.forEach(function(m){
+      var cnt=(m==='Approvals'&&r.appr)?'<span class="count" aria-label="'+r.appr+' waiting">'+r.appr+'</span>':'';
+      h+='<button data-a="nav" data-m="'+m+'"'+(m===cur?' aria-current="page"':'')+(SHORT[m]?' aria-label="'+m+'"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+MODS[m]+'</svg><span aria-hidden="'+(SHORT[m]?'true':'false')+'">'+(SHORT[m]||m)+'</span>'+cnt+'</button>';
+    });
+    return h+'</nav></aside>';
+  }
+  function bnav(){
+    var r=R(),cur=curMod();
+    var more=r.mods.filter(function(m){return r.bn.indexOf(m)<0&&!(m==='Home'&&HOMEMOD[S.role]);});
+    var h='<nav class="bnav" aria-label="Modules">';
+    r.bn.forEach(function(m){
+      var cnt=(m==='Approvals'&&r.appr)?'<span class="count" aria-label="'+r.appr+' waiting">'+r.appr+'</span>':'';
+      h+='<button data-a="nav" data-m="'+m+'"'+(m===cur?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+MODS[m]+'</svg>'+m+cnt+'</button>';
+    });
+    if(more.length)h+='<div class="mw"><button data-a="menu" data-m="more" aria-haspopup="menu" aria-expanded="'+(S.menu==='more')+'"'+(more.indexOf(cur)>=0?' aria-current="page"':'')+'>'+'<svg viewBox="0 0 24 24" aria-hidden="true">'+P.more+'</svg>More</button>'+(S.menu==='more'?menu():'')+'</div>';
+    return h+'</nav>';
+  }
+  function menu(){
+    var r=R();
+    if(S.menu==='new'&&r.nw){var h='<div class="menu" role="menu" aria-label="Quick create"><h3>Create new</h3>';
+      r.nw.forEach(function(x,i){h+='<button role="menuitem" data-a="create" data-i="'+i+'">'+esc(x)+'</button>';});return h+'</div>';}
+    if(S.menu==='more'){var mm='<div class="menu" role="menu" aria-label="More modules"><h3>More modules</h3>';
+      r.mods.filter(function(m){return r.bn.indexOf(m)<0&&!(m==='Home'&&HOMEMOD[S.role]);}).forEach(function(m){mm+='<button role="menuitem" data-a="nav" data-m="'+m+'">'+sv(MODS[m])+m+'</button>';});return mm+'</div>';}
+    if(S.menu==='bell'){var n=[['Damage case DMG-2026-0017 awaits concurrence','12 min ago'],['SCN-07 has not synced for 2 h','36 min ago'],['Opening stock sign-off requested','Yesterday']];
+      var h2='<div class="menu" role="menu" aria-label="Notifications" style="min-width:300px"><h3>Notifications</h3>';
+      n.forEach(function(x){h2+='<div class="mi" role="menuitem">'+esc(x[0])+'<small>'+x[1]+'</small></div>';});return h2+'</div>';}
+    if(S.menu==='user'){
+      var hats=S.role==='site'?[['site','Site head'],['site','Warehouse manager']]:r.hats.map(function(k){return [k,ROLES[k].label];});
+      var h3='<div class="menu" role="menu" aria-label="User menu"><div class="who"><b>'+esc(r.person)+'</b><span>'+r.label+' - CMF-ALIGARH</span></div><h3>'+(hats.length>1?'Your hats - switch to':'Your hat')+'</h3>';
+      hats.forEach(function(x,i){var on=S.role==='site'?i===0:x[0]===S.role;h3+='<button role="menuitemradio" aria-checked="'+on+'" data-a="hat" data-r="'+x[0]+'" data-i="'+i+'">'+(on?sv(P.check):'<span style="width:15px"></span>')+esc(x[1])+'</button>';});
+      if(S.role==='site')h3+='<div class="mi"><small>Warehouse manager and site head share this home.</small></div>';
+      if(H())h3+='<hr><button role="menuitem" data-a="menu" data-m="bell">'+sv(P.bell)+'Notifications (3 unread)</button>';
+      return h3+'<hr><button role="menuitem" data-a="stubmsg" data-m="Profile">Profile and password</button><button role="menuitem" data-a="stubmsg" data-m="Sign out">Sign out</button></div>';
+    }
+    return '';
+  }
+  function dtop(nar){
+    var r=R();
+    var sync=S.offline?'<span class="dsync" role="status"><span class="d"></span>Offline - last synced 14:05</span>':'<span class="dsync on" role="status"><span class="d"></span>Synced 14:24</span>';
+    var nw=r.ro?roBadge():'<div class="mw"><button class="b b-pri" data-a="menu" data-m="new" aria-haspopup="menu" aria-expanded="'+(S.menu==='new')+'">+ New</button>'+(S.menu==='new'?menu():'')+'</div>';
+    return '<header class="dtop"><form class="search" role="search" data-a="srch"><label class="sr" for="f-q">Search items, lots, GRNs, POs</label>'+sv(P.search)+
+      '<input id="f-q" data-f="q" name="q" value="'+esc(S.q)+'" placeholder="'+(nar?'Search items, lots':'Search items, lots, GRNs, POs')+'" autocomplete="off"></form>'+
+      (nar?'':'<span class="spacer"></span>')+sync+
+      '<button class="site" aria-label="Switch site, current CMF-ALIGARH" data-a="stubmsg" data-m="Site switcher">CMF-ALIGARH '+sv(P.down)+'</button>'+nw+
+      '<div class="mw"><button class="ib" data-a="menu" data-m="bell" aria-label="Notifications, 3 unread" aria-haspopup="menu" aria-expanded="'+(S.menu==='bell')+'">'+sv(P.bell)+'<span class="cnt" aria-hidden="true">3</span></button>'+(S.menu==='bell'?menu():'')+'</div>'+
+      '<div class="mw"><button class="avatar" data-a="menu" data-m="user" aria-haspopup="menu" aria-expanded="'+(S.menu==='user')+'" aria-label="User menu, '+esc(r.person)+', '+r.label+'"><span class="av" aria-hidden="true">'+r.ini+'</span>'+sv(P.down)+'</button>'+(S.menu==='user'?menu():'')+'</div></header>';
+  }
+  function htop(){
+    var r=R();
+    var sync=S.offline?'<span class="hsync" role="status"><span class="d"></span>Offline - 14:05</span>':'<span class="hsync on" role="status"><span class="d"></span>Synced 14:24</span>';
+    var nw=r.ro?'<span class="hro" title="Read-only access">'+sv(P.lock)+'<span class="sr">Read-only access</span></span>':'<div class="mw"><button class="hib" data-a="menu" data-m="new" aria-label="New, quick create" aria-haspopup="menu" aria-expanded="'+(S.menu==='new')+'">'+sv(P.plus)+'</button>'+(S.menu==='new'?menu():'')+'</div>';
+    var um=S.menu==='user'||(S.menu==='bell');
+    return '<header class="htop"><span class="ready" aria-hidden="true"></span><span class="rdy">Scanner ready</span><span class="spacer"></span>'+sync+nw+
+      '<div class="mw"><button class="hib" data-a="menu" data-m="user" aria-haspopup="menu" aria-expanded="'+um+'" aria-label="User menu, '+esc(r.person)+', '+r.label+'">'+r.ini+'</button>'+(um?menu():'')+'</div></header>';
+  }
+  function hsearch(){
+    return '<div class="hsrch"><form class="search" role="search" data-a="srch"><label class="sr" for="f-q">Search items, lots, GRNs, POs</label>'+sv(P.search)+
+      '<input id="f-q" data-f="q" name="q" value="'+esc(S.q)+'" placeholder="Search items, lots, GRNs" autocomplete="off"></form>'+
+      '<button class="site" aria-label="Switch site, current CMF-ALIGARH" data-a="stubmsg" data-m="Site switcher">CMF-ALIGARH</button></div>';
+  }
+  function banners(){
+    var h='';
+    if(S.offline)h+='<div class="banner off" role="status">'+sv(P.cloud)+'<span><b>Offline.</b> Showing data last synced today at 14:05 (19 min ago).'+(H()?'':' Figures may have changed since; this view refreshes when the network is back.')+'</span></div>';
+    if(S.note)h+='<div class="banner note" role="status">'+sv(P.info)+'<span>'+esc(S.note)+'</span><button class="b b-ghost x" data-a="dismiss">Dismiss</button></div>';
+    return h;
+  }
+  function phead(title,sub,extra){
+    return '<div class="phead"><h1>'+title+'</h1>'+(R().ro?roBadge():'')+(extra||'')+'<span class="sub">'+sub+(S.offline?' - as of last sync 14:05':'')+'</span></div>';
+  }
+  function pin(){
+    if(S.loading||S.view==='stub')return '';
+    if(saOn()){var sp=saPrimary();return sp?'<div class="pin" role="region" aria-label="Actions">'+sp+'</div>':'';}
+    var r=S.role,h='';
+    if(S.drawer!=null){
+      if(r==='inv')h='<button class="b b-pri" data-a="stubmsg" data-m="Reprint lot label">Reprint lot label</button><div class="row"><button class="b b-sec" data-a="stubmsg" data-m="Edit reorder parameters">Edit reorder parameters</button></div>';
+      else return '';
+    }
+    else if(S.view==='search')return '';
+    else if(r==='inv')h='<button class="b b-pri" data-a="scan" data-k="hw">'+sv(P.scan)+'Scan lot or rack label</button><div class="row"><button class="b b-sec" data-a="scan" data-k="cam">'+sv(P.cam)+'Use camera</button><button class="b b-plain" data-a="typeit" data-k="f-ft">'+sv(P.kbd)+'Type it</button></div>';
+    else if(r==='aud')h='<button class="b b-pri" data-a="scan" data-k="hw">'+sv(P.scan)+'Scan a label to find events</button><div class="row"><button class="b b-sec" data-a="scan" data-k="cam">'+sv(P.cam)+'Use camera</button><button class="b b-plain" data-a="typeit" data-k="f-at">'+sv(P.kbd)+'Type it</button></div>';
+    else if(r==='site')h=apprBtn('Open Approvals - 5 waiting');
+    else if(r==='fin')h=apprBtn('Open damage cases - 2 in Approvals');
+    else if(r==='mig')h='<button class="b b-pri" data-a="stubmsg" data-m="Review 9 differences - Opening stock">Review 9 differences - Opening stock</button>';
+    return '<div class="pin" role="region" aria-label="Actions">'+h+'</div>';
+  }
+  function scanTools(field){
+    if(T())return '<div class="scanrow"><button class="b b-sec" data-a="scan" data-k="cam">'+sv(P.cam)+'Scan with camera</button><button class="b b-plain" data-a="typeit" data-k="'+field+'">'+sv(P.kbd)+'Type it</button></div>';
+    return '';
+  }
+  function scanHint(){return DK()?' <span style="font-weight:400">(USB scanner or type)</span>':'';}
+
+  /* ---- skeleton / empty ---- */
+  function skeleton(){
+    var h='<div aria-busy="true" aria-label="Loading"><span class="sr">Loading</span><div class="sk" style="height:24px;width:60%;margin-bottom:14px"></div><div class="skrow">';
+    for(var i=0;i<6;i++)h+='<div class="sk" style="height:84px;flex:1"></div>';
+    h+='</div>';for(var j=0;j<7;j++)h+='<div class="sk" style="height:36px;margin-bottom:8px;width:'+(100-j*4)+'%"></div>';
+    return h+'</div>';
+  }
+  function empty(title,tips,btn){
+    var h='<div class="empty" role="status"><div class="ei">'+sv(P.search)+'</div><h2>'+title+'</h2>';
+    if(tips){h+='<ul>';tips.forEach(function(t){h+='<li>'+t+'</li>';});h+='</ul><br>';}
+    return h+(btn||'')+'</div>';
+  }
+
+  /* ---- site head ---- */
+  function siteHome(){
+    var h=phead(H()?'Today':'Today at CMF-ALIGARH','Thursday 25 Sep 2026, 14:24 IST');
+    h+='<div class="strip s7">';
+    TILES.forEach(function(t){h+='<button class="tile'+(t.alert?' alert':'')+(t.wide?' wide':'')+'" data-a="tile" data-k="'+t.k+'" aria-pressed="'+(S.tile===t.k)+'"><span class="n">'+sv(P[t.ic])+t.n+'</span><span class="l">'+t.l+(t.k==='sync'&&!H()?' - sync health':'')+'</span></button>';});
+    h+='</div><div class="linkrow">'+sv(P.warn)+'<span><b>2 refused captures</b> from devices need a decision.</span><button class="b b-ghost" data-a="tile" data-k="ref">Resolve refused captures</button></div>';
+    var t=S.tile==='ref'?{l:'Refused captures',n:2,rows:REFUSED}:TILES.filter(function(x){return x.k===S.tile;})[0];
+    var act='<section class="card" aria-labelledby="ra-h"><h2 id="ra-h">Recent activity<span class="r"><button class="b b-ghost" data-a="nav" data-m="Reports">All activity</button></span></h2><ul class="list">';
+    ACT.forEach(function(a){act+='<li><span class="t">'+a[0]+'</span><span class="tx"><b>'+a[1]+'</b> '+esc(a[2])+'</span></li>';});
+    act+='</ul></section>';
+    var det='<section class="card" aria-labelledby="td-h" aria-live="polite"><h2 id="td-h">'+t.l+' ('+t.n+')</h2><ul class="list">';
+    t.rows.forEach(function(r){det+='<li><span class="tx"><b class="'+(/^[A-Z]{2,3}[-0-9]/.test(r[0])?'mono':'')+'">'+esc(r[0])+'</b><span class="m">'+esc(r[1])+'</span></span></li>';});
+    var go={gate:'Gate',insp:'Quality',put:'Stores',exc:'Receiving',appr:'Approvals',sync:'Settings',ref:'Settings',sa:'Standing approvals'}[S.tile];
+    det+='</ul>'+(go==='Approvals'?(H()?'':apprBtn('Open Approvals').replace('b b-pri','b b-sec')):'<button class="b b-sec" data-a="nav" data-m="'+go+'">Open '+(S.tile==='sync'||S.tile==='ref'?'device health':go)+'</button>')+'</section>';
+    h+='<div class="grid2">'+(H()?det+act:act+det)+'</div>';
+    return h;
+  }
+
+  /* ---- inventory controller: stock lookup ---- */
+  function filtered(){
+    var f=S.flt,t=f.t.trim().toLowerCase();
+    return STOCK.map(function(r,i){return [r,i];}).filter(function(x){var r=x[0];
+      if(f.st!=='all'&&r.st!==f.st)return false;if(f.loc!=='all'&&r.lt!==f.loc)return false;
+      if(t&&(r.item+' '+r.code+' '+r.lot+' '+r.loc).toLowerCase().indexOf(t)<0)return false;return true;});
+  }
+  function stockTable(rows){
+    var h='<div class="tblwrap"><table class="tbl"><caption class="sr">Stock lookup results</caption><thead><tr><th scope="col">Item</th><th scope="col">Lot</th><th scope="col">Location</th><th scope="col" class="num">Qty</th><th scope="col">Status</th><th scope="col" class="num">Value</th></tr></thead><tbody>';
+    rows.forEach(function(x){var r=x[0],i=x[1];
+      h+='<tr class="click'+(S.drawer===i?' sel':'')+'" data-a="row" data-i="'+i+'"><td><button class="rowbtn" data-a="row" data-i="'+i+'">'+esc(r.item)+'</button><br><span class="mono" style="color:var(--text-muted);font-size:11.5px">'+r.code+'</span></td><td class="mono">'+r.lot+'</td><td class="mono">'+r.loc+'</td><td class="num">'+r.qty+'</td><td>'+chip(r.st)+'</td><td class="num">Rs '+r.val+'</td></tr>';});
+    return h+'</tbody></table></div>';
+  }
+  function stockCards(rows){
+    var h='<ul class="clist" aria-label="Lots">';
+    rows.forEach(function(x){var r=x[0],i=x[1];
+      h+='<li><button class="lcard" data-a="row" data-i="'+i+'"'+(T()&&S.drawer===i?' aria-current="true"':'')+'><span class="r1"><b>'+esc(r.item)+'</b>'+chip(r.st)+(H()?'<span class="chev" aria-hidden="true">&rsaquo;</span>':'')+'</span><span class="m mono">'+r.lot+' - '+r.loc+' - '+r.code+'</span><span class="r2"><span>'+r.qty+'</span><b>Rs '+r.val+'</b></span></button></li>';});
+    return h+'</ul>';
+  }
+  function lotsView(rows){
+    if(DK())return stockTable(rows);
+    if(H())return stockCards(rows);
+    return '<div class="panes"><div>'+stockCards(rows)+'</div>'+pane()+'</div>';
+  }
+  function invHome(){
+    var h=phead('Stock lookup',H()?'All locations incl. inspection bays and quarantine':'All locations at CMF-ALIGARH incl. inspection bays IB-01, IB-02 and quarantine QH-02');
+    var f=S.flt;
+    h+=scanTools('f-ft');
+    h+='<div class="filters"><div class="fl grow"><label for="f-ft">Item, code, lot or location'+scanHint()+'</label><input id="f-ft" data-f="ft" value="'+esc(f.t)+'" placeholder="e.g. Bearing or L-2609-117"></div>'+
+      '<div class="fl"><label for="f-fs">Status</label><select id="f-fs" data-f="fs">'+opt([['all','All statuses'],['ok','Available'],['hold','On QC hold'],['insp','In inspection bay']],f.st)+'</select></div>'+
+      '<div class="fl"><label for="f-fl">Location type</label><select id="f-fl" data-f="fl">'+opt([['all','All locations'],['rack','Racks'],['bay','Inspection bay'],['quar','Quarantine']],f.loc)+'</select></div>'+
+      '<button class="b b-plain" data-a="clearf">Clear filters</button></div>';
+    var rows=filtered();
+    h+='<p class="resn" role="status">'+rows.length+' of '+STOCK.length+' lots shown. '+(DK()?'Select a row':'Tap a lot')+' for lot trace and reorder parameters.</p>';
+    if(!rows.length)return h+'<div class="card">'+empty('No lots match these filters',['Check the lot number format, e.g. L-2609-117','Widen Status or Location type'],'<button class="b b-sec" data-a="clearf">Clear filters</button>')+'</div>';
+    return h+lotsView(rows);
+  }
+  function opt(list,v){return list.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===v?' selected':'')+'>'+o[1]+'</option>';}).join('');}
+  function detHead(){
+    var r=STOCK[S.drawer];
+    return '<div class="tx"><h2 id="f-dh">'+esc(r.item)+'</h2><span class="m">'+r.code+' - lot '+r.lot+' - '+r.qty+' at '+r.loc+'</span><div style="margin-top:4px">'+chip(r.st)+' <span class="pill p-off">Rs '+r.val+'</span></div></div>';
+  }
+  function detBody(withActs){
+    var r=STOCK[S.drawer],ro=REORDER[r.code],put=r.lt==='rack';
+    var steps=[
+      ['done','Gate entry GE-2026-2231','Ramesh Yadav - 24 Sep 06:12 - UP81 AT 4521, challan DC/2425/0913'],
+      ['done','Received on '+r.grn,'Suresh Verma - 24 Sep 07:05 - '+r.po+' line 10'],
+      [r.st==='insp'?'cur':'done',r.st==='insp'?'In inspection bay '+r.loc+' - awaiting QC':(r.st==='hold'?'On QC hold - QC-2026-0322':'Inspection bay IB-01 - cleared QC-2026-0311'),r.st==='insp'?'Neha Saxena - arrived 24 Sep 07:05':(r.st==='hold'?'Damage reported by Imran Khan 25 Sep 10:15 - QC and finance to concur':'Neha Saxena - accepted 24 Sep 09:40')],
+      [put?'done':(r.st==='hold'?'cur':'todo'),put?'Put away to rack '+r.loc:(r.st==='hold'?'Moved to quarantine '+r.loc:'Rack putaway'),put?'Suresh Verma - 24 Sep 10:15 - suggested rack used':(r.st==='hold'?'Not issuable until the outcome is final':'After QC clearance; rack suggested then')],
+      [put&&r.lot==='L-2609-117'?'done':'todo',put&&r.lot==='L-2609-117'?'Issued on IND-2026-0412':'Issues',put&&r.lot==='L-2609-117'?'8 nos to Maintenance - Imran Khan - 25 Sep 08:30':'No issues yet']
+    ];
+    var h='<section aria-labelledby="f-lt"><h3 id="f-lt">Lot trace - '+r.lot+'</h3><ol class="trace">';
+    steps.forEach(function(s){h+='<li class="'+(s[0]==='done'?'':s[0])+'"><span class="dot">'+(s[0]==='done'?sv(P.check):(s[0]==='cur'?sv(P.clock):''))+'</span><b>'+esc(s[1])+'</b><span class="m">'+esc(s[2])+'</span><span class="sr">'+(s[0]==='done'?'done':(s[0]==='cur'?'current step':'not yet'))+'</span></li>';});
+    h+='</ol></section><section aria-labelledby="f-rp"><h3 id="f-rp">Reorder parameters - '+r.code+'</h3><div class="kv">';
+    ['Minimum stock','Reorder point','Reorder qty','Lead time','On hand (all lots)','On order'].forEach(function(k,i){h+='<div><span>'+k+'</span><b>'+ro[i]+'</b></div>';});
+    h+='</div></section>';
+    if(S.role==='inv'&&withActs)h+='<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="b b-sec" data-a="stubmsg" data-m="Edit reorder parameters">Edit reorder parameters</button><button class="b b-plain" data-a="stubmsg" data-m="Reprint lot label">Reprint lot label</button></div>';
+    else if(R().ro)h+='<p class="resn">'+roBadge()+' You can view this trace; changes are not available to your role.</p>';
+    return h;
+  }
+  function drawer(){
+    if(S.drawer==null)return '';
+    return '<div class="scrim" data-a="closedr" aria-hidden="true"></div><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="f-dh"><div class="dh">'+detHead()+'<button class="ib" data-a="closedr" aria-label="Close item detail">'+sv(P.x)+'</button></div><div class="db">'+detBody(true)+'</div></aside>';
+  }
+  function pane(){
+    if(S.drawer==null)return '<section class="dpane ph" aria-label="Lot detail"><div class="ei">'+sv(P.box)+'</div><b style="color:var(--text)">No lot selected</b><p style="margin:6px 0 0">Tap a lot to see its trace (gate, GRN, inspection bay, rack, issues) and reorder parameters here.</p></section>';
+    return '<section class="dpane" aria-labelledby="f-dh"><div class="dh">'+detHead()+'<button class="ib" data-a="closedr" aria-label="Close lot detail">'+sv(P.x)+'</button></div><div class="db">'+detBody(true)+'</div></section>';
+  }
+  function detPage(){
+    return '<button class="b b-ghost back" data-a="closedr">'+sv(P.left)+'Back to '+(S.view==='search'?'search results':(S.role==='inv'?'stock lookup':'home'))+'</button>'+
+      '<section class="card" aria-labelledby="f-dh" style="padding:0"><div class="dh" style="border-bottom:1px solid var(--border)">'+detHead()+'</div><div class="db" style="overflow:visible">'+detBody(false)+'</div></section>';
+  }
+
+  /* ---- finance ---- */
+  function finHome(){
+    var tot=CATS.reduce(function(a,c){return a+c[1];},0),mx=CATS[0][1];
+    var h=phead(H()?'Valuation and variances':'Stock valuation and variances','Weighted average cost - as of 25 Sep 2026 14:00');
+    h+='<div class="callout" style="margin-bottom:14px"><span class="n">2</span><span class="tx"><b>Damage cases await your concurrence.</b> QC has concurred on DMG-2026-0014 (return to supplier); DMG-2026-0017 awaits both.</span>'+(H()?'':'<span style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+apprBtn('Open in Approvals')+'</span>')+'</div>';
+    h+='<div class="linkrow" style="background:var(--accent-soft);border-color:#BCD3F0">'+sv(P.info)+'<span><b>1 standing approval</b> (SA-2026-021, Arif Ansari, safety consumables) awaits your one-time approval.</span><button class="b b-ghost" data-a="nav" data-m="Standing approvals">View standing approvals</button></div>';
+    h+='<div class="grid2 fin"><section class="card" aria-labelledby="val-h"><h2 id="val-h">Stock value</h2><div class="big">Rs '+inr(tot)+'</div><div class="split">'+
+      '<div><span>'+sv(P.check)+'Available</span><b>Rs 2,94,18,900</b></div><div><span>'+sv(P.bay)+'In inspection bay</span><b>Rs 11,62,400</b></div><div><span>'+sv(P.lock)+'On QC hold</span><b>Rs 6,64,300</b></div></div>'+
+      '<ul class="bars" aria-label="Stock value by category">';
+    CATS.forEach(function(c){h+='<li><span>'+c[0]+'</span><span class="bar" aria-hidden="true"><i style="width:'+(c[1]/mx*100).toFixed(1)+'%"></i></span><span class="v">Rs '+inr(c[1])+'</span></li>';});
+    h+='</ul></section><section class="card" aria-labelledby="var-h"><h2 id="var-h">Variances awaiting explanation<span class="r pill p-warn">'+VARS.length+' open</span></h2><ul class="list">';
+    VARS.forEach(function(v){h+='<li><span class="tx"><b class="mono">'+v[0]+'</b> - '+v[1]+'<span class="m">'+esc(v[2])+' - '+esc(v[3])+'</span><span class="m">Explanation from '+esc(v[5])+' - open '+v[6]+'</span></span><b style="white-space:nowrap">'+v[4]+'</b></li>';});
+    h+='</ul><button class="b b-sec" data-a="nav" data-m="Reports">Variance register</button></section></div>';
+    return h;
+  }
+
+  /* ---- auditor ---- */
+  function audKv(r){
+    return '<div class="kv"><div><span>When (IST)</span><b>'+r[0]+'</b></div><div><span>Device</span><b class="mono">'+r[5]+'</b></div><div><span>Who</span><b>'+esc(r[1])+'</b></div><div><span>Role</span><b>'+r[2]+'</b></div></div><p style="margin:0">'+sv(P.info)+' '+esc(r[6])+'</p>';
+  }
+  function audHome(){
+    var a=S.af,t=a.t.trim().toLowerCase();
+    var h=phead('Audit trail',H()?'Who did what, when, on which device':'Who did what, when, on which device - every event at CMF-ALIGARH');
+    var types=['all'].concat(AUD.map(function(x){return x[3];}).filter(function(v,i,s){return s.indexOf(v)===i;}));
+    var who=['all'].concat(AUD.map(function(x){return x[1];}).filter(function(v,i,s){return s.indexOf(v)===i;}));
+    var dev=['all'].concat(AUD.map(function(x){return x[5];}).filter(function(v,i,s){return s.indexOf(v)===i;}));
+    h+=scanTools('f-at');
+    h+='<div class="filters"><div class="fl grow"><label for="f-at">Reference, lot or text'+scanHint()+'</label><input id="f-at" data-f="at" value="'+esc(a.t)+'" placeholder="e.g. GRN-2026-0981 or L-2609-104"></div>'+
+      '<div class="fl"><label for="f-ay">Event type</label><select id="f-ay" data-f="ay">'+opt(types.map(function(x){return [x,x==='all'?'All event types':x];}),a.ty)+'</select></div>'+
+      '<div class="fl"><label for="f-aw">Who</label><select id="f-aw" data-f="aw">'+opt(who.map(function(x){return [x,x==='all'?'Anyone':x];}),a.who)+'</select></div>'+
+      '<div class="fl"><label for="f-ad">Device</label><select id="f-ad" data-f="ad">'+opt(dev.map(function(x){return [x,x==='all'?'All devices':x];}),a.dev)+'</select></div>'+
+      '<div class="fl"><label for="f-af">From</label><input id="f-af" type="date" value="2026-09-24" readonly aria-readonly="true"'+(DK()?' style="min-width:0;width:140px"':'')+'></div></div>';
+    var rows=AUD.map(function(r,i){return [r,i];}).filter(function(x){var r=x[0];
+      if(a.ty!=='all'&&r[3]!==a.ty)return false;if(a.who!=='all'&&r[1]!==a.who)return false;if(a.dev!=='all'&&r[5]!==a.dev)return false;
+      if(t&&r.join(' ').toLowerCase().indexOf(t)<0)return false;return true;});
+    h+='<p class="resn" role="status">'+rows.length+' events, newest first. '+(DK()?'Select':'Tap')+' an event for capture and receipt times.</p>';
+    if(!rows.length)return h+'<div class="card">'+empty('No events match',['Try a reference such as GRN-2026-0981','Set Event type, Who and Device back to all'],'<button class="b b-sec" data-a="clearaf">Clear filters</button>')+'</div>';
+    if(DK()){
+      h+='<div class="tblwrap"><table class="tbl"><caption class="sr">Audit events</caption><thead><tr><th scope="col">When (IST)</th><th scope="col">Who</th><th scope="col">Event</th><th scope="col">What</th><th scope="col">Device</th></tr></thead><tbody>';
+      rows.forEach(function(x){var r=x[0],i=x[1],op=S.audOpen===i;
+        h+='<tr class="click'+(op?' sel':'')+'" data-a="aud" data-i="'+i+'"><td class="num" style="text-align:left">'+r[0]+'</td><td><b>'+esc(r[1])+'</b><br><span style="font-size:11.5px;color:var(--text-muted)">'+r[2]+'</span></td><td class="mono"><button class="rowbtn mono" data-a="aud" data-i="'+i+'" aria-expanded="'+op+'">'+r[3]+'</button></td><td>'+esc(r[4])+'</td><td class="mono">'+r[5]+'</td></tr>';
+        if(op)h+='<tr><td colspan="5" style="height:auto;padding:8px 12px;background:#FAFBFC;font-size:12.5px">'+sv(P.info)+' '+esc(r[6])+'</td></tr>';});
+      return h+'</tbody></table></div>';
+    }
+    var list='<ul class="clist" aria-label="Audit events">';
+    rows.forEach(function(x){var r=x[0],i=x[1],op=S.audOpen===i;
+      list+='<li><button class="lcard" data-a="aud" data-i="'+i+'" '+(H()?'aria-expanded="'+op+'" aria-controls="f-ax'+i+'"':(op?'aria-current="true"':''))+'><span class="r1"><b class="mono" style="font-size:14px">'+r[3]+'</b>'+(H()?'<span class="chev" aria-hidden="true">'+(op?'&minus;':'+')+'</span>':'')+'</span><span>'+esc(r[4])+'</span><span class="m">'+r[0]+' - '+esc(r[1])+' ('+r[2]+') - '+r[5]+'</span></button>'+
+        (H()&&op?'<div class="xp" id="f-ax'+i+'">'+audKv(r)+'</div>':'')+'</li>';});
+    list+='</ul>';
+    if(H())return h+list;
+    var sel=S.audOpen!=null?AUD[S.audOpen]:null;
+    var pn=sel?'<section class="dpane" aria-labelledby="f-adh"><div class="dh"><div class="tx"><h2 id="f-adh" class="mono">'+sel[3]+'</h2><span class="m">'+esc(sel[4])+'</span></div><button class="ib" data-a="aud" data-i="'+S.audOpen+'" aria-label="Close event detail">'+sv(P.x)+'</button></div><div class="db">'+audKv(sel)+'<p class="resn" style="margin:0">'+roBadge()+' Events cannot be edited or deleted.</p></div></section>'
+      :'<section class="dpane ph" aria-label="Event detail"><div class="ei">'+sv(MODS.Audit)+'</div><b style="color:var(--text)">No event selected</b><p style="margin:6px 0 0">Tap an event to see capture and receipt times and the device it came from.</p></section>';
+    return h+'<div class="panes"><div>'+list+'</div>'+pn+'</div>';
+  }
+
+  /* ---- migration lead ---- */
+  function migHome(){
+    var h=phead('Migration sign-off',H()?'Each domain goes live only after sign-off':'Legacy data loaded into CMF-ALIGARH - each domain goes live only after sign-off');
+    h+='<div class="mcards">';
+    MIG.forEach(function(m,i){
+      h+='<section class="card mcard" aria-labelledby="mg'+i+'"><div class="hd"><h2 id="mg'+i+'">'+m.h+'</h2><span class="pill '+m.st[0]+'">'+sv(P[m.st[1]])+m.st[2]+'</span></div><p class="facts">'+m.f+'</p>'+
+        '<div class="meter" role="img" aria-label="'+m.pct+' percent reconciled"><i style="width:'+m.pct+'%"></i></div><p class="facts">'+m.pl+'</p><ul class="signs" aria-label="Sign-offs">';
+      m.s.forEach(function(s){h+='<li class="'+s[0]+'">'+(s[0]==='y'?sv(P.check):sv(P.clock))+'<span>'+s[1]+'</span></li>';});
+      h+='</ul>'+(H()&&i===0?'':'<div class="acts"><button class="b b-sec" data-a="stubmsg" data-m="'+m.a+'">'+m.a+'</button></div>')+'</section>';
+    });
+    return h+'</div>';
+  }
+
+  /* ---- standing approvals ---- */
+  function saOn(){return S.view==='sa'||(S.view==='home'&&S.role==='hod');}
+  function canAssign(){return S.role==='site'||S.role==='hod';}
+  function saChip(st){var c=SAST[st];return '<span class="pill '+c[0]+'">'+sv(P[c[1]])+c[2]+'</span>';}
+  function flagChip(){return '<span class="pill p-err">'+sv(P.warn)+'Unused 90 days - consider revoking</span>';}
+  function liveBtn(label,attrs,cls,id){
+    if(S.offline)return '<button class="b '+(cls||'b-pri')+'" disabled aria-describedby="'+id+'">'+label+'</button><span class="why" id="'+id+'">'+sv(P.cloud)+'Needs a live connection - you are offline.</span>';
+    return '<button class="b '+(cls||'b-pri')+'" '+attrs+'>'+label+'</button>';
+  }
+  function nextSend(){var d=new Date(Date.UTC(2026,8,20+(+S.sa.freq)));return d.getUTCDate()+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()]+' '+d.getUTCFullYear();}
+  function saPrimary(){
+    var a=S.sa,g=a.sel!=null?S.gr[a.sel]:null;
+    if(a.tab==='grants'){
+      if(g){
+        if(canAssign()&&(g.st==='act'||g.st==='wait'))return a.rv?liveBtn('Confirm revoke','data-a="sarvok"','b-pri','f-rvw'):'<button class="b b-pri" data-a="sarv">Revoke '+g.ref+'</button>';
+        if(S.role==='fin'&&g.st==='wait')return apprBtn('Approve in Approvals');
+        return '';
+      }
+      if(canAssign())return '<button class="b b-pri" data-a="satab" data-k="new">'+sv(P.plus)+'New standing approval</button>';
+      if(S.role==='fin')return apprBtn('Open Approvals - 1 grant waiting');
+      return '';
+    }
+    if(a.tab==='new')return liveBtn('Send to finance for approval','data-a="sasend"','b-pri','f-snw');
+    if(a.tab==='review')return '<button class="b b-pri" data-a="sasave">Save review settings</button>';
+    return '';
+  }
+  function saCards(){
+    var h='<ul class="clist" aria-label="Standing approvals">';
+    S.gr.forEach(function(g,i){
+      h+='<li><button class="lcard" data-a="sasel" data-i="'+i+'"'+(T()&&S.sa.sel===i?' aria-current="true"':'')+'><span class="r1"><b><span class="mono">'+g.ref+'</span> '+esc(g.p)+'</b>'+(H()?'<span class="chev" aria-hidden="true">&rsaquo;</span>':'')+'</span><span class="m">'+esc(g.it)+'</span><span class="saflag">'+saChip(g.st)+(g.unused&&g.st==='act'?flagChip():'')+'</span>'+
+        (g.note?'<span class="m">'+esc(g.note)+'</span>':'<span class="r2"><span>Cap '+g.cap+'</span><span>Used last period '+g.used+'</span></span>')+'</button></li>';});
+    return h+'</ul>';
+  }
+  function saTable(){
+    var h='<div class="tblwrap"><table class="tbl"><caption class="sr">Standing approval grants</caption><thead><tr><th scope="col">Grant</th><th scope="col">Item or group</th><th scope="col">Cap, used last period, ends</th><th scope="col">Status</th></tr></thead><tbody>';
+    S.gr.forEach(function(g,i){
+      h+='<tr class="click'+(S.sa.sel===i?' sel':'')+'" data-a="sasel" data-i="'+i+'"><td style="white-space:nowrap;padding:6px 8px"><button class="rowbtn mono" data-a="sasel" data-i="'+i+'">'+g.ref+'</button><br><span style="font-size:12px">'+esc(g.p)+'</span></td><td style="padding:6px 8px">'+esc(g.it)+(g.note?'<br><span style="font-size:11.5px;color:var(--text-muted)">'+esc(g.note)+'</span>':'')+'</td><td style="font-size:12px;padding:6px 8px;white-space:nowrap">Cap '+g.cap+'<br>Used '+g.used+'<br>Ends '+g.end+'</td><td style="padding:6px 8px"><span class="saflag" style="flex-direction:column;align-items:flex-start">'+saChip(g.st)+(g.unused&&g.st==='act'?flagChip().replace('Unused 90 days - consider revoking','Unused 90 days -<br>consider revoking'):'')+'</span></td></tr>';});
+    return h+'</tbody></table></div>';
+  }
+  function saDetail(){
+    var a=S.sa,g=S.gr[a.sel];
+    var h='<div class="dh"><div class="tx"><h2 id="f-sah"><span class="mono">'+g.ref+'</span> - '+esc(g.p)+'</h2><span class="m">'+esc(g.pr)+' - '+esc(g.it)+'</span><div class="saflag" style="margin-top:4px">'+saChip(g.st)+(g.unused&&g.st==='act'?flagChip():'')+'</div></div>'+(H()?'':'<button class="ib" data-a="sasel" data-i="'+a.sel+'" aria-label="Close grant detail">'+sv(P.x)+'</button>')+'</div><div class="db"'+(H()?' style="overflow:visible"':'')+'>';
+    if(g.note)h+='<p class="sanote" style="margin:0">'+sv(g.st==='exit'?P.lock:P.info)+'<span><b>'+esc(g.note)+'</b></span></p>';
+    h+='<div class="kv"><div><span>Monthly cap</span><b>'+g.cap+'</b></div><div><span>Used last period</span><b>'+g.used+'</b></div><div><span>End date</span><b>'+g.end+'</b></div><div><span>Status</span><b>'+SAST[g.st][2]+'</b></div><div><span>Assigned by</span><b style="font-size:13px">'+esc(g.by)+'</b></div><div><span>Finance one-time approval</span><b style="font-size:13px">'+esc(g.fa)+'</b></div></div>';
+    if(g.st==='act')h+='<section aria-labelledby="f-slh"><h3 id="f-slh">Issue slip text</h3><p class="slip" style="margin:0">Standing approval '+g.ref+' for '+esc(g.p)+' ('+esc(g.ig)+'). Storekeeper please issue.</p></section><p class="sanote" style="margin:0">'+sv(P.info)+'<span>Usage over the cap falls back to normal approval by the head of department.</span></p>';
+    if(g.unused&&g.st==='act')h+='<p class="sanote" style="margin:0;color:var(--err)">'+sv(P.warn)+'<span>Not used in 90 days - consider revoking.</span></p>';
+    if(canAssign()&&(g.st==='act'||g.st==='wait')){
+      if(a.rv){
+        h+='<section aria-labelledby="f-rvh" class="card" style="border-color:var(--err)"><h2 id="f-rvh">Revoke '+g.ref+'</h2><div class="saform" style="grid-template-columns:1fr">'+
+          '<div class="fl"><label for="f-rvr">Reason</label><select id="f-rvr" data-f="g-rvr">'+opt([['','Choose a reason'],['No longer needed','No longer needed'],['Role change','Role change'],['Misuse suspected','Misuse suspected'],['Other','Other']],a.rvr)+'</select></div>'+
+          '<div class="fl"><label for="f-rvt">Details (optional)</label><textarea id="f-rvt" data-f="g-rvt">'+esc(a.rvt)+'</textarea></div></div>'+
+          (a.err?'<p class="errmsg" role="alert">'+sv(P.warn)+esc(a.err)+'</p>':'')+
+          '<p class="sanote">'+sv(P.info)+'<span>Takes effect at once. No finance approval is needed to revoke.</span></p>'+
+          '<div class="acts2">'+(H()?'':liveBtn('Confirm revoke','data-a="sarvok"','b-pri','f-rvw2'))+'<button class="b b-plain" data-a="sarvx">Cancel</button></div></section>';
+      } else if(!H())h+='<div class="acts2"><button class="b b-sec" data-a="sarv">Revoke '+g.ref+'</button></div>';
+    }
+    if(S.role==='fin'&&g.st==='wait'&&!H())h+='<div class="acts2">'+apprBtn('Approve in Approvals')+'</div>';
+    if(S.role==='fin')h+='<p class="sanote" style="margin:0">'+sv(P.lock)+'<span>Finance approves once; site head or head of department assigns and revokes.</span></p>';
+    return h+'</div>';
+  }
+  function saGrants(){
+    var a=S.sa,n=S.gr.filter(function(g){return g.st==='act';}).length,u=S.gr.filter(function(g){return g.unused&&g.st==='act';}).length;
+    var h='<p class="resn" role="status">'+S.gr.length+' grants - '+n+' active, '+u+' unused 90 days. '+(DK()?'Select a row':'Tap a grant')+' for detail'+(canAssign()?' and Revoke.':'.')+'</p>';
+    if(H()){if(a.sel!=null)return '<button class="b b-ghost back" data-a="sasel" data-i="'+a.sel+'">'+sv(P.left)+'Back to standing approvals</button><section class="card" aria-labelledby="f-sah" style="padding:0">'+saDetail()+'</section>';return h+saCards();}
+    var pn=a.sel!=null?'<section class="dpane" aria-labelledby="f-sah">'+saDetail()+'</section>':'<section class="dpane ph" aria-label="Grant detail"><div class="ei">'+sv(MODS['Standing approvals'])+'</div><b style="color:var(--text)">No grant selected</b><p style="margin:6px 0 0">'+(DK()?'Select':'Tap')+' a grant to see cap, usage, finance approval and the issue slip text.</p></section>';
+    return h+'<div class="sapanes"><div>'+(DK()?saTable():saCards())+'</div>'+pn+'</div>';
+  }
+  function saLimits(){
+    var h='<p class="resn">Self-approval limit Rs per person: the person approves their own requisitions up to the limit. Same cycle as grants: assign, finance one-time approval, periodic review.</p>';
+    if(DK()){h+='<div class="tblwrap"><table class="tbl"><caption class="sr">Self-approval limits</caption><thead><tr><th scope="col">Person</th><th scope="col" class="num">Self-approval limit</th><th scope="col" class="num">Used last period</th><th scope="col">Status</th></tr></thead><tbody>';
+      S.lim.forEach(function(l){h+='<tr><td><b>'+l[0]+'</b><br><span style="font-size:12px;color:var(--text-muted)">'+l[1]+'</span></td><td class="num">'+l[2]+'</td><td class="num">'+l[3]+'</td><td>'+saChip(l[4])+'</td></tr>';});h+='</tbody></table></div>';}
+    else{h+='<ul class="clist" aria-label="Self-approval limits">';S.lim.forEach(function(l){h+='<li class="lcard"><span class="r1"><b>'+l[0]+'</b>'+saChip(l[4])+'</span><span class="m">'+l[1]+'</span><span class="r2"><span>Limit '+l[2]+'</span><span>Used last period '+l[3]+'</span></span></li>';});h+='</ul>';}
+    if(canAssign())h+='<div class="acts2"><button class="b b-sec" data-a="stubmsg" data-m="New self-approval limit (same form as a standing approval, with a Rs limit)">'+sv(P.plus)+'New self-approval limit</button></div>';
+    return h;
+  }
+  function saNew(){
+    var f=S.sa.f;
+    var h='<section class="card" aria-labelledby="f-nwh"><h2 id="f-nwh">New standing approval</h2><p class="resn">The person may take this item or group without per-request approval. It takes effect only after the finance department head approves it once.</p><div class="saform">'+
+      '<div class="fl"><label for="f-np">Person (search)</label><input id="f-np" data-f="g-p" list="f-npl" value="'+esc(f.p)+'" placeholder="Type a name, e.g. Arif" autocomplete="off"><datalist id="f-npl">'+PEOPLE.map(function(p){return '<option value="'+p+'">';}).join('')+'</datalist></div>'+
+      '<div class="fl"><label for="f-ni">Item or item group (search)</label><input id="f-ni" data-f="g-it" list="f-nil" value="'+esc(f.it)+'" placeholder="e.g. gloves or Cleaning" autocomplete="off"><datalist id="f-nil">'+IGRP.map(function(p){return '<option value="'+p+'">';}).join('')+'</datalist></div>'+
+      '<div class="fl"><label for="f-nc">Monthly cap (optional)</label><input id="f-nc" data-f="g-cap" value="'+esc(f.cap)+'" placeholder="e.g. 20 pairs" autocomplete="off"></div>'+
+      '<div class="fl"><label for="f-ne">End date (optional)</label><input id="f-ne" type="date" data-f="g-end" value="'+esc(f.end)+'"></div>'+
+      '<div class="fl full"><label for="f-nw">Reason</label><textarea id="f-nw" data-f="g-why" placeholder="e.g. Daily housekeeping of CNC bay; avoids a request every shift">'+esc(f.why)+'</textarea></div></div>'+
+      (S.sa.err?'<p class="errmsg" role="alert">'+sv(P.warn)+esc(S.sa.err)+'</p>':'')+
+      '<p class="sanote">'+sv(P.info)+'<span>Over the cap or after the end date, requests go to normal approval. You can revoke at any time.</span></p>'+
+      (H()?'':'<div class="acts2">'+saPrimary()+'<button class="b b-plain" data-a="satab" data-k="grants">Cancel</button></div>')+'</section>';
+    return h;
+  }
+  function saReview(){
+    var a=S.sa;
+    var h='<div class="grid2 fin"><section class="card" aria-labelledby="f-rsh"><h2 id="f-rsh">Review list settings</h2><p class="resn">A periodic list of who holds what, with usage, so grants can be pruned. Each assigner and approver sets their own.</p><div class="saform">'+
+      '<div class="fl"><label for="f-fq">Frequency</label><select id="f-fq" data-f="g-freq">'+opt(FREQ,a.freq)+'</select></div>'+
+      '<div class="fl"><span>Next send</span><b style="font-size:15px;color:var(--text);min-height:34px;display:flex;align-items:center" aria-live="polite">'+nextSend()+'</b></div>'+
+      '<fieldset class="full" style="border:0;margin:0;padding:0"><legend class="fl" style="padding:0">Delivery</legend><label class="chk"><input type="checkbox" data-f="g-app"'+(a.app?' checked':'')+'>In-app</label><label class="chk"><input type="checkbox" data-f="g-em"'+(a.em?' checked':'')+'>Email</label></fieldset></div>'+
+      (!a.app&&!a.em?'<p class="errmsg" role="alert">'+sv(P.warn)+'Choose at least one delivery.</p>':'')+
+      '<p class="sanote">'+sv(P.clock)+'<span>Last list sent 20 Sep 2026.</span></p>'+(H()?'':'<div class="acts2">'+saPrimary()+'</div>')+'</section>';
+    h+='<section class="card" aria-labelledby="f-pvh"><h2 id="f-pvh">Preview - pruning list for '+nextSend()+'</h2><ul class="list">';
+    S.gr.filter(function(g){return g.st==='act'||g.st==='wait';}).forEach(function(g){h+='<li><span class="tx"><b class="mono">'+g.ref+'</b> '+esc(g.p)+'<span class="m">'+esc(g.ig)+' - cap '+g.cap+' - used last period '+g.used+'</span>'+(g.unused&&g.st==='act'?'<span class="saflag" style="margin-top:3px">'+flagChip()+'</span>':(g.st==='wait'?'<span class="saflag" style="margin-top:3px">'+saChip('wait')+'</span>':''))+'</span></li>';});
+    S.lim.filter(function(l){return l[4]==='act';}).forEach(function(l){h+='<li><span class="tx"><b>'+l[0]+'</b> - self-approval limit '+l[2]+'<span class="m">Used last period '+l[3]+'</span></span></li>';});
+    return h+'</ul></section></div>';
+  }
+  function saView(){
+    var a=S.sa,as=canAssign();
+    var h=phead('Standing approvals',as?'Items a person may take without per-request approval - each grant needs one-time finance approval':'Read and approve - new grants reach you in Approvals for one-time approval');
+    var tabs=[['grants','Grants'],['limits','Self-approval limits']];if(as)tabs.push(['new','New standing approval']);tabs.push(['review','Review list']);
+    if(!(H()&&a.sel!=null&&a.tab==='grants')){h+='<div class="satabs" role="group" aria-label="Standing approvals sections">';tabs.forEach(function(t){h+='<button data-a="satab" data-k="'+t[0]+'" aria-pressed="'+(a.tab===t[0])+'">'+t[1]+'</button>';});h+='</div>';}
+    if(a.tab==='limits')return h+saLimits();
+    if(a.tab==='new'&&as)return h+saNew();
+    if(a.tab==='review')return h+saReview();
+    h+=saGrants();
+    if(!H()&&a.sel==null){var p=saPrimary();if(p)h+='<div class="acts2">'+p+'</div>';}
+    return h;
+  }
+
+  /* ---- search + stub ---- */
+  function searchView(){
+    var q=S.q.trim(),l=q.toLowerCase();
+    var st=STOCK.map(function(r,i){return [r,i];}).filter(function(x){var r=x[0];return (r.item+' '+r.code+' '+r.lot+' '+r.grn+' '+r.po).toLowerCase().indexOf(l)>=0;});
+    var dc=DOCS.filter(function(d){return (d[0]+' '+d[1]).toLowerCase().indexOf(l)>=0;});
+    var h='<div class="phead"><h1>Results for "'+esc(q)+'"</h1>'+(R().ro?roBadge():'')+'<button class="b b-ghost" data-a="clearq">Clear search</button><span class="sub">Items, lots, GRNs and POs at CMF-ALIGARH'+(S.offline?' - as of last sync 14:05':'')+'</span></div>';
+    if(!st.length&&!dc.length)return h+'<div class="card">'+empty('No items, lots, GRNs or POs match "'+esc(q)+'"',['Check spelling or use part of a name, e.g. Bearing','Search a lot as L-2609-117, a GRN as GRN-2026-0981','Only CMF-ALIGARH is searched; switch site to look elsewhere'],'<button class="b b-sec" data-a="clearq">Clear search</button>')+'</div>';
+    h+='<p class="resn" role="status">'+st.length+' lots and '+dc.length+' documents</p>';
+    if(dc.length){h+='<section class="card" style="margin-bottom:12px" aria-label="Documents"><h2>Documents</h2><ul class="list">';dc.forEach(function(d){h+='<li><span class="tx"><b class="mono">'+d[0]+'</b><span class="m">'+d[1]+'</span></span></li>';});h+='</ul></section>';}
+    if(st.length)h+=lotsView(st);
+    return h;
+  }
+  function stub(){
+    var where={Gate:'key-gate-entry.html',Receiving:'key-stores.html',Stores:'key-stores.html',Approvals:'the Approvals inbox mock (damage case with QC and finance concurrence, CEO escalation)',Quality:'the QC workbench mock',Warehouse:'the warehouse floor tasks mock',Maintenance:'the Maintenance mock'}[S.mod];
+    return phead(S.mod,'Module list-to-detail view')+'<div class="card">'+empty(S.mod+' is not drawn in this mock',null,'<p style="margin:0 0 12px">'+(where?'It is covered by '+esc(where)+'.':'Module page not yet mocked.')+'</p><button class="b b-sec" data-a="nav" data-m="Home">Back to home</button>').replace('class="ei">'+sv(P.search),'class="ei">'+sv(MODS[S.mod]))+'</div>';
+  }
+
+  /* ---- render ---- */
+  function body(){
+    if(S.loading)return skeleton();
+    if(H()&&S.drawer!=null&&(S.view==='search'||S.view==='home'))return detPage();
+    if(S.view==='search')return searchView();
+    if(S.view==='stub')return stub();
+    if(S.view==='sa')return saView();
+    return {site:siteHome,inv:invHome,fin:finHome,aud:audHome,mig:migHome,hod:saView}[S.role]();
+  }
+  var frame=document.getElementById('f'),wrap=document.getElementById('fwrap');
+  function render(){
+    var d=S.dev;
+    frame.className='screen d-'+d+' '+(d==='desk'?'compact':'touch');
+    wrap.className='fwrap w-'+(d==='dtouch'?'desk':d);
+    var lbl=R().label+' home';
+    if(d==='hand')frame.innerHTML=htop()+hsearch()+banners()+'<main class="hbody" aria-label="'+lbl+'">'+body()+'</main>'+pin()+bnav();
+    else if(d==='tab')frame.innerHTML=irail()+'<div class="dmain">'+dtop(true)+banners()+'<main class="dbody" aria-label="'+lbl+'">'+body()+'</main></div>';
+    else frame.innerHTML=side()+'<div class="dmain">'+dtop(false)+banners()+'<main class="dbody" aria-label="'+lbl+'">'+body()+'</main>'+(S.loading?'':drawer())+'</div>';
+  }
+  function renderAll(){
+    var a=document.activeElement,sel=null;
+    if(a&&a.closest&&a.closest('#f')){
+      if(a.dataset.f)sel='[data-f="'+a.dataset.f+'"]';else if(a.dataset.a){sel='[data-a="'+a.dataset.a+'"]'+(a.dataset.m?'[data-m="'+a.dataset.m+'"]':'')+(a.dataset.k?'[data-k="'+a.dataset.k+'"]':'')+(a.dataset.i!=null?'[data-i="'+a.dataset.i+'"]':'');}}
+    var m=frame.querySelector('main'),top=m?m.scrollTop:0;
+    render();
+    m=frame.querySelector('main');if(m&&top)m.scrollTop=top;
+    var g=document.getElementById('rolegrp'),h='';
+    Object.keys(ROLES).forEach(function(k){var r=ROLES[k];h+='<button class="b b-sec" data-demo="role" data-r="'+k+'" aria-pressed="'+(S.role===k)+'">'+r.label+(r.person!==r.label?' - '+esc(r.person):'')+(r.ro?' (read-only)':'')+'</button>';});
+    g.innerHTML=h;
+    document.getElementById('devsw').innerHTML=DEVS.map(function(x){return '<button data-demo="dev" data-d="'+x[0]+'" aria-pressed="'+(S.dev===x[0])+'">'+x[1]+'</button>';}).join('');
+    var cur=DEVS.filter(function(x){return x[0]===S.dev;})[0];
+    document.getElementById('devnote').textContent=cur[2];
+    document.getElementById('dev-label').innerHTML=cur[1]+' <span>- '+esc(cur[2].split(' - ')[0]+(cur[2].split(' - ').length>2?' - '+cur[2].split(' - ')[1]:''))+'</span>';
+    document.getElementById('load-btn').textContent='Loading skeleton (now: '+(S.loading?'on':'off')+')';
+    document.getElementById('off-btn').textContent='Offline banner (now: '+(S.offline?'offline':'online')+')';
+    if(S.focusId){var fi=document.getElementById(S.focusId);S.focusId=null;if(fi){fi.focus();return;}}
+    if(sel){var n=frame.querySelector(sel);if(n){n.focus();if(n.tagName==='INPUT'&&n.type!=='date'){var l=n.value.length;try{n.setSelectionRange(l,l);}catch(e){}}}}
+  }
+  function setRole(k){S.sa.tab='grants';S.sa.sel=null;S.sa.rv=false;S.sa.err='';S.role=k;S.view='home';S.mod='';S.menu=null;S.drawer=null;S.audOpen=null;S.note='';S.tile='gate';}
+
+  document.addEventListener('click',function(e){
+    var d=e.target.closest('[data-demo]');
+    if(d){var w=d.dataset.demo;
+      if(w==='dev'){S.dev=d.dataset.d;S.menu=null;say('Device class: '+d.textContent);renderAll();var b=document.querySelector('[data-demo="dev"][data-d="'+S.dev+'"]');if(b)b.focus();return;}
+      if(w==='role'){setRole(d.dataset.r);say('Role: '+ROLES[S.role].label);}
+      else if(w==='drawer'){if(S.role!=='inv')setRole('inv');S.view='home';S.flt={t:'',st:'all',loc:'all'};S.drawer=0;say('Lot detail open: MS Plate 10mm, lot L-2609-117');}
+      else if(w==='sa'){if(S.role!=='site')setRole('site');S.view='sa';S.sa.tab='grants';S.sa.sel=null;say('Standing approvals open');}
+      else if(w==='empty'){S.q='gear coupling 45mm';S.view='search';S.drawer=null;S.menu=null;say('Search: no result');}
+      else if(w==='loading'){S.loading=!S.loading;say(S.loading?'Loading':'Loaded');}
+      else if(w==='offline'){S.offline=!S.offline;say(S.offline?'Offline. Showing data last synced at 14:05':'Back online. Synced 14:24');}
+      else if(w==='reset'){S=fresh(S.dev);say('Reset');}
+      renderAll();return;}
+    var t=e.target.closest('[data-a]');
+    if(!t||!t.closest('#f')){if(S.menu&&!e.target.closest('.menu')){S.menu=null;renderAll();}return;}
+    var a=t.dataset.a;
+    if(a==='srch')return;
+    if(a!=='menu'&&!t.closest('.menu'))S.menu=null;
+    switch(a){
+      case 'nav':var m=t.dataset.m;S.drawer=null;S.note='';S.menu=null;
+        if(m==='Home'||HOMEMOD[S.role]===m){S.view='home';S.mod='';}else if(m==='Standing approvals'){S.view='sa';S.mod='';}else{S.view='stub';S.mod=m;}break;
+      case 'satab':S.sa.tab=t.dataset.k;S.sa.sel=null;S.sa.rv=false;S.sa.err='';if(S.view!=='home')S.view='sa';S.note='';break;
+      case 'sasel':var si=+t.dataset.i;S.sa.sel=S.sa.sel===si?null:si;S.sa.rv=false;S.sa.err='';break;
+      case 'sarv':S.sa.rv=true;S.sa.err='';S.sa.rvr='';S.sa.rvt='';S.focusId='f-rvr';break;
+      case 'sarvx':S.sa.rv=false;S.sa.err='';break;
+      case 'sarvok':
+        if(!S.sa.rvr){S.sa.err='Choose a reason to revoke.';S.focusId='f-rvr';break;}
+        var g=S.gr[S.sa.sel];g.st='rev';g.unused=false;g.note='Revoked by '+R().label.toLowerCase()+' 25 Sep 2026 - reason: '+S.sa.rvr.toLowerCase()+(S.sa.rvt?' ('+S.sa.rvt+')':'');
+        S.sa.rv=false;S.sa.err='';S.note=g.ref+' revoked. '+g.p+' now needs normal approval for '+g.ig+'.';say(S.note);break;
+      case 'sasend':
+        var f=S.sa.f;if(!f.p.trim()||!f.it.trim()||!f.why.trim()){S.sa.err='Fill Person, Item or item group and Reason.';S.focusId=!f.p.trim()?'f-np':(!f.it.trim()?'f-ni':'f-nw');break;}
+        var ref='SA-2026-0'+(22+S.gr.length-GR0.length);
+        S.gr.unshift({ref:ref,p:f.p.split(' - ')[0],pr:f.p.split(' - ')[1]||'Employee',it:f.it,ig:f.it.replace(/^(Item|Group): /,''),cap:f.cap||'No cap',used:'-',end:f.end||'No end date',st:'wait',by:R().label+', 25 Sep 2026',fa:'Pending - sent 25 Sep 2026'});
+        S.sa.f={p:'',it:'',cap:'',end:'',why:''};S.sa.err='';S.sa.tab='grants';S.sa.sel=0;
+        S.note=ref+': Sent to finance department head for one-time approval.';say(S.note);break;
+      case 'sasave':if(!S.sa.app&&!S.sa.em){S.focusId=null;break;}S.note='Review list saved: '+FREQ.filter(function(x){return x[0]===S.sa.freq;})[0][1].replace(' (default)','').toLowerCase()+', '+[S.sa.app?'in-app':'',S.sa.em?'email':''].filter(Boolean).join(' and ')+'. Next send '+nextSend()+'.';say(S.note);break;
+      case 'menu':S.menu=S.menu===t.dataset.m?null:t.dataset.m;break;
+      case 'hat':var r=t.dataset.r;var i=+t.dataset.i;setRole(r);if(r==='site'&&i===1)S.note='Warehouse manager hat: same home as site head at this site.';say('Hat: '+ROLES[S.role].label);break;
+      case 'create':S.menu=null;S.note='+ New '+R().nw[+t.dataset.i]+': quick-create form not drawn in this mock.';break;
+      case 'stubmsg':S.menu=null;S.note=t.dataset.m+': not drawn in this mock.';break;
+      case 'dismiss':S.note='';break;
+      case 'tile':S.tile=t.dataset.k;break;
+      case 'row':S.drawer=+t.dataset.i;if(H())S.focusId=null;break;
+      case 'closedr':S.drawer=null;break;
+      case 'clearf':S.flt={t:'',st:'all',loc:'all'};break;
+      case 'clearaf':S.af={t:'',ty:'all',who:'all',dev:'all'};break;
+      case 'clearq':S.q='';S.view='home';S.drawer=null;break;
+      case 'aud':S.audOpen=S.audOpen===+t.dataset.i?null:+t.dataset.i;break;
+      case 'typeit':S.focusId=t.dataset.k;S.note='';break;
+      case 'scan':
+        var cam=t.dataset.k==='cam';
+        if(S.role==='aud'){S.af.t='GRN-2026-0981';S.audOpen=null;say('Scanned GRN-2026-0981');}
+        else{S.flt={t:'L-2609-117',st:'all',loc:'all'};S.drawer=0;say('Scanned lot L-2609-117');}
+        S.note=(cam?'Camera scan':'Scanner read')+': '+(S.role==='aud'?'GRN-2026-0981':'lot label L-2609-117')+(cam?' (viewfinder not drawn in this mock).':'.');break;
+    }
+    renderAll();
+  });
+  document.addEventListener('submit',function(e){
+    var f=e.target;if(!f.closest('#f'))return;e.preventDefault();
+    var v=f.querySelector('input').value.trim();if(!v)return;
+    S.q=v;S.view='search';S.drawer=null;S.menu=null;say('Searching for '+v);renderAll();
+  });
+  document.addEventListener('input',function(e){
+    var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
+    if(f==='q')return;
+    if(f==='ft')S.flt.t=e.target.value;else if(f==='fs')S.flt.st=e.target.value;else if(f==='fl')S.flt.loc=e.target.value;
+    else if(f.indexOf('g-')===0){var k=f.slice(2),el=e.target;
+      if(k==='rvr'||k==='rvt'){S.sa[k]=el.value;if(k==='rvr'){S.sa.err='';renderAll();}return;}
+      if(k==='freq'){S.sa.freq=el.value;renderAll();return;}
+      if(k==='app'||k==='em'){S.sa[k]=el.checked;renderAll();return;}
+      S.sa.f[k]=el.value;return;}
+    else if(f==='at')S.af.t=e.target.value;else if(f==='ay')S.af.ty=e.target.value;else if(f==='aw')S.af.who=e.target.value;else if(f==='ad')S.af.dev=e.target.value;
+    else return;
+    renderAll();
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'&&(S.menu||S.drawer!=null)){S.menu=null;S.drawer=null;renderAll();}
+    if((e.key==='Enter'||e.key===' ')&&e.target.tagName==='TR'&&e.target.dataset.a){e.preventDefault();e.target.click();}
+  });
+  renderAll();
+})();
+</script>
+</body>
+</html>
