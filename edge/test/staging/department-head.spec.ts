@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { PEOPLE, signIn, simTag } from './auth';
+import { ownName, PEOPLE, signIn, simTag } from './auth';
 
 // The department head reviews refused captures for the site and resolves one that
 // somebody else captured. Resolving your own capture is not the supervisor's job.
@@ -17,8 +17,8 @@ test('subscr reviews refused captures and resolves one captured by someone else'
   const count = await cards.count();
 
   const own = [PEOPLE['subscr@ancorlabs.org'], 'subscr@ancorlabs.org'];
-  // captured_by may be a user id rather than a name; also skip anything the header names.
-  const me = ((await page.locator('header .edge-brand p').textContent()) ?? '').split(' · ')[0]?.trim();
+  // captured_by may be a user id rather than a name; also skip anything the sidebar names.
+  const me = await ownName(page);
   if (me) own.push(me);
   let target = -1;
   for (let i = 0; i < count; i += 1) {

@@ -53,14 +53,26 @@ function onKeycloak(page: Page): boolean {
   }
 }
 
-/** The header line "<user name> · <site name>". */
+// The Sep-30 shell redesign removed the old "user · site" header line (.edge-brand): the user
+// now shows in the sidebar caption and the site above it. A member list of both is the sidebar's
+// `.edge-sidebar-caption` (the user) and `.edge-sidebar-site` (the site).
 export function identityLine(page: Page) {
-  return page.locator('header .edge-brand p');
+  return page.locator('.edge-sidebar .edge-sidebar-caption');
 }
 
-/** The header line, but only while it names this person (display name or email). */
+/** The sidebar caption, but only while it names this person (display name or email). */
 export function personInHeader(page: Page, email: Person) {
-  return identityLine(page).filter({ hasText: new RegExp(`^(${escape(PEOPLE[email])}|${escape(email)}) ·`) });
+  return identityLine(page).filter({ hasText: new RegExp(`^(${escape(PEOPLE[email])}|${escape(email)})`) });
+}
+
+/** The sidebar's site paragraph ("<site name>"). */
+export function siteLine(page: Page) {
+  return page.locator('.edge-sidebar .edge-sidebar-site');
+}
+
+/** The signed-in user's own display name (or email), read back from the sidebar caption. */
+export async function ownName(page: Page): Promise<string> {
+  return ((await identityLine(page).textContent()) ?? '').trim();
 }
 
 function escape(text: string): string {
