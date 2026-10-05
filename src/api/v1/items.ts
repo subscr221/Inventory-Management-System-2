@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import type { PoolClient } from 'pg';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import {
@@ -21,6 +22,11 @@ import {
   ITEM_STATUSES,
   STANDARD_COST_DESIGNATION,
 } from '../../read/projections/item_master.js';
+import { assertItemGroupAssignable, markEverAssigned } from '../../read/projections/item_group.js';
+import {
+  assertItemGroupRight,
+  notifyItemGroupChange,
+} from '../../compliance/item-group-authority.js';
 import type {
   CreateItemInput,
   UpdateItemPatch,
@@ -259,6 +265,44 @@ function isDuplicateSkuError(err: unknown): boolean {
   );
 }
 
+/**
+ * Story 2.10: parses the optional item_group_id. Absent is `undefined`; a string is validated
+ * later against the group master; `null` clears the group and is PATCH-only.
+ */
+function parseItemGroupField(
+  body: Record<string, unknown>,
+  allowNull: boolean,
+): string | null | undefined {
+  if (!('item_group_id' in body)) return undefined;
+  const value = body['item_group_id'];
+  if (typeof value === 'string') return value;
+  if (value === null && allowNull) return null;
+  throw new AppError(
+    400,
+    'INVALID_PARAMS',
+    allowNull ? 'item_group_id must be a string or null' : 'item_group_id must be a string',
+  );
+}
+
+/**
+ * Story 2.10 AC4/AC6: writing item_group_id needs `inventory_controller` plus the item group
+ * `edit` right on top of the inventory write gate; a string value must name an active group and
+ * marks it ever-assigned (so it can never be deleted afterwards).
+ */
+async function prepareItemGroupWrite(
+  req: IncomingMessage,
+  client: PoolClient,
+  value: string | null,
+): Promise<void> {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHENTICATED', 'Authentication required');
+  await assertItemGroupRight(authContext, 'edit', client);
+  if (value !== null) {
+    const group = await assertItemGroupAssignable(value, client);
+    await markEverAssigned(group.item_group_id, client);
+  }
+}
+
 // -----------------------------------------------------------------------------------------------
 // POST /api/v1/items
 // -----------------------------------------------------------------------------------------------
@@ -300,6 +344,7 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
     standardCost.standard_cost_designation ?? null,
     standardCost.standard_cost_amount ?? null,
   );
+  const createGroupId = parseItemGroupField(body, false) as string | undefined;
 
   const input: CreateItemInput = {
     sku,
@@ -314,6 +359,7 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
     business_stream: body['business_stream'],
     status: isItemStatus(body['status']) ? body['status'] : 'active',
     ...standardCost,
+    ...(createGroupId !== undefined ? { item_group_id: createGroupId } : {}),
   };
 
   const actor = actorContext(req);
@@ -321,7 +367,9 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if (createGroupId !== undefined) await prepareItemGroupWrite(req, client, createGroupId);
     const item = await createItem(input, client);
+    const correlationId = randomUUID();
     await persistEvent(
       {
         stream_type: 'item_master',
@@ -329,7 +377,7 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
         event_type: 'item.created',
         payload: { item },
         metadata: {
-          correlation_id: randomUUID(),
+          correlation_id: correlationId,
           actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
           occurred_at: new Date().toISOString(),
         },
@@ -337,6 +385,15 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
       auditCtxFor(req, actor, 201),
       client,
     );
+    if (item.item_group_id !== null) {
+      await notifyItemGroupChange(client, {
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        status_verb: 'Item group set',
+        object_type: 'item',
+        object_id: sku,
+        correlation_id: correlationId,
+      });
+    }
     await client.query('COMMIT');
     sendJson(res, 201, item);
   } catch (err) {
@@ -421,6 +478,8 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
     patch.status = body['status'];
   }
   Object.assign(patch, parseStandardCostFields(body));
+  const itemGroupId = parseItemGroupField(body, true);
+  if (itemGroupId !== undefined) patch.item_group_id = itemGroupId;
   if (Object.keys(patch).length === 0) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'At least one updatable field is required');
     return;
@@ -431,6 +490,7 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if (itemGroupId !== undefined) await prepareItemGroupWrite(req, client, itemGroupId);
     const before = await getItemBySku(sku, client);
     if (!before) {
       throw new AppError(404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, {
@@ -450,6 +510,7 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
         : before.standard_cost_amount;
     assertStandardCostConfig(mergedDesignation, mergedAmount);
     const after = await updateItem(sku, patch, client);
+    const correlationId = randomUUID();
     await persistEvent(
       {
         stream_type: 'item_master',
@@ -457,7 +518,7 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
         event_type: 'item.updated',
         payload: { item_id: before.item_id, sku, before, after },
         metadata: {
-          correlation_id: randomUUID(),
+          correlation_id: correlationId,
           actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
           occurred_at: new Date().toISOString(),
         },
@@ -465,6 +526,21 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
       auditCtxFor(req, actor, 200),
       client,
     );
+    if (after && after.item_group_id !== before.item_group_id) {
+      const verb =
+        after.item_group_id === null
+          ? 'Item group cleared'
+          : before.item_group_id === null
+            ? 'Item group set'
+            : 'Item group changed';
+      await notifyItemGroupChange(client, {
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        status_verb: verb,
+        object_type: 'item',
+        object_id: sku,
+        correlation_id: correlationId,
+      });
+    }
     await client.query('COMMIT');
     sendJson(res, 200, after);
   } catch (err) {

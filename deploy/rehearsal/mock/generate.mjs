@@ -413,7 +413,8 @@ const people = [
   ['subscr', 'Department Head', false, [...['migration', 'engineering', 'procurement', 'jobwork', 'custody', 'production', 'maintenance'].map((m) => ['department_head', m, W, 'site']), ['department_head', 'inventory', R, 'site']]],
   ['anupam', 'CFO', false, [['cfo', 'jobwork', W, '*'], ['cfo', 'migration', R, 'site']]],
   // Story 1.16 (D2, D3): the site head keeps warehouse_manager and gains site_head at the site.
-  ['cmf_supervisor', 'Site Head', false, [['warehouse_manager', 'warehouse', W, 'site'], ['warehouse_manager', 'inventory', W, 'site'], ['warehouse_manager', 'receiving', W, 'site'], ['site_head', 'jobwork', W, 'site'], ['site_head', 'jobwork', R, 'site'], ['site_head', 'notification', R, 'site']]],
+  // Story 2.10 (D11): the same person also holds store_controller (read, site) for item group notices.
+  ['cmf_supervisor', 'Site Head', false, [['warehouse_manager', 'warehouse', W, 'site'], ['warehouse_manager', 'inventory', W, 'site'], ['warehouse_manager', 'receiving', W, 'site'], ['site_head', 'jobwork', W, 'site'], ['site_head', 'jobwork', R, 'site'], ['site_head', 'notification', R, 'site'], ['store_controller', 'warehouse', R, 'site']]],
   ['dev1', 'Devender', false, [['engineering_admin', 'engineering', W, '*'], ['engineering_admin', 'engineering', R, '*']]],
   ['erp1', 'ERP adapter service', false, [['svc_erp_adapter', 'inventory', W, '*']]],
   ['gate1', 'Ramesh Yadav', false, [['gate_officer', 'inventory', W, 'site'], ['weighbridge_operator', 'inventory', W, 'site']]],
@@ -462,6 +463,8 @@ const operations = {
     store: emailOf('store1'), picker: emailOf('picker1'), invctl: emailOf('invctl1'), whmanager: emailOf('cmf_supervisor'),
     // Story 1.16: the same person as whmanager, acting under the site_head hat.
     sitehead: emailOf('cmf_supervisor'),
+    // Story 2.10: the same person again, under the store_controller hat.
+    storecontroller: emailOf('cmf_supervisor'),
     dispatch: emailOf('dispatch1'), planner: emailOf('planner1'), engineer: emailOf('dev1'), qc: emailOf('qc1'),
     qchead: emailOf('qchead1'), maint: emailOf('maint1'), maintsup: emailOf('maintsup1'), indent: emailOf('indent1'),
     depthead: emailOf('subscr'), unloading: emailOf('unload1'),

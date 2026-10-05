@@ -22,6 +22,20 @@ import {
 } from './api/v1/business-stream.js';
 import { getCurrentLocationHandler, seedExpectedLocationHandler } from './api/v1/location.js';
 import { createItemHandler, updateItemHandler, getItemHandler } from './api/v1/items.js';
+import {
+  listUngroupedItemsHandler,
+  listItemGroupRightsHandler,
+  putItemGroupRightsHandler,
+  listItemGroupRecipientsHandler,
+  addItemGroupRecipientHandler,
+  removeItemGroupRecipientHandler,
+  listItemGroupsHandler,
+  createItemGroupHandler,
+  listItemGroupItemsHandler,
+  getItemGroupHandler,
+  updateItemGroupHandler,
+  deleteItemGroupHandler,
+} from './api/v1/item-groups.js';
 import { getStockHandler, getStockAvailabilityHandler } from './api/v1/stock.js';
 import {
   getValuationHandler,
@@ -571,6 +585,19 @@ export function createAppRouter(): Router {
   router.post('/api/v1/items', createItemHandler);
   router.patch('/api/v1/items/:sku', updateItemHandler);
   router.get('/api/v1/items/:sku', getItemHandler);
+  // Story 2.10: item group master. Literal paths first; the router takes the first match.
+  router.get('/api/v1/item-groups/ungrouped-items', listUngroupedItemsHandler);
+  router.get('/api/v1/item-groups/rights', listItemGroupRightsHandler);
+  router.put('/api/v1/item-groups/rights/:userId', putItemGroupRightsHandler);
+  router.get('/api/v1/item-groups/recipients', listItemGroupRecipientsHandler);
+  router.post('/api/v1/item-groups/recipients', addItemGroupRecipientHandler);
+  router.delete('/api/v1/item-groups/recipients/:userId', removeItemGroupRecipientHandler);
+  router.get('/api/v1/item-groups', listItemGroupsHandler);
+  router.post('/api/v1/item-groups', createItemGroupHandler);
+  router.get('/api/v1/item-groups/:code/items', listItemGroupItemsHandler);
+  router.get('/api/v1/item-groups/:code', getItemGroupHandler);
+  router.patch('/api/v1/item-groups/:code', updateItemGroupHandler);
+  router.delete('/api/v1/item-groups/:code', deleteItemGroupHandler);
   router.post('/api/v1/locations', createLocationHandler);
   router.get('/api/v1/locations', listLocationsHandler);
   router.patch('/api/v1/locations/:locationId', updateLocationHandler);

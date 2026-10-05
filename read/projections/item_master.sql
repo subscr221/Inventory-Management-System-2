@@ -11,6 +11,41 @@
 -- NO 'lifo' option (Ind AS 2 prohibits it). business_stream is validated in code against the
 -- Story 1.5 business_streams vocabulary - no second enum or CHECK constraint here.
 
+-- Story 2.10: item group master. Tables live in this file (not a new one) because every harness
+-- that creates item_master applies this file only; the FK target must exist there. users.sql runs
+-- before this file in migrate.ts and every harness (item_group_right / item_group_recipient
+-- reference users).
+CREATE TABLE IF NOT EXISTS item_group (
+  item_group_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  code            TEXT NOT NULL,
+  name            TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'active',
+  ever_assigned   BOOLEAN NOT NULL DEFAULT false,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_item_group_code UNIQUE (code),
+  CONSTRAINT chk_item_group_status CHECK (status IN ('active', 'inactive')),
+  CONSTRAINT chk_item_group_code CHECK (code ~ '^[A-Z0-9][A-Z0-9_-]{1,31}$'),
+  CONSTRAINT chk_item_group_name CHECK (length(btrim(name)) BETWEEN 1 AND 120)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_item_group_name_ci ON item_group (lower(name));
+
+CREATE TABLE IF NOT EXISTS item_group_right (
+  user_id     UUID PRIMARY KEY REFERENCES users(user_id),
+  can_create  BOOLEAN NOT NULL DEFAULT false,
+  can_edit    BOOLEAN NOT NULL DEFAULT false,
+  can_delete  BOOLEAN NOT NULL DEFAULT false,
+  granted_by  UUID NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS item_group_recipient (
+  user_id   UUID PRIMARY KEY REFERENCES users(user_id),
+  added_by  UUID NOT NULL,
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS item_master (
   item_id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   sku                         TEXT NOT NULL,
@@ -154,5 +189,37 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON item_master TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 2.10: an item carries at most one group; existing items stay NULL (ungrouped).
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS item_group_id UUID;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_item_master_item_group'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT fk_item_master_item_group FOREIGN KEY (item_group_id)
+        REFERENCES item_group (item_group_id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_item_master_item_group ON item_master (item_group_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE, DELETE ON item_group TO app_user;
+    GRANT INSERT, SELECT, UPDATE, DELETE ON item_group_right TO app_user;
+    GRANT INSERT, SELECT, UPDATE, DELETE ON item_group_recipient TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON item_group TO readonly_user;
+    GRANT SELECT ON item_group_right TO readonly_user;
+    GRANT SELECT ON item_group_recipient TO readonly_user;
   END IF;
 END $$;

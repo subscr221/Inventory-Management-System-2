@@ -46,8 +46,35 @@ const EXPECTED = [
       'chk_item_master_variance_tolerance_percent',
       'chk_item_master_count_variance_tolerance_percent',
       'chk_item_master_size_class',
+      'fk_item_master_item_group',
     ],
+    indexes: ['idx_item_master_item_group'] as string[],
+  },
+  // Story 2.10: the item group master tables live in item_master.sql (D1). Delete is a feature,
+  // so app_user holds DELETE on all three (guarded in code, ON DELETE RESTRICT on the FK).
+  {
+    canonical: 'read/projections/item_master.sql',
+    table: 'item_group',
+    constraints: [] as string[],
     indexes: [] as string[],
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_item_group_name_ci ON item_group (lower(name))',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
+  {
+    canonical: 'read/projections/item_master.sql',
+    table: 'item_group_right',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
+  {
+    canonical: 'read/projections/item_master.sql',
+    table: 'item_group_recipient',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
   },
   {
     canonical: 'read/projections/location_register.sql',
@@ -3202,6 +3229,28 @@ describe('Story 2.1 schema drift guard', () => {
       itemSql.includes('legal_metrology_required    BOOLEAN NOT NULL DEFAULT false,'),
       'item_master.sql CREATE TABLE missing legal_metrology_required',
     );
+  });
+
+  it('Story 2.10 carries item_group_id, its foreign key and ever_assigned in both SQL copies', () => {
+    const itemSql = read('read/projections/item_master.sql');
+    for (const [name, sql] of [
+      ['item_master.sql', itemSql],
+      ['init-db.sql', initDb],
+    ] as const) {
+      assert.ok(
+        sql.includes('ALTER TABLE item_master ADD COLUMN IF NOT EXISTS item_group_id UUID;'),
+        `${name} missing the item_group_id column`,
+      );
+      assert.ok(sql.includes('fk_item_master_item_group'), `${name} missing the foreign key`);
+      assert.ok(
+        normalizeSql(sql).includes('REFERENCES item_group(item_group_id)ON DELETE RESTRICT'),
+        `${name} must keep ON DELETE RESTRICT on the item group foreign key`,
+      );
+      assert.ok(
+        sql.includes('ever_assigned   BOOLEAN NOT NULL DEFAULT false'),
+        `${name} missing ever_assigned`,
+      );
+    }
   });
 
   // Story 11.5 code review (2026-09-09). The EXPECTED loop compares canonical against init-db.sql,

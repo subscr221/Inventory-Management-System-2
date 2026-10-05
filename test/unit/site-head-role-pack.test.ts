@@ -100,13 +100,14 @@ describe('Story 1.16 site head role in the pilot pack', () => {
         },
       ],
     );
-    // Three warehouse_manager, three site_head, one employee: nothing else rides along.
-    assert.strictEqual(own.length, 7);
+    // Three warehouse_manager, three site_head, one store_controller (Story 2.10), one employee:
+    // nothing else rides along.
+    assert.strictEqual(own.length, 8);
   });
 
-  it('the pack grows from 76 grants to 79 and from 24 roles to 25', () => {
-    assert.strictEqual(fixture.roles.length, 79);
-    assert.strictEqual(new Set(fixture.roles.map((r) => r.role)).size, 25);
+  it('the pack holds 80 grants and 26 roles (Story 1.16 took it to 79 and 25; Story 2.10 added store_controller)', () => {
+    assert.strictEqual(fixture.roles.length, 80);
+    assert.strictEqual(new Set(fixture.roles.map((r) => r.role)).size, 26);
   });
 
   it('no site_head holder holds finance_controller or cfo (D6)', () => {
@@ -236,7 +237,7 @@ describe('Story 1.16 site head role in the pilot pack', () => {
     };
     const person = world.people.find((p) => p.email === PILOT_HOLDER);
     assert.ok(person, `${PILOT_HOLDER} is missing from world.json people`);
-    assert.deepStrictEqual(person.roles, ['warehouse_manager', 'site_head']);
+    assert.deepStrictEqual(person.roles, ['warehouse_manager', 'site_head', 'store_controller']);
     assert.strictEqual(world.operations.actors['sitehead'], PILOT_HOLDER);
     assert.strictEqual(world.operations.actors['whmanager'], PILOT_HOLDER);
   });

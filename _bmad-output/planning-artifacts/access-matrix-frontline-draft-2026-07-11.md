@@ -55,7 +55,8 @@ The employee base role table below defines the one hat every human account holds
 | `stock_locator` | Bin/zone corrections, re-slotting inputs | Assigned site(s) | source §5.3 |
 | `dispatch_clerk` | Packing, shipping docs; **cannot dispatch e-invoiceable supply without IRN — no override** | Assigned site(s) | Story 3.7, FR-AC-14/11.2 |
 | `warehouse_manager` | Task assignment, transfer approval hat, count-adjustment approval hat | Assigned site(s) | FR-I-02/06, Story 3.8 |
-| `inventory_controller` | Stock balances, valuation views, transfer approval hat, reorder params | Multi-site | FR-I-01..08 |
+| `inventory_controller` | Stock balances, valuation views, transfer approval hat, reorder params, maintains item groups when granted the create, edit or delete right (Story 2.10) | Multi-site | FR-I-01..08, Story 2.10 |
+| `store_controller` | Physical custody of stores and warehouses; in Story 2.10 it receives item group notifications only and holds `warehouse` read at the site, no write power | Assigned site(s) | Story 2.10, owner rulings 2026-10-02 |
 | `indent_raiser` | Raises indents from floor (wave 1 with Epic 4; DOA-relevant now) | Assigned site(s) | UJ-IND-01, Story 4.3 |
 | `department_head` | Indent/requisition approval hat; migration sign-off for own domain | Department + site | FR-P-04, FR-DM-03 |
 
@@ -213,6 +214,12 @@ Legend: **C** = create/execute · **A** = approval hat (resolved via DOA) · **R
 | Dispatch e-invoiceable supply without IRN | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Set reorder/safety-stock parameters | — | — | — | — | C |
 | Valuation and NRV views | — | — | — | R | R |
+| Create item group (needs the `create` right) | - | - | - | - | C (right) |
+| Edit, deactivate or reactivate item group, assign items (needs the `edit` right) | - | - | - | - | C (right) |
+| Delete never-used item group (needs the `delete` right) | - | - | - | - | C (right) |
+| Ungrouped items report | - | - | - | R | R |
+
+The inventory and warehouse capability table above lists the item group rows added by Story 2.10. `C (right)` means the holder of `inventory_controller` also needs the matching item group right, granted per person by the CEO or the Finance Head (see section 3.11); `warehouse_manager` is deliberately excluded from changing item groups and receives a 403 `FUNCTION_ACCESS_DENIED`. Reading item groups needs inventory read, as for every other master.
 
 ### 3.4 BOM / engineering (pilot)
 
@@ -297,6 +304,15 @@ The site head capability table below lists what the `site_head` hat grants and w
 | Revoke a grant they assigned | U | Story 4.8 |
 | Approve their own grant | Not permitted | Finance department head approves (SOD-01 as amended) |
 
+### 3.11 Item group administration
+
+The item group administration table below lists who may grant item group rights and keep the item group notification recipient list. Only the CEO and the Finance Head (`finance_controller`) may do either; both actions are audited and notified, and a grant to a user who does not hold `inventory_controller` is refused with `GRANTEE_NOT_INVENTORY_CONTROLLER`. These routes carry no module gate because the two roles are provisioned on different modules, so the handler checks the role.
+
+| Capability | ceo | finance_controller | inventory_controller |
+|---|---|---|---|
+| Grant or revoke item group rights (create, edit, delete) | C | C | - |
+| Maintain item group recipient list | C | C | - |
+
 ## 4. Dashboards and Reporting (pilot interim)
 
 Domain status views ship inside module epics — default: every role reads its own domain's operational dashboard at its assigned locations; `warehouse_manager`, `inventory_controller`, `qc_head`, `finance_controller` get multi-site domain views. Cross-module executive dashboards (Epic 12) get their own matrix rows with the full role set.
@@ -376,3 +392,4 @@ Collected during the §7 interview pass and written to the DOA registry (FR-DOA-
 | v1.1 | 2026-09-27 | Story 1.15 (Employee Base Role): section 2 gains the `employee` base hat held by every signed-in person at their site; section 3.8 gains three capability rows (raise requisition, stock availability without quantities, own requests). Quantity, valuation and approval rows are unchanged. | Story 1.15 dev record; pending Super Admin (security lead) review |
 | v1.2 | 2026-09-27 | Story 8.9 (Report Damage): section 2 gains the `ceo` role (decides escalated damage cases through DOA `damage.escalation`, site scope); section 3.8 gains "Report damage" for the employee base hat; new section 3.9 lists the damage-case capabilities (inspection, custody marks, the two DOA keys, the whole-lot decision, escalation, the ERP reference); section 8 gains the three damage DOA bands. | Story 8.9 dev record; pending Super Admin (security lead) review |
 | v1.3 | 2026-09-30 | Story 1.16 (Site Head Role): section 2 gains the "Site leadership" subsection with the `site_head` role (site scope); new section 3.10 lists the site head capabilities: two live, three delivered by Story 4.8 and one not permitted; section 5 records the two assignment-time pairs that keep `site_head` apart from `finance_controller` and `cfo`. No existing row or ruling is changed. | Story 1.16 dev record; pending Super Admin (security lead) review |
+| v1.4 | 2026-10-05 | Story 2.10 (Item Groups Master): section 2 gains the `store_controller` role (site scope, notifications only) and notes item group maintenance on `inventory_controller`; section 3.3 gains the item group rows (create, edit and assign, delete, ungrouped report), restricted to `inventory_controller` with a per-person right and excluding `warehouse_manager` (owner rulings 2026-10-02); new section 3.11 lists the CEO and Finance Head as the only granters of item group rights and keepers of the recipient list. No existing row or ruling is changed. | Story 2.10 dev record; pending Super Admin (security lead) review |

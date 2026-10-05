@@ -706,6 +706,19 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'PUT /api/v1/instruments/:id/calibration-status',
       'PUT /api/v1/lots/:lot_id/quality-hold',
       'PUT /api/v1/notifications/preferences',
+      // Story 2.10: Item Groups Master
+      'GET /api/v1/item-groups/ungrouped-items',
+      'GET /api/v1/item-groups/rights',
+      'PUT /api/v1/item-groups/rights/:userId',
+      'GET /api/v1/item-groups/recipients',
+      'POST /api/v1/item-groups/recipients',
+      'DELETE /api/v1/item-groups/recipients/:userId',
+      'GET /api/v1/item-groups',
+      'POST /api/v1/item-groups',
+      'GET /api/v1/item-groups/:code/items',
+      'GET /api/v1/item-groups/:code',
+      'PATCH /api/v1/item-groups/:code',
+      'DELETE /api/v1/item-groups/:code',
     ].sort();
     assert.deepStrictEqual(
       routeSurface,
