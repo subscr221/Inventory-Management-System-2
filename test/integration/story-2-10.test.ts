@@ -118,6 +118,10 @@ async function allEventCount(): Promise<number> {
   return r.rows[0]!['count'] as number;
 }
 
+/** Two distinct sites, so a site-scoped recipient is never the same site as another. */
+const SITE_A = 'SITE-210-A';
+const SITE_B = 'SITE-210-B';
+
 describe('Story 2.10 Item Group Master Integration Tests', () => {
   let server: Server;
   let port: number;
@@ -207,14 +211,25 @@ describe('Story 2.10 Item Group Master Integration Tests', () => {
           },
         ],
       ],
+      // siteHead and storeCtl are site-scoped on purpose, not enterprise-wide: Table 2 says they
+      // are notified at every site because groups are global, so resolveItemGroupRecipients must
+      // find them without matching on location. Provisioning them at '*' would hide a regression
+      // that added a location filter.
       [
         'siteHead',
-        [{ role: 'site_head', module: 'jobwork', functionScope: 'read', locationId: '*' }],
+        [{ role: 'site_head', module: 'jobwork', functionScope: 'read', locationId: SITE_A }],
       ],
       ['cfo', [{ role: 'cfo', module: 'finance', functionScope: 'read', locationId: '*' }]],
       [
         'storeCtl',
-        [{ role: 'store_controller', module: 'warehouse', functionScope: 'read', locationId: '*' }],
+        [
+          {
+            role: 'store_controller',
+            module: 'warehouse',
+            functionScope: 'read',
+            locationId: SITE_B,
+          },
+        ],
       ],
       ['extra', [inv('stock_viewer', 'read')]],
     ];
@@ -296,6 +311,112 @@ describe('Story 2.10 Item Group Master Integration Tests', () => {
   });
 
   // ---------------------------------------------------------------------------------------------
+  it('AC3: a grantor may not grant to themselves and a no-op writes nothing', async () => {
+    // Owner ruling 2026-10-06: self-granting is refused. The persona that matters is a grantor who
+    // ALSO holds inventory_controller, since that is who could exercise what they award themselves;
+    // a plain ceo proves nothing about the dual-role case.
+    const dual = await provisionUser(port, 'ceo-ic@story210.example.com', [
+      { role: 'ceo', module: 'config', functionScope: 'write', locationId: '*' },
+      inv('inventory_controller'),
+    ]);
+    h['ceoIc'] = await authFor(port, 'ceo-ic@story210.example.com');
+    const self = await call('ceoIc', 'PUT', `/api/v1/item-groups/rights/${dual}`, {
+      create: true,
+      edit: true,
+      delete: true,
+    });
+    assert.strictEqual(self.status, 403, JSON.stringify(self.body));
+    assert.strictEqual(self.body['error_code'], 'SELF_GRANT_NOT_PERMITTED');
+    const none = await getPool().query(`SELECT 1 FROM item_group_right WHERE user_id = $1`, [dual]);
+    assert.strictEqual(none.rows.length, 0, 'the refused self-grant stored nothing');
+
+    // The same grantor may grant to someone else, and may drop their own rights afterwards.
+    const byOther = await call('ceo', 'PUT', `/api/v1/item-groups/rights/${dual}`, {
+      create: true,
+      edit: false,
+      delete: false,
+    });
+    assert.strictEqual(byOther.status, 200, JSON.stringify(byOther.body));
+    const selfRevoke = await call('ceoIc', 'PUT', `/api/v1/item-groups/rights/${dual}`, {
+      create: false,
+      edit: false,
+      delete: false,
+    });
+    assert.strictEqual(selfRevoke.status, 200, JSON.stringify(selfRevoke.body));
+    const gone = await getPool().query(`SELECT 1 FROM item_group_right WHERE user_id = $1`, [dual]);
+    assert.strictEqual(gone.rows.length, 0, 'a grantor can revoke their own rights');
+    // This persona is a Table 2 holder (ceo and inventory_controller). Deactivated so it drops out of
+    // the active recipient set and the later notification counts stay at the seven fixed holders.
+    await getAdminPool().query(`UPDATE users SET active = false WHERE user_id = $1`, [dual]);
+
+    // Owner ruling 2026-10-06: revoking from a user who holds no right changes nothing, so it
+    // emits no event and no notification however many times it is called.
+    const revokedBefore = await eventCount('item_group_right.revoked');
+    const notifyBefore = await eventCount('notification.created');
+    for (let i = 0; i < 3; i += 1) {
+      const noop = await call('ceo', 'PUT', `/api/v1/item-groups/rights/${ids['icNone']}`, {
+        create: false,
+        edit: false,
+        delete: false,
+      });
+      assert.strictEqual(noop.status, 200, JSON.stringify(noop.body));
+      assert.strictEqual(noop.body['create'], false);
+      assert.strictEqual(noop.body['granted_by'], null, 'no row, so nothing granted it');
+      assert.strictEqual(noop.body['updated_at'], null);
+    }
+    assert.strictEqual(await eventCount('item_group_right.revoked'), revokedBefore);
+    assert.strictEqual(await eventCount('notification.created'), notifyBefore);
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  it('AC3/AC7: rights and recipients can still be withdrawn from a deactivated user', async () => {
+    const leaver = await provisionUser(port, 'leaver@story210.example.com', [
+      inv('inventory_controller'),
+    ]);
+    const granted = await call('ceo', 'PUT', `/api/v1/item-groups/rights/${leaver}`, {
+      create: true,
+      edit: false,
+      delete: false,
+    });
+    assert.strictEqual(granted.status, 200, JSON.stringify(granted.body));
+    const addedToList = await call('ceo', 'POST', '/api/v1/item-groups/recipients', {
+      user_id: leaver,
+    });
+    assert.strictEqual(addedToList.status, 201);
+
+    await getAdminPool().query(`UPDATE users SET active = false WHERE user_id = $1`, [leaver]);
+
+    // Granting to a deactivated user is still refused: it would hand out access nobody can use.
+    const regrant = await call('ceo', 'PUT', `/api/v1/item-groups/rights/${leaver}`, {
+      create: true,
+      edit: true,
+      delete: false,
+    });
+    assert.strictEqual(regrant.status, 400);
+    assert.strictEqual(regrant.body['error_code'], 'USER_NOT_FOUND');
+
+    // Withdrawal must work, or an offboarded user's rows could never be cleaned up.
+    const revoked = await call('ceo', 'PUT', `/api/v1/item-groups/rights/${leaver}`, {
+      create: false,
+      edit: false,
+      delete: false,
+    });
+    assert.strictEqual(revoked.status, 200, JSON.stringify(revoked.body));
+    const rightRows = await getPool().query(`SELECT 1 FROM item_group_right WHERE user_id = $1`, [
+      leaver,
+    ]);
+    assert.strictEqual(rightRows.rows.length, 0, 'the rights row is gone');
+
+    const removed = await call('ceo', 'DELETE', `/api/v1/item-groups/recipients/${leaver}`);
+    assert.strictEqual(removed.status, 204, JSON.stringify(removed.body));
+    const listRows = await getPool().query(
+      `SELECT 1 FROM item_group_recipient WHERE user_id = $1`,
+      [leaver],
+    );
+    assert.strictEqual(listRows.rows.length, 0, 'the recipient row is gone');
+  });
+
+  // ---------------------------------------------------------------------------------------------
   it('AC1: create validates, enforces uniqueness and the role plus right gate', async () => {
     const created = await createGroup('BEARINGS', 'Bearings');
     assert.strictEqual(created.status, 201, JSON.stringify(created.body));
@@ -373,6 +494,14 @@ describe('Story 2.10 Item Group Master Integration Tests', () => {
     assert.strictEqual(unknown.status, 404);
     assert.strictEqual(unknown.body['error_code'], 'ITEM_GROUP_NOT_FOUND');
 
+    // A code that cannot name a group at all is bad input, the same answer create gives, so a
+    // caller can tell a malformed code from a well-formed one that is simply unknown.
+    for (const bad of ['bearings', 'A']) {
+      const malformed = await call('icFull', 'PATCH', `/api/v1/item-groups/${bad}`, { name: 'x' });
+      assert.strictEqual(malformed.status, 400, `code ${bad}`);
+      assert.strictEqual(malformed.body['error_code'], 'INVALID_PARAMS');
+    }
+
     // A holder with create only may not edit.
     await call('ceo', 'PUT', `/api/v1/item-groups/rights/${ids['icNone']}`, {
       create: true,
@@ -405,9 +534,19 @@ describe('Story 2.10 Item Group Master Integration Tests', () => {
     const group = await call('icFull', 'GET', '/api/v1/item-groups/BEARINGS');
     const groupId = group.body['item_group_id'] as string;
 
+    // AC7 covers an item group set, changed or cleared, so each of the three is counted. The
+    // recipients at this point are the seven Table 2 holders (icFull, icNone, ceo, fin, cfo,
+    // siteHead, storeCtl); the recipient list is still empty and icFull is the actor.
+    const TABLE_2_HOLDERS = 7;
+    const notifyBeforeSet = await eventCount('notification.created');
     const set = await call('icFull', 'PATCH', '/api/v1/items/SKU-G1', { item_group_id: groupId });
     assert.strictEqual(set.status, 200, JSON.stringify(set.body));
     assert.strictEqual(set.body['item_group_id'], groupId);
+    assert.strictEqual(
+      (await eventCount('notification.created')) - notifyBeforeSet,
+      TABLE_2_HOLDERS,
+      'setting a group notifies every Table 2 holder once',
+    );
     const ev = await getPool().query(
       `SELECT payload FROM domain_events WHERE event_type = 'item.updated' ORDER BY created_at DESC LIMIT 1`,
     );
@@ -421,13 +560,37 @@ describe('Story 2.10 Item Group Master Integration Tests', () => {
     await call('icFull', 'PATCH', '/api/v1/items/SKU-G2', { item_group_id: groupId });
     const other = await createGroup('FASTENERS', 'Fasteners');
     const otherId = other.body['item_group_id'] as string;
+    const notifyBeforeChange = await eventCount('notification.created');
     const change = await call('icFull', 'PATCH', '/api/v1/items/SKU-G2', {
       item_group_id: otherId,
     });
     assert.strictEqual(change.body['item_group_id'], otherId);
+    assert.strictEqual(
+      (await eventCount('notification.created')) - notifyBeforeChange,
+      TABLE_2_HOLDERS,
+      'changing a group notifies every Table 2 holder once',
+    );
+    const notifyBeforeClear = await eventCount('notification.created');
     const clear = await call('icFull', 'PATCH', '/api/v1/items/SKU-G2', { item_group_id: null });
     assert.strictEqual(clear.status, 200);
     assert.strictEqual(clear.body['item_group_id'], null);
+    assert.strictEqual(
+      (await eventCount('notification.created')) - notifyBeforeClear,
+      TABLE_2_HOLDERS,
+      'clearing a group notifies every Table 2 holder once',
+    );
+
+    // Re-sending SKU-G1's existing group changes nothing, so it must notify nobody. SKU-G2 is
+    // left cleared on purpose: the AC2 delete case needs FASTENERS to be a group that was
+    // assigned and then emptied (D9), and the ungrouped report below needs SKU-G2 back in it.
+    const notifyBeforeNoop = await eventCount('notification.created');
+    const noop = await call('icFull', 'PATCH', '/api/v1/items/SKU-G1', { item_group_id: groupId });
+    assert.strictEqual(noop.status, 200);
+    assert.strictEqual(
+      await eventCount('notification.created'),
+      notifyBeforeNoop,
+      'a no-op reassignment notifies nobody',
+    );
 
     const items = await call('icFull', 'GET', '/api/v1/item-groups/BEARINGS/items');
     assert.strictEqual(items.status, 200);
@@ -436,6 +599,9 @@ describe('Story 2.10 Item Group Master Integration Tests', () => {
       ['SKU-G1'],
     );
 
+    // Task 1.2 named [SKU-U1, SKU-U2] with count 2. SKU-G2 is in the list because it was assigned
+    // and then cleared earlier in this test, which proves the AC5 behaviour the shorter list would
+    // not: a cleared item returns to the ungrouped report. SKU-INACTIVE is absent as specified.
     const ungrouped = await call('wm', 'GET', '/api/v1/item-groups/ungrouped-items');
     assert.strictEqual(ungrouped.status, 200);
     assert.deepStrictEqual(
@@ -499,6 +665,22 @@ describe('Story 2.10 Item Group Master Integration Tests', () => {
     });
     assert.strictEqual(created.status, 201, JSON.stringify(created.body));
     assert.strictEqual(created.body['item_group_id'], groupId);
+    const nullOnPost = await call('icFull', 'POST', '/api/v1/items', {
+      sku: 'SKU-NEW-NULL',
+      uom: 'ea',
+      valuation_method: 'fifo',
+      business_stream: 'production',
+      item_group_id: null,
+    });
+    assert.strictEqual(nullOnPost.status, 400, JSON.stringify(nullOnPost.body));
+    assert.strictEqual(nullOnPost.body['error_code'], 'INVALID_PARAMS');
+
+    // A PATCH to an unknown SKU is answered as a missing item, not as a group error.
+    const unknownSku = await call('icFull', 'PATCH', '/api/v1/items/SKU-NOPE', {
+      item_group_id: groupId,
+    });
+    assert.strictEqual(unknownSku.status, 404);
+    assert.strictEqual(unknownSku.body['error_code'], 'ITEM_NOT_FOUND');
   });
 
   // ---------------------------------------------------------------------------------------------

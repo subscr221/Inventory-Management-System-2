@@ -96,7 +96,8 @@ function runner(client?: PoolClient): Queryable {
   return client ?? getPool();
 }
 
-const ITEM_COLUMNS = `item_id, sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required,
+/** Exported so item_group.ts can read item rows in one query instead of one per SKU. */
+export const ITEM_COLUMNS = `item_id, sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required,
        bis_licence_required, legal_metrology_required, valuation_method, business_stream, status,
        standard_cost_designation, standard_cost_amount, variance_review_cadence, variance_tolerance_percent,
        count_variance_tolerance_percent, size_class, item_group_id, created_at, updated_at`;
@@ -108,7 +109,8 @@ function toNumberOrNull(value: unknown): number | null {
   return Number(value);
 }
 
-function mapRow(row: Record<string, unknown>): ItemMaster {
+/** Exported with ITEM_COLUMNS so other projections map item rows the one canonical way. */
+export function mapRow(row: Record<string, unknown>): ItemMaster {
   const createdAt =
     row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
   const updatedAt =

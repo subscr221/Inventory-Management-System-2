@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
 import { AppError } from '../../middleware/error.js';
-import { getItemBySku } from './item_master.js';
+import { ITEM_COLUMNS, mapRow } from './item_master.js';
 import type { ItemMaster } from './item_master.js';
 
 /**
@@ -126,12 +126,18 @@ export async function markEverAssigned(groupId: string, client?: PoolClient): Pr
   );
 }
 
+/**
+ * Reads a group by code. `forUpdate` (only meaningful with a client) takes the row write lock, so
+ * a handler that goes on to update or delete the row cannot have it changed or removed underneath
+ * it between the check and the write.
+ */
 export async function getItemGroupByCode(
   code: string,
   client?: PoolClient,
+  forUpdate = false,
 ): Promise<ItemGroup | null> {
   const result = await runner(client).query(
-    `SELECT ${GROUP_COLUMNS} FROM item_group WHERE code = $1`,
+    `SELECT ${GROUP_COLUMNS} FROM item_group WHERE code = $1${client && forUpdate ? ' FOR UPDATE' : ''}`,
     [code],
   );
   return result.rows.length > 0 ? mapGroup(result.rows[0]!) : null;
@@ -156,46 +162,34 @@ export async function listItemGroups(client?: PoolClient): Promise<ItemGroup[]> 
   return result.rows.map(mapGroup);
 }
 
-// Item rows go through item_master.ts's mapper (ITEM_COLUMNS is private there), so the group
-// filter selects SKUs and each row is read with getItemBySku.
-async function skusToItems(skus: string[], client?: PoolClient): Promise<ItemMaster[]> {
-  const items: ItemMaster[] = [];
-  for (const sku of skus) {
-    const item = await getItemBySku(sku, client);
-    if (item) items.push(item);
-  }
-  return items;
-}
-
+// Item rows are read in one query with item_master.ts's own ITEM_COLUMNS and mapper, so a group
+// or ungrouped listing costs one round trip and one snapshot regardless of how many items match.
 export async function listActiveItemsByGroup(
   itemGroupId: string,
   client?: PoolClient,
 ): Promise<ItemMaster[]> {
   const result = await runner(client).query(
-    `SELECT sku FROM item_master WHERE item_group_id = $1 AND status = 'active' ORDER BY sku ASC`,
+    `SELECT ${ITEM_COLUMNS} FROM item_master
+      WHERE item_group_id = $1 AND status = 'active' ORDER BY sku ASC`,
     [itemGroupId],
   );
-  return skusToItems(
-    result.rows.map((r) => r['sku'] as string),
-    client,
-  );
+  return result.rows.map(mapRow);
 }
 
 export async function listUngroupedActiveItems(client?: PoolClient): Promise<ItemMaster[]> {
   const result = await runner(client).query(
-    `SELECT sku FROM item_master WHERE item_group_id IS NULL AND status = 'active' ORDER BY sku ASC`,
+    `SELECT ${ITEM_COLUMNS} FROM item_master
+      WHERE item_group_id IS NULL AND status = 'active' ORDER BY sku ASC`,
   );
-  return skusToItems(
-    result.rows.map((r) => r['sku'] as string),
-    client,
-  );
+  return result.rows.map(mapRow);
 }
 
 /**
  * Shared guard (D6): the one place that decides whether a value may be written to
  * item_master.item_group_id (or to Story 4.8's scope_item_group_id). Returns the active group.
  * Non-UUID and unknown ids are both ITEM_GROUP_NOT_FOUND. With a client the row is read
- * FOR SHARE so a concurrent deactivation or delete cannot slip between check and write.
+ * FOR UPDATE, not FOR SHARE: the assignment path calls markEverAssigned on this same row straight
+ * afterwards, and two share locks both waiting to upgrade to a write lock deadlock (40P01).
  */
 export async function assertItemGroupAssignable(
   itemGroupId: unknown,
@@ -207,7 +201,7 @@ export async function assertItemGroupAssignable(
     });
   }
   const result = await runner(client).query(
-    `SELECT ${GROUP_COLUMNS} FROM item_group WHERE item_group_id = $1${client ? ' FOR SHARE' : ''}`,
+    `SELECT ${GROUP_COLUMNS} FROM item_group WHERE item_group_id = $1${client ? ' FOR UPDATE' : ''}`,
     [itemGroupId],
   );
   if (result.rows.length === 0) {
@@ -256,6 +250,18 @@ export async function getItemGroupRights(
   return { create: row.create, edit: row.edit, delete: row.delete };
 }
 
+/** The stored rights row for one user, or null when the user holds no right. */
+export async function getItemGroupRightRow(
+  userId: string,
+  client?: PoolClient,
+): Promise<ItemGroupRightRow | null> {
+  const result = await runner(client).query(
+    `SELECT ${RIGHT_COLUMNS} FROM item_group_right WHERE user_id = $1`,
+    [userId],
+  );
+  return result.rows.length > 0 ? mapRights(result.rows[0]!) : null;
+}
+
 export async function listItemGroupRights(client?: PoolClient): Promise<ItemGroupRightRow[]> {
   const result = await runner(client).query(
     `SELECT ${RIGHT_COLUMNS} FROM item_group_right ORDER BY updated_at ASC, user_id ASC`,
@@ -297,18 +303,32 @@ export async function listItemGroupRecipients(client?: PoolClient): Promise<Item
   }));
 }
 
-/** Adds a user to the recipient list; returns false when already present (no change). */
+/**
+ * Adds a user to the recipient list. `added` is false when the user was already on it, and the
+ * row always comes back: the conflict branch is a no-op UPDATE rather than DO NOTHING, because
+ * DO NOTHING returns nothing and a concurrent uncommitted insert is invisible to a follow-up
+ * SELECT on this snapshot.
+ */
 export async function addItemGroupRecipient(
   userId: string,
   addedBy: string,
   client?: PoolClient,
-): Promise<boolean> {
+): Promise<{ row: ItemGroupRecipient; added: boolean }> {
   const result = await runner(client).query(
     `INSERT INTO item_group_recipient (user_id, added_by) VALUES ($1, $2)
-     ON CONFLICT (user_id) DO NOTHING`,
+     ON CONFLICT (user_id) DO UPDATE SET added_by = item_group_recipient.added_by
+     RETURNING user_id, added_by, added_at, (xmax = 0) AS inserted`,
     [userId, addedBy],
   );
-  return (result.rowCount ?? 0) > 0;
+  const row = result.rows[0]!;
+  return {
+    row: {
+      user_id: row['user_id'] as string,
+      added_by: row['added_by'] as string,
+      added_at: iso(row['added_at']),
+    },
+    added: row['inserted'] === true,
+  };
 }
 
 /** Removes a user from the recipient list; returns false when absent. */

@@ -813,6 +813,32 @@ CREATE TABLE IF NOT EXISTS item_group_recipient (
   added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_item_group_right_granted_by'
+      AND conrelid = 'item_group_right'::regclass
+  ) THEN
+    ALTER TABLE item_group_right
+      ADD CONSTRAINT fk_item_group_right_granted_by FOREIGN KEY (granted_by)
+        REFERENCES users (user_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_item_group_recipient_added_by'
+      AND conrelid = 'item_group_recipient'::regclass
+  ) THEN
+    ALTER TABLE item_group_recipient
+      ADD CONSTRAINT fk_item_group_recipient_added_by FOREIGN KEY (added_by)
+        REFERENCES users (user_id);
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS item_master (
   item_id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   sku                         TEXT NOT NULL,

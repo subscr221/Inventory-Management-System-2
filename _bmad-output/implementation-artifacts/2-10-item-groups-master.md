@@ -4,7 +4,7 @@ baseline_commit: a8126aca118f87f5d75dc61b4341c5895c0cd793
 
 # Story 2.10: Item Groups Master
 
-Status: review
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -20,7 +20,7 @@ PILOT. Prerequisite of Story 4.8 (grant scope by item group, user ruling 2026-09
 
 1. **Create, edit, deactivate, reactivate.** Given a user who holds the `inventory_controller` role AND the matching item group right (D3), when they create a group (`create` right) or change its name or status (`edit` right), then the group has a unique `code` and a name unique ignoring case, the projection row, an `item_group.created` or `item_group.updated` event and an audit row are written in one transaction. Anyone else, including `warehouse_manager`, gets 403 `FUNCTION_ACCESS_DENIED` with `details.required_roles: ['inventory_controller']` or 403 `ITEM_GROUP_RIGHT_REQUIRED` with `details.right`.
 2. **Delete only a never-used group.** Given a holder with the `delete` right, when they delete a group that has never had an item assigned, then the row is removed and `item_group.deleted` is written. When any item was ever assigned to it (now or in the past), the delete is refused with 409 `ITEM_GROUP_IN_USE` whose message points to deactivation, and nothing is written. `ON DELETE RESTRICT` stays on the foreign key.
-3. **Rights granted only by CEO or Finance Head.** Given a user holding `ceo` or `finance_controller`, when they grant or revoke any combination of `create`, `edit`, `delete` to an `inventory_controller` holder, then the rights are stored, `item_group_right.granted` or `item_group_right.revoked` is written with `before` and `after`, and an audit row records it. A grant to a user without `inventory_controller` is 400 `GRANTEE_NOT_INVENTORY_CONTROLLER`; any other granter is 403 `FUNCTION_ACCESS_DENIED` with `details.required_roles: ['ceo', 'finance_controller']`. Several holders may hold rights at once.
+3. **Rights granted only by CEO or Finance Head.** Given a user holding `ceo` or `finance_controller`, when they grant or revoke any combination of `create`, `edit`, `delete` to an `inventory_controller` holder, then the rights are stored, `item_group_right.granted` or `item_group_right.revoked` is written with `before` and `after`, and an audit row records it. A grant to a user without `inventory_controller` is 400 `GRANTEE_NOT_INVENTORY_CONTROLLER`; any other granter is 403 `FUNCTION_ACCESS_DENIED` with `details.required_roles: ['ceo', 'finance_controller']`. Several holders may hold rights at once. A granter may not grant rights to themselves (403 `SELF_GRANT_NOT_PERMITTED`; revoking their own is allowed), and a change that alters nothing writes no event, audit row or notification (owner rulings 2026-10-06).
 4. **Assign an item.** Given an item, when an `inventory_controller` holder with the `edit` right sets or clears `item_group_id` through `PATCH /api/v1/items/:sku` (or sets it on `POST /api/v1/items`), then the item carries at most one group, the change is the existing audited `item.updated` event with `before` and `after`, and `GET /api/v1/item-groups/:code/items` returns the group's active items. Other item fields keep the existing `inventory` write gate.
 5. **Existing items stay valid.** Given items that exist before the deploy, when the story deploys, then every item works with `item_group_id: null`, and `GET /api/v1/item-groups/ungrouped-items` lists the active ungrouped items, ordered by SKU.
 6. **Unknown or inactive group refused.** Given a reference to an unknown or inactive group, when an item assignment is saved (or Story 4.8 calls the shared guard, D6), then it is refused with 400 `ITEM_GROUP_NOT_FOUND` or 400 `ITEM_GROUP_INACTIVE` and nothing is written.
@@ -44,7 +44,7 @@ Source: [epics.md Story 2.10](../planning-artifacts/epics.md), user ruling 2026-
     - notify (AC 7): after a create, a `notification.created` event exists per Table 2 role and one with `target.user_id = extra` once `extra` is on the list; after the dispatcher runs, `ceo`, `fin`, `cfo`, `siteHead`, `storeCtl`, `icFull` and `extra` each have a row in `notifications`; `wm` has none. A refused write emits nothing. A user who holds two Table 2 roles and is also on the list gets exactly one notification; the actor gets one. `icFull` adding to the recipient list is 403.
   - [x] 1.3 Unit, extend `test/unit/schema-drift.test.ts`: new `EXPECTED` entries for `item_group`, `item_group_right`, `item_group_recipient` in `read/projections/item_master.sql`, and assert both SQL copies carry the `item_group_id` column, the `fk_item_master_item_group` block and the `ever_assigned` column (the Story 8.6 test at line 3193 is the pattern).
   - [x] 1.4 Unit `test/unit/store-controller-role-pack.test.ts` (pattern: `test/unit/site-head-role-pack.test.ts`): the pilot pack has exactly one `store_controller` holder with `location_id: 'site'` on module `warehouse`, read scope; `deploy/provision/roles.example.json` has the same row; `planProvisioning` on the pack returns zero violations and zero errors.
-  - [x] 1.5 Run the files and record the red output in Debug Log References.
+  - [ ] 1.5 Run the files and record the red output in Debug Log References. NOT DONE: code was written before the tests and no red output was recorded (see Debug Log References); corrected from `[x]` by the code review of 2026-10-06.
 - [x] Task 2: Schema (AC: 1 to 8)
   - [x] 2.1 `read/projections/item_master.sql`, above `item_master`: `item_group` per D2; `item_group_right (user_id UUID PRIMARY KEY REFERENCES users(user_id), can_create BOOLEAN NOT NULL DEFAULT false, can_edit BOOLEAN NOT NULL DEFAULT false, can_delete BOOLEAN NOT NULL DEFAULT false, granted_by UUID NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`; `item_group_recipient (user_id UUID PRIMARY KEY REFERENCES users(user_id), added_by UUID NOT NULL, added_at TIMESTAMPTZ NOT NULL DEFAULT now())`. Then `item_master.item_group_id UUID`, guarded `fk_item_master_item_group ... ON DELETE RESTRICT`, index `idx_item_master_item_group`.
   - [x] 2.2 Grants: `item_group` INSERT, SELECT, UPDATE, DELETE (delete is now a feature, guarded in code); `item_group_right` and `item_group_recipient` INSERT, SELECT, UPDATE, DELETE; `readonly_user` SELECT on all three.
@@ -52,7 +52,7 @@ Source: [epics.md Story 2.10](../planning-artifacts/epics.md), user ruling 2026-
   - [x] 2.4 No change to `src/events/migrate.ts` (D1).
 - [x] Task 3: Projection modules (AC: 1 to 6)
   - [x] 3.1 New `src/read/projections/item_group.ts` (shape of `item_master.ts`): `ItemGroup` type, `ITEM_GROUP_CODE_REGEX = /^[A-Z0-9][A-Z0-9_-]{1,31}$/`, `createItemGroup`, `updateItemGroup`, `deleteItemGroupIfNeverUsed(code, client)` (deletes `WHERE ever_assigned = false`, returns the row or null), `markEverAssigned(groupId, client)`, `getItemGroupByCode`, `getItemGroupById`, `listItemGroups`, `listActiveItemsByGroup`, `listUngroupedActiveItems`.
-  - [x] 3.2 Same file: `assertItemGroupAssignable(itemGroupId: unknown, client?)` per D6, read `FOR SHARE` when a client is given.
+  - [x] 3.2 Same file: `assertItemGroupAssignable(itemGroupId: unknown, client?)` per D6, read `FOR UPDATE` when a client is given (changed from `FOR SHARE` by the 2026-10-06 review: the assignment path updates the same row next, and two share locks upgrading deadlock).
   - [x] 3.3 Same file: `getItemGroupRights(userId, client)`, `upsertItemGroupRights(...)`, `listItemGroupRecipients`, `addItemGroupRecipient`, `removeItemGroupRecipient`.
   - [x] 3.4 `src/read/projections/item_master.ts`: add `item_group_id: string | null` to `ItemMaster`, `CreateItemInput`, `UpdateItemPatch`, `ITEM_COLUMNS`, `mapRow`, the insert and the setter list. Nothing else changes.
 - [x] Task 4: Authority helpers (AC: 1, 3, 4, 7)
@@ -81,7 +81,7 @@ Source: [epics.md Story 2.10](../planning-artifacts/epics.md), user ruling 2026-
 - [ ] Task 9: Staging and close-out (AC: 5, 8)
   - [x] 9.1 `docs/migration/pilot-cutover-runbook.md` row 2.10i after 2.10h: rebuild, `db:migrate` (three tables, one column); re-apply the pilot roles file (one new `store_controller` grant); as `ceo1@` grant the inventory controller all three rights; as that controller create a group and assign one pilot SKU; check the group items read, the ungrouped report, and that `ceo1@`, the site head, the store controller and `accounts@` see the notifications.
   - [ ] 9.2 Operator task: run 2.10i on staging after the held deploy is released; record PASS in Completion Notes.
-  - [x] 9.3 Gates: `npx tsc --noEmit`, `npm run lint`, `prettier --check --end-of-line auto`, `schema-drift`, `story-2-1`, `story-2-10`, `story-1-11` notification suite, `site-head-role-pack`, `store-controller-role-pack`, `npm run verify:roles`, full `npm test`.
+  - [ ] 9.3 Gates (all pass except `npm run verify:roles`, which reports 20 `ROLE_UNHELD_AT_SITE` violations for leftover `SITE-B-*` local test sites; corrected from `[x]` by the code review of 2026-10-06): `npx tsc --noEmit`, `npm run lint`, `prettier --check --end-of-line auto`, `schema-drift`, `story-2-1`, `story-2-10`, `story-1-11` notification suite, `site-head-role-pack`, `store-controller-role-pack`, `npm run verify:roles`, full `npm test`.
   - [x] 9.4 `graphify update .` after the code changes.
 
 Table 1 lists every route this story adds, its gate and its success answer.
@@ -105,6 +105,52 @@ Table 1: Item group routes
 
 Routes 2 to 6 use no `requireRole` module gate, because `ceo` and `finance_controller` are provisioned on different modules. They rely on the standard authentication middleware and then call `assertHoldsAnyRole` in the handler, as the edge role gates do. Routes 8, 11 and 12 keep `requireRole({ module: 'inventory', functionScope: 'write' })` and then call `assertItemGroupRight`.
 
+### Review Findings
+
+Code review of 2026-10-05, baseline `a8126ac`, three layers (adversarial, edge case, acceptance audit). Severity reflects consequence at a real call site after reading the surrounding code.
+
+- [x] [Review][Patch] Nothing bars a grantor from self-granting item group rights; owner ruling 2026-10-06: refuse self-grant in the handler - `ITEM_GROUP_GRANTOR_ROLES` is checked but `putRightsBase` never compares the grantee with the actor, and Task 8.4 deliberately added no forbidden pair. A user holding both `ceo` (or `finance_controller`) and `inventory_controller` can grant themselves create, edit and delete and then use them, which is the separation the rights split exists to create. Ruled: refuse self-grant in `putRightsBase` (403), provisioning and `EXTRA_FORBIDDEN_PAIRS` untouched. [src/api/v1/item-groups.ts:415]
+- [x] [Review][Defer] Items in a deactivated group are invisible in every working report - D4 keeps assigned items when a group is deactivated, `listUngroupedActiveItems` filters `item_group_id IS NULL`, so those items appear neither in the ungrouped report nor against an assignable group, and a later PATCH re-sending the item's existing group is refused 400 `ITEM_GROUP_INACTIVE`. Deactivation is the story's substitute for deletion, so this is the steady state, not an edge case. Owner call needed: add an items-in-inactive-groups view, force reassignment before deactivation, or accept. Owner ruling 2026-10-06: deferred, the pilot holds no groups yet so no item is stranded today; an items-in-inactive-groups report belongs to the follow-up story. [src/read/projections/item_group.ts:181]
+- [x] [Review][Patch] A rights no-op writes an event and a full notification fan-out, while a recipient no-op writes nothing; owner ruling 2026-10-06: guard the rights path on before versus after - `PUT /api/v1/item-groups/rights/:userId` with all three rights false on a user who has no row deletes zero rows yet still persists `item_group_right.revoked` and one notification per Table 2 role holder plus every recipient, repeatable N times. `addRecipientBase` guards on `added` and takes the opposite choice. The rights behaviour is recorded as deliberate in Completion Notes; the inconsistency is not. Ruled: guard the rights path too, so neither path emits on a no-op. [src/api/v1/item-groups.ts:422]
+- [x] [Review][Patch] Concurrent delete turns a group PATCH into a TypeError 500 [src/api/v1/item-groups.ts:296]
+- [x] [Review][Patch] `FOR SHARE` then `UPDATE` on the same group row is a lock-upgrade deadlock on concurrent item assignment [src/read/projections/item_group.ts:210]
+- [x] [Review][Patch] Rights cannot be revoked and recipients cannot be removed once the user is deactivated [src/api/v1/item-groups.ts:376]
+- [x] [Review][Patch] `markEverAssigned` fires on a no-op reassignment, making a group permanently undeletable from a PATCH that changed nothing [src/api/v1/items.ts:302]
+- [x] [Review][Patch] Unbounded N+1: `skusToItems` runs one `getItemBySku` per SKU for the group and ungrouped reports [src/read/projections/item_group.ts:161]
+- [x] [Review][Patch] `constraintOf` matches only 23505, so CHECK (23514) and the `fk_item_master_item_group` RESTRICT (23503) surface as 500 instead of 400 and 409 `ITEM_GROUP_IN_USE` [src/api/v1/item-groups.ts:99]
+- [x] [Review][Patch] AC 7 item-assignment notifications are implemented but never asserted on set, change or clear [test/integration/story-2-10.test.ts:396]
+- [x] [Review][Patch] `POST /api/v1/items` with `item_group_id` has no test coverage, including its own unchecked cast [src/api/v1/items.ts:360]
+- [x] [Review][Patch] `schema-drift` left the D2 constraint names unpinned. Partly a false positive: `constraints` in that harness means guarded `DO` blocks, and the inline constraints are already compared byte-for-byte between the two SQL copies by `extractCreateTable`. The four names, and the two new foreign keys, are now pinned as literal `indexBodies` instead [test/unit/schema-drift.test.ts:55]
+- [x] [Review][Patch] `prepareItemGroupWrite` runs before `getItemBySku`, so a PATCH to an unknown SKU answers a group error instead of 404 `ITEM_NOT_FOUND` [src/api/v1/items.ts:493]
+- [x] [Review][Patch] Audited and event `role` is the gate-authorized assignment, so an item group create can be attributed to `warehouse_manager` or to an empty string [src/api/v1/item-groups.ts:70]
+- [x] [Review][Patch] Concurrent duplicate recipient add returns 201 with no body through a non-null assertion [src/api/v1/item-groups.ts:489]
+- [x] [Review][Patch] A malformed code answers 404 `ITEM_GROUP_NOT_FOUND` with the raw segment echoed, where create uses 400 `INVALID_PARAMS` for the same input [src/api/v1/item-groups.ts:153]
+- [x] [Review][Patch] The revoke response returns a synthetic row with `updated_at: null`, breaking the `ItemGroupRightRow` contract [src/api/v1/item-groups.ts:443]
+- [x] [Review][Patch] Unguarded `ROLLBACK` in the transaction helper replaces the original error on a dead connection [src/api/v1/item-groups.ts:115]
+- [x] [Review][Patch] `granted_by` and `added_by` carry no `REFERENCES users(user_id)`, unlike `user_id` in the same tables [read/projections/item_master.sql:39]
+- [x] [Review][Patch] Every test persona is provisioned at `locationId: '*'`, so the location independence of `resolveItemGroupRecipients` that Table 2 relies on is never proven [test/integration/story-2-10.test.ts:198]
+- [x] [Review][Patch] The ungrouped assertion is `['SKU-G2','SKU-U1','SKU-U2']` with `count: 3`, not the Task 1.2 exact values `[SKU-U1, SKU-U2]` with `count: 2`. Resolved by keeping the assertion and documenting why in the test: `SKU-G2` was assigned and then cleared earlier in the same test, so it proves a cleared item returns to the ungrouped report, which the shorter list would not; the spec values were superseded, not met [test/integration/story-2-10.test.ts:439]
+- [x] [Review][Patch] `world.json` adds `storecontroller` at four-space indent inside a six-space block, so the next generator run shows drift [docs/migration/pilot-mock-extract/world.json:831]
+- [x] [Review][Patch] Task 1.5 and Task 9.3 are checked although the Debug Log records that red-first was not followed and that `npm run verify:roles` reports 20 violations [_bmad-output/implementation-artifacts/2-10-item-groups-master.md:50]
+- [x] [Review][Defer] Undeclared verbs on the literal item group sub-paths fall through to the `:code` handlers and answer 403 or 404 instead of 405 [src/api/router.ts:131] - deferred, pre-existing router behaviour
+- [x] [Review][Defer] No pagination on any item group list route [src/read/projections/item_group.ts:151] - deferred, pre-existing, D10 excludes pagination
+- [x] [Review][Defer] The access matrix's 38 pre-existing permission rows use em dashes against `FORMATTING_RULES.md`; the six rows this story adds correctly use hyphens [_bmad-output/planning-artifacts/access-matrix-frontline-draft-2026-07-11.md] - deferred, pre-existing
+
+### Review Findings, Pass 2
+
+Second review of 2026-10-06 over the patch delta only (uncommitted changes against `6d26ff1`), three layers. The three owner rulings of 2026-10-06 were treated as binding.
+
+- [x] [Review][Patch] The foreign keys added to `granted_by` and `added_by` never reach a database where the tables already exist, because `CREATE TABLE IF NOT EXISTS` skips the inline `REFERENCES`; fresh and existing databases now differ and `schema-drift` compares only SQL text. Move both to named guarded `DO` blocks like `fk_item_master_item_group`, mirrored in `init-db.sql`, and pin the names as `constraints` [read/projections/item_master.sql:39]
+- [x] [Review][Patch] `actorContext` takes the first assignment that matches `preferredRoles` by name, so the audit and event `location_id` can name a different assignment than the one the gate authorized, and the new `authContext.roles[0]` fallback attributes the action to an unrelated role; prefer the authorized assignment when its role is preferred, and drop the `roles[0]` fallback [src/api/v1/item-groups.ts:64]
+- [x] [Review][Patch] The self-grant check also blocks self-revoke, but the 2026-10-06 ruling covers granting only; a grantor who holds rights cannot drop them. Apply the check only when `granting`, rename the message, and add a test for the dual-role grantor (`ceo` plus `inventory_controller`) that the ruling targets, since the current persona never holds both [src/api/v1/item-groups.ts:512]
+- [x] [Review][Patch] The ungrouped-items bullet in the first review is checked `[x]` as "not the Task 1.2 exact values", but the assertion was deliberately kept at three SKUs; reword the bullet to say it was resolved by documenting why the spec values were superseded, not by changing the assertion [_bmad-output/implementation-artifacts/2-10-item-groups-master.md]
+- [x] [Review][Patch] Completion Notes and "Latest technical information" are stale after the patches: they still say `FOR SHARE`, "revoking an already-empty rights row still writes an `item_group_right.revoked` event", `story-2-10` 7 of 7 and full run 2586 of 2586; the change log says 9 of 9 and 2588 of 2588 [_bmad-output/implementation-artifacts/2-10-item-groups-master.md]
+- [x] [Review][Patch] The 2026-10-06 rulings, the new 403 `SELF_GRANT_NOT_PERMITTED`, the rights no-op behaviour and the 404 to 400 `INVALID_PARAMS` change for malformed codes appear only in Review Findings; AC 3, Table 1 and the Dev Notes owner rulings no longer match the code [_bmad-output/implementation-artifacts/2-10-item-groups-master.md]
+- [x] [Review][Patch] The `last_updated` comment in `sprint-status.yaml` still reads "re-implemented 2026-10-05, review (2586 of 2586 ...)" while the story is now `in-progress` [_bmad-output/implementation-artifacts/sprint-status.yaml:401]
+- [x] [Review][Defer] `items.ts` still attributes `item.updated` and the item group notification to the gate-authorized assignment, so a caller who holds both `warehouse_manager` and `inventory_controller` is recorded as `warehouse_manager` on an item assignment [src/api/v1/items.ts:540] - deferred, the item event is an inventory write so that attribution is defensible, and `items.ts` actor handling is pre-existing
+- [x] [Review][Defer] The rights no-op guard reads `before` without a row lock, so two grantors acting on the same user at once can let a real revoke be treated as a no-op and skip its event [src/api/v1/item-groups.ts:541] - deferred, needs two CEO or Finance Head users racing on one grantee
+- [x] [Review][Defer] `PATCH /api/v1/items/:sku` reads the item without a lock, so two concurrent PATCHes can both see the same `current` group and one can skip `markEverAssigned` [src/api/v1/items.ts:497] - deferred, the `fk_item_master_item_group` RESTRICT is the backstop and the delete handler now maps its 23503 to 409 `ITEM_GROUP_IN_USE`
+
 ## Dev Notes
 
 ### Owner rulings 2026-10-02
@@ -125,6 +171,13 @@ Round 3, same day:
 
 1. Actors are always notified of their own changes, including when on the recipient list; recipients are de-duplicated so each user gets one notification per change.
 2. The pilot `store_controller` holder is the existing `warehouse_manager` holder: confirmed.
+
+Round 4, 2026-10-06 (code review decisions):
+
+1. A rights granter may not grant rights to themselves: 403 `SELF_GRANT_NOT_PERMITTED`. Revoking one's own rights is allowed.
+2. A rights change that alters nothing (for example revoking from a user who holds no right) writes no event, audit row or notification, matching the recipient list paths.
+3. Items assigned to a deactivated group stay invisible in the working reports for now; an items-in-inactive-groups report is deferred (`deferred-work.md`).
+4. A malformed group code on a `:code` route is 400 `INVALID_PARAMS`, as on create; 404 `ITEM_GROUP_NOT_FOUND` is for a well-formed unknown code.
 
 Table 2 maps the role names of the rulings to the role register keys of the access matrix section 2.
 
@@ -177,7 +230,7 @@ Stories 2.1 and 2.9 set the master-data pattern; Story 1.16 set exact-value test
 
 ### Latest technical information
 
-No new library. Postgres 18.4 supports the expression unique index and `FOR SHARE` used here.
+No new library. Postgres 18.4 supports the expression unique index and `FOR UPDATE` row lock used here.
 
 ### References
 
@@ -205,11 +258,11 @@ Claude Sonnet 5.5
 ### Completion Notes List
 
 - Schema: `item_group`, `item_group_right`, `item_group_recipient`, `item_master.item_group_id` (guarded FK `ON DELETE RESTRICT`, index) in `read/projections/item_master.sql` and mirrored in `deploy/compose/init-db.sql`; no change to `migrate.ts` (D1).
-- Code: `src/read/projections/item_group.ts` (CRUD, `assertItemGroupAssignable` with `FOR SHARE`, `markEverAssigned`, rights and recipient helpers), `src/compliance/item-group-authority.ts` (`assertHoldsAnyRole`, `assertItemGroupRight`, `notifyItemGroupChange` with one user-targeted notification per distinct user), `src/api/v1/item-groups.ts` (the 12 Table 1 routes, registered in order in `src/server.ts`), `items.ts` group assignment gated by role plus `edit` right and notifying on set, change and clear.
+- Code: `src/read/projections/item_group.ts` (CRUD, `assertItemGroupAssignable` with `FOR UPDATE`, `markEverAssigned`, rights and recipient helpers), `src/compliance/item-group-authority.ts` (`assertHoldsAnyRole`, `assertItemGroupRight`, `notifyItemGroupChange` with one user-targeted notification per distinct user), `src/api/v1/item-groups.ts` (the 12 Table 1 routes, registered in order in `src/server.ts`), `items.ts` group assignment gated by role plus `edit` right and notifying on set, change and clear.
 - Store controller: generator, hand-edited `roles.json` and `world.json`, and `roles.example.json` carry one `store_controller` read grant on `warehouse` at the site. A scratch regeneration (`--site-code CMF-ALIGARH --lines 300 --seed 42`) matches `roles` (80 grants), `people` and `operations.actors` exactly. The pilot holder is `cmf_supervisor@` (the `warehouse_manager`, confirmed round 3), so the existing `site-head-role-pack` totals moved from 79 to 80 grants, 25 to 26 roles, and 7 to 8 grants for that person.
-- Decisions: notification `target.role` is the descriptive label `item_group_watcher` (delivery is by `user_id`); recipients and role holders are filtered to active users, the actor is always included; revoking an already-empty rights row still writes an `item_group_right.revoked` event.
+- Decisions: notification `target.role` is the descriptive label `item_group_watcher` (delivery is by `user_id`); recipients and role holders are filtered to active users, the actor is always included; revoking an already-empty rights row is a no-op that writes nothing (owner ruling 2026-10-06, superseding the first implementation).
 - Docs: access matrix v1.4 (section 2 `store_controller` row, section 3.3 four rows, new 3.11), runbook row 2.10i.
-- Gates: `tsc --noEmit` clean at root and in `edge/`; `npm run lint` clean; `prettier --check --end-of-line auto` clean on every file written; `schema-drift` 218 of 218 together with both role-pack files; `story-2-10` 7 of 7; `story-1-11` 18 of 18; `site-head-role-pack` and `store-controller-role-pack` green; full `npm test` 2586 of 2586; `graphify update .` run. `npm run verify:roles` against the local test database reports 20 `ROLE_UNHELD_AT_SITE` violations for leftover `SITE-B-*` test sites, which says nothing about this story; the pilot pack itself is proven by `planProvisioning` returning zero violations and errors in `store-controller-role-pack` and `site-head-role-pack`.
+- Gates: `tsc --noEmit` clean at root and in `edge/`; `npm run lint` clean; `prettier --check --end-of-line auto` clean on every file written; `schema-drift` and both role-pack files green (227 of 227 with `story-2-10`); `story-2-10` 9 of 9; `story-1-11` 18 of 18; `site-head-role-pack` and `store-controller-role-pack` green; full `npm test` 2588 of 2588; `graphify update .` run. `npm run verify:roles` against the local test database reports 20 `ROLE_UNHELD_AT_SITE` violations for leftover `SITE-B-*` test sites, which says nothing about this story; the pilot pack itself is proven by `planProvisioning` returning zero violations and errors in `store-controller-role-pack` and `site-head-role-pack`.
 - Open (Task 9.2, operator): run runbook 2.10i on staging after the held deploy (staging is behind and disk is at 96 percent) and record PASS here.
 
 ### File List
@@ -239,3 +292,5 @@ Claude Sonnet 5.5
 ### Change Log
 
 - 2026-10-05: Story 2.10 re-implemented from the story file after the first implementation was lost; status set to review.
+- 2026-10-06: code review applied. 22 patch findings fixed across `item-groups.ts`, `item_group.ts`, `item_master.ts`, `items.ts`, both SQL copies, `schema-drift.test.ts`, `story-2-10.test.ts` and `world.json`; three owner rulings recorded (refuse self-grant, guard the rights no-op, defer the inactive-group report); four findings deferred. Gates after the fixes: `tsc --noEmit` clean, `npm run lint` clean, prettier clean, `story-2-10` 9 of 9, unit 218 of 218, full `npm test` 2588 of 2588. Task 9.2 (staging runbook 2.10i) still open, so status is in-progress, not done.
+- 2026-10-06: second code review pass over the patch delta applied 7 patches (guarded named foreign keys for `granted_by` and `added_by` so already-deployed databases gain them, `actorContext` location fix, self-revoke allowed with a dual-role test, and four story-file corrections). Gates: `tsc --noEmit` clean, `npm run lint` clean, prettier clean, `story-2-10` 9 of 9, full `npm test` 2588 of 2588. Task 9.2 (staging runbook 2.10i) still open.

@@ -828,7 +828,7 @@
       "invctl": "invctl1@ancorlabs.org",
       "whmanager": "cmf_supervisor@ancorlabs.org",
       "sitehead": "cmf_supervisor@ancorlabs.org",
-    "storecontroller": "cmf_supervisor@ancorlabs.org",
+      "storecontroller": "cmf_supervisor@ancorlabs.org",
       "dispatch": "dispatch1@ancorlabs.org",
       "planner": "planner1@ancorlabs.org",
       "engineer": "dev1@ancorlabs.org",

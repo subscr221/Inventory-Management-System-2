@@ -398,7 +398,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-10-05'   # story 2-10 re-implemented 2026-10-05, review (2586 of 2586; staging row 2.10i open; earlier impl lost, never pushed); prior: story 2-10 item groups master: story file created and revised for owner rulings 2026-10-02, ready-for-dev; 4-8 prerequisite chain remaining: 2-10, 4-10, 4-11
+last_updated: '2026-10-06'   # story 2-10 re-implemented 2026-10-05, two code review passes applied 2026-10-06, in-progress (2588 of 2588; staging row 2.10i open; earlier impl lost, never pushed); prior: story 2-10 item groups master: story file created and revised for owner rulings 2026-10-02, ready-for-dev; 4-8 prerequisite chain remaining: 2-10, 4-10, 4-11
 # story 6-4 dev-story 2026-09-01: implemented all 9 tasks from baseline 905a48e (clean tree). Closes
 #   Epic 6. One new projection (production_consumption_variance, append-only, grain
 #   (production_order_id, bom_line_id)) plus two pure services: src/production/lot-genealogy.ts (no
@@ -924,7 +924,7 @@ development_status:
   2-7-safety-stock-reorder-points-and-obsolescence-flagging: done   # PILOT
   2-8-consignment-and-vmi-stock-segregation: done   # PILOT
   2-9-erp-inbound-reference-projections: done   # PILOT
-  2-10-item-groups-master: review   # PILOT; prerequisite of 4-8 (user ruling 2026-09-29)
+  2-10-item-groups-master: in-progress   # PILOT; prerequisite of 4-8 (user ruling 2026-09-29); code review 2026-10-06 applied 22 patches, Task 9.2 staging run still open
   epic-2-retrospective: optional
 
   # --- Epic 3: Warehouse Operations and Frontline Capture Flows  [PILOT] ---

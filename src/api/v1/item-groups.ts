@@ -21,6 +21,7 @@ import {
   createItemGroup,
   deleteItemGroupIfNeverUsed,
   getItemGroupByCode,
+  getItemGroupRightRow,
   getItemGroupRights,
   listActiveItemsByGroup,
   listItemGroupRecipients,
@@ -31,7 +32,12 @@ import {
   updateItemGroup,
   upsertItemGroupRights,
 } from '../../read/projections/item_group.js';
-import type { ItemGroup, ItemGroupStatus } from '../../read/projections/item_group.js';
+import type {
+  ItemGroup,
+  ItemGroupRightRow,
+  ItemGroupRights,
+  ItemGroupStatus,
+} from '../../read/projections/item_group.js';
 import {
   ITEM_GROUP_GRANTOR_ROLES,
   ITEM_GROUP_MAINTAINER_ROLE,
@@ -55,15 +61,22 @@ interface ActorContext {
 }
 
 /**
- * Routes with no requireRole module gate (rights and recipients) carry no authorized assignment,
- * so the actor role falls back to the first of the caller's roles that is in `preferredRoles`.
+ * The audit row and the event envelope should name the role the action actually belongs to. The
+ * inventory write gate can authorize a `warehouse_manager` assignment for a caller who also holds
+ * `inventory_controller`, and attributing an item group change to `warehouse_manager` would
+ * misreport who did it. So the authorized assignment is used when its role is one of
+ * `preferredRoles` (its location is then the one the gate actually checked); otherwise the first
+ * assignment holding a preferred role is used. Routes with no module gate (rights and recipients)
+ * carry no authorized assignment and rely on that second lookup. There is deliberately no
+ * fallback to an arbitrary role: attributing to an unrelated role is worse than the gate's own.
  */
 function actorContext(req: IncomingMessage, preferredRoles: readonly string[] = []): ActorContext {
   const authContext = getAuthContext(req);
+  const authorized = getAuthorizedAssignment(req) ?? undefined;
   const assignment =
-    getAuthorizedAssignment(req) ??
-    authContext?.roles.find((r) => preferredRoles.includes(r.role)) ??
-    undefined;
+    authorized && preferredRoles.includes(authorized.role)
+      ? authorized
+      : (authContext?.roles.find((r) => preferredRoles.includes(r.role)) ?? authorized);
   const auditLocationId = assignment?.locationId ?? '*';
   return {
     userId: authContext?.userId ?? NO_LOCATION_UUID,
@@ -96,14 +109,37 @@ function sendNoContent(res: ServerResponse): void {
   res.end();
 }
 
-function constraintOf(err: unknown): string | null {
-  if (typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505') {
-    return (err as { constraint?: string }).constraint ?? null;
-  }
-  return null;
+function pgError(err: unknown): { code?: string; constraint?: string } {
+  return typeof err === 'object' && err !== null
+    ? (err as { code?: string; constraint?: string })
+    : {};
 }
 
-/** Runs `work` in one transaction (BEGIN, COMMIT, ROLLBACK on any error). */
+/** Name of the violated UNIQUE constraint (23505), or null. */
+function constraintOf(err: unknown): string | null {
+  const e = pgError(err);
+  return e.code === '23505' ? (e.constraint ?? null) : null;
+}
+
+/**
+ * Name of the violated CHECK constraint (23514), or null. chk_item_group_code, _name and _status
+ * are reachable from a request body, so they are bad input (400), not a server fault (500).
+ */
+function checkViolationOf(err: unknown): string | null {
+  const e = pgError(err);
+  return e.code === '23514' ? (e.constraint ?? null) : null;
+}
+
+/** True when `err` is a foreign key violation (23503) on the named constraint. */
+function isForeignKeyViolation(err: unknown, constraint: string): boolean {
+  const e = pgError(err);
+  return e.code === '23503' && e.constraint === constraint;
+}
+
+/**
+ * Runs `work` in one transaction (BEGIN, COMMIT, ROLLBACK on any error). The ROLLBACK is itself
+ * guarded: on a dropped connection it rejects, and the original error is the one worth reporting.
+ */
 async function inTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await getPool().connect();
   try {
@@ -112,7 +148,11 @@ async function inTransaction<T>(work: (client: PoolClient) => Promise<T>): Promi
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      console.error('item group ROLLBACK failed (original error is rethrown):', rollbackErr);
+    }
     throw err;
   } finally {
     client.release();
@@ -150,21 +190,30 @@ function parseName(value: unknown): string {
   return value.trim();
 }
 
+/**
+ * A code that cannot name a group is bad input (400 INVALID_PARAMS), the same answer create gives
+ * for the same string; 404 ITEM_GROUP_NOT_FOUND is reserved for a well-formed code that is unknown,
+ * so a caller can tell the two apart. The rejected value is reported in details, not interpolated.
+ */
 function parseCodeParam(params: Record<string, string>): string {
   const code = params['code'];
   if (!code || !ITEM_GROUP_CODE_REGEX.test(code)) {
     throw new AppError(
-      404,
-      'ITEM_GROUP_NOT_FOUND',
-      `No item group exists for code "${code ?? ''}"`,
+      400,
+      'INVALID_PARAMS',
+      'code must be 2-32 characters of A-Z, 0-9, "_" or "-", starting with a letter or digit',
       { code: code ?? null },
     );
   }
   return code;
 }
 
-async function requireGroup(code: string, client?: PoolClient): Promise<ItemGroup> {
-  const group = await getItemGroupByCode(code, client);
+async function requireGroup(
+  code: string,
+  client?: PoolClient,
+  forUpdate = false,
+): Promise<ItemGroup> {
+  const group = await getItemGroupByCode(code, client, forUpdate);
   if (!group) {
     throw new AppError(404, 'ITEM_GROUP_NOT_FOUND', `No item group exists for code "${code}"`, {
       code,
@@ -210,7 +259,7 @@ const createGroupBase: RouteHandler = async (req, res) => {
     );
   }
   const name = parseName(body['name']);
-  const actor = actorContext(req);
+  const actor = actorContext(req, [ITEM_GROUP_MAINTAINER_ROLE]);
   try {
     const group = await inTransaction(async (client) => {
       await assertItemGroupRight(authContext, 'create', client);
@@ -259,6 +308,12 @@ const createGroupBase: RouteHandler = async (req, res) => {
         },
       );
     }
+    const check = checkViolationOf(err);
+    if (check) {
+      throw new AppError(400, 'INVALID_PARAMS', 'Item group code or name is not acceptable', {
+        constraint: check,
+      });
+    }
     throw err;
   }
 };
@@ -288,12 +343,19 @@ const updateGroupBase: RouteHandler = async (req, res, params) => {
   if (Object.keys(patch).length === 0) {
     throw new AppError(400, 'INVALID_PARAMS', 'At least one of name or status is required');
   }
-  const actor = actorContext(req);
+  const actor = actorContext(req, [ITEM_GROUP_MAINTAINER_ROLE]);
   try {
     const after = await inTransaction(async (client) => {
       await assertItemGroupRight(authContext, 'edit', client);
-      const before = await requireGroup(code, client);
-      const updated = (await updateItemGroup(code, patch, client))!;
+      // Locked: without FOR UPDATE a concurrent delete between the read and the update makes
+      // updateItemGroup return null, and the status comparison below then throws a TypeError 500.
+      const before = await requireGroup(code, client, true);
+      const updated = await updateItemGroup(code, patch, client);
+      if (!updated) {
+        throw new AppError(404, 'ITEM_GROUP_NOT_FOUND', `No item group exists for code "${code}"`, {
+          code,
+        });
+      }
       const correlationId = randomUUID();
       await persistEvent(
         {
@@ -325,6 +387,12 @@ const updateGroupBase: RouteHandler = async (req, res, params) => {
         name: patch.name ?? null,
       });
     }
+    const check = checkViolationOf(err);
+    if (check) {
+      throw new AppError(400, 'INVALID_PARAMS', 'Item group name or status is not acceptable', {
+        constraint: check,
+      });
+    }
     throw err;
   }
 };
@@ -332,18 +400,29 @@ const updateGroupBase: RouteHandler = async (req, res, params) => {
 const deleteGroupBase: RouteHandler = async (req, res, params) => {
   const authContext = requireAuth(req);
   const code = parseCodeParam(params);
-  const actor = actorContext(req);
+  const actor = actorContext(req, [ITEM_GROUP_MAINTAINER_ROLE]);
+  const inUse = () =>
+    new AppError(
+      409,
+      'ITEM_GROUP_IN_USE',
+      `Item group ${code} has had items assigned; deactivate it instead`,
+      { code },
+    );
   await inTransaction(async (client) => {
     await assertItemGroupRight(authContext, 'delete', client);
-    await requireGroup(code, client);
-    const deleted = await deleteItemGroupIfNeverUsed(code, client);
+    await requireGroup(code, client, true);
+    // ever_assigned is the fast path (D9), but any row that reached item_master.item_group_id
+    // without going through the assignment handler (a restored dump, a projection replay) leaves
+    // the flag false, and the FK RESTRICT then raises 23503. Both mean the same thing to a caller.
+    let deleted;
+    try {
+      deleted = await deleteItemGroupIfNeverUsed(code, client);
+    } catch (err) {
+      if (isForeignKeyViolation(err, 'fk_item_master_item_group')) throw inUse();
+      throw err;
+    }
     if (!deleted) {
-      throw new AppError(
-        409,
-        'ITEM_GROUP_IN_USE',
-        `Item group ${code} has had items assigned; deactivate it instead`,
-        { code },
-      );
+      throw inUse();
     }
     const correlationId = randomUUID();
     await persistEvent(
@@ -372,16 +451,47 @@ const deleteGroupBase: RouteHandler = async (req, res, params) => {
 // Rights (CEO or Finance Head only)
 // -----------------------------------------------------------------------------------------------
 
-async function requireActiveUser(userId: string, client: PoolClient): Promise<void> {
+/**
+ * Granting a right or adding a recipient needs an active user; revoking a right or removing a
+ * recipient must NOT, or a deactivated user's rows could never be cleaned up - exactly the user
+ * whose access most needs withdrawing. Either way the id must name a real user.
+ */
+async function requireUser(
+  userId: string,
+  client: PoolClient,
+  mustBeActive: boolean,
+): Promise<void> {
   if (UUID_REGEX.test(userId)) {
-    const result = await client.query(`SELECT 1 FROM users WHERE user_id = $1 AND active = true`, [
-      userId,
-    ]);
+    const result = await client.query(
+      mustBeActive
+        ? `SELECT 1 FROM users WHERE user_id = $1 AND active = true`
+        : `SELECT 1 FROM users WHERE user_id = $1`,
+      [userId],
+    );
     if (result.rows.length > 0) return;
   }
-  throw new AppError(400, 'USER_NOT_FOUND', 'No active user matches the given user id', {
-    user_id: userId,
-  });
+  throw new AppError(
+    400,
+    'USER_NOT_FOUND',
+    mustBeActive ? 'No active user matches the given user id' : 'No user matches the given user id',
+    { user_id: userId },
+  );
+}
+
+/**
+ * Answer shape of PUT /api/v1/item-groups/rights/:userId. A revoke removes the row, so there is no
+ * `granted_by` or `updated_at` to report; saying so with an explicit type is honest, where stuffing
+ * nulls into `ItemGroupRightRow` broke that contract for every client reading `updated_at`.
+ */
+type RightsResponse =
+  ItemGroupRightRow | (ItemGroupRights & { user_id: string; granted_by: null; updated_at: null });
+
+function rightsResponse(
+  userId: string,
+  rights: ItemGroupRights,
+  row: ItemGroupRightRow | null,
+): RightsResponse {
+  return row ?? { user_id: userId, ...rights, granted_by: null, updated_at: null };
 }
 
 const listRightsBase: RouteHandler = async (req, res) => {
@@ -402,9 +512,22 @@ const putRightsBase: RouteHandler = async (req, res, params) => {
     rights[key] = body[key];
   }
   const actor = actorContext(req, ITEM_GROUP_GRANTOR_ROLES);
+  const granting = rights.create || rights.edit || rights.delete;
+  // Owner ruling 2026-10-06: a grantor may not GRANT to themselves. A user holding `ceo` or
+  // `finance_controller` together with `inventory_controller` would otherwise award themselves
+  // create, edit and delete and then use them, which is the separation the rights split creates.
+  // Revoking your own rights is allowed: it only reduces access, and an offboarding grantor must be
+  // able to drop what they hold.
+  if (granting && targetUserId === actor.userId) {
+    throw new AppError(
+      403,
+      'SELF_GRANT_NOT_PERMITTED',
+      'Item group rights cannot be granted to yourself',
+      { user_id: targetUserId },
+    );
+  }
   const result = await inTransaction(async (client) => {
-    await requireActiveUser(targetUserId, client);
-    const granting = rights.create || rights.edit || rights.delete;
+    await requireUser(targetUserId, client, granting);
     if (granting) {
       const holds = await client.query(
         `SELECT 1 FROM user_role_assignments WHERE user_id = $1 AND role = $2 LIMIT 1`,
@@ -420,6 +543,16 @@ const putRightsBase: RouteHandler = async (req, res, params) => {
       }
     }
     const before = await getItemGroupRights(targetUserId, client);
+    // Owner ruling 2026-10-06: a no-op writes nothing, as the recipient paths already do. Without
+    // this, revoking from a user who holds no right emitted an event and one notification per
+    // Table 2 holder on every call, repeatable at will.
+    if (
+      before.create === rights.create &&
+      before.edit === rights.edit &&
+      before.delete === rights.delete
+    ) {
+      return rightsResponse(targetUserId, rights, await getItemGroupRightRow(targetUserId, client));
+    }
     const row = await upsertItemGroupRights(targetUserId, rights, actor.userId, client);
     const correlationId = randomUUID();
     await persistEvent(
@@ -440,7 +573,7 @@ const putRightsBase: RouteHandler = async (req, res, params) => {
       object_id: targetUserId,
       correlation_id: correlationId,
     });
-    return row ?? { user_id: targetUserId, ...rights, granted_by: actor.userId, updated_at: null };
+    return rightsResponse(targetUserId, rights, row);
   });
   sendJson(res, 200, result);
 };
@@ -463,8 +596,8 @@ const addRecipientBase: RouteHandler = async (req, res) => {
   }
   const actor = actorContext(req, ITEM_GROUP_GRANTOR_ROLES);
   const row = await inTransaction(async (client) => {
-    await requireActiveUser(userId, client);
-    const added = await addItemGroupRecipient(userId, actor.userId, client);
+    await requireUser(userId, client, true);
+    const { row: recipient, added } = await addItemGroupRecipient(userId, actor.userId, client);
     const correlationId = randomUUID();
     if (added) {
       await persistEvent(
@@ -486,7 +619,7 @@ const addRecipientBase: RouteHandler = async (req, res) => {
         correlation_id: correlationId,
       });
     }
-    return (await listItemGroupRecipients(client)).find((r) => r.user_id === userId)!;
+    return recipient;
   });
   sendJson(res, 201, row);
 };
@@ -497,7 +630,7 @@ const removeRecipientBase: RouteHandler = async (req, res, params) => {
   const userId = params['userId'] ?? '';
   const actor = actorContext(req, ITEM_GROUP_GRANTOR_ROLES);
   await inTransaction(async (client) => {
-    await requireActiveUser(userId, client);
+    await requireUser(userId, client, false);
     const removed = await removeItemGroupRecipient(userId, client);
     if (!removed) return;
     const correlationId = randomUUID();

@@ -55,25 +55,36 @@ const EXPECTED = [
   {
     canonical: 'read/projections/item_master.sql',
     table: 'item_group',
+    // `constraints` means guarded DO blocks; item_group's are inline in the CREATE TABLE, which
+    // extractCreateTable already compares between the two copies. The literal bodies below pin the
+    // four D2 constraint NAMES, so neither copy can quietly lose or rename one.
     constraints: [] as string[],
     indexes: [] as string[],
     indexBodies: [
       'CREATE UNIQUE INDEX IF NOT EXISTS uq_item_group_name_ci ON item_group (lower(name))',
+      'CONSTRAINT uq_item_group_code UNIQUE (code)',
+      "CONSTRAINT chk_item_group_status CHECK (status IN ('active', 'inactive'))",
+      "CONSTRAINT chk_item_group_code CHECK (code ~ '^[A-Z0-9][A-Z0-9_-]{1,31}$')",
+      'CONSTRAINT chk_item_group_name CHECK (length(btrim(name)) BETWEEN 1 AND 120)',
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
   },
   {
     canonical: 'read/projections/item_master.sql',
     table: 'item_group_right',
-    constraints: [] as string[],
+    constraints: ['fk_item_group_right_granted_by'],
     indexes: [] as string[],
+    // The grantor FK is a named guarded block, not inline, so a database that already has the table
+    // gains it too (CREATE TABLE IF NOT EXISTS would skip an inline REFERENCES).
+    indexBodies: ['user_id     UUID PRIMARY KEY REFERENCES users(user_id)'],
     appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
   },
   {
     canonical: 'read/projections/item_master.sql',
     table: 'item_group_recipient',
-    constraints: [] as string[],
+    constraints: ['fk_item_group_recipient_added_by'],
     indexes: [] as string[],
+    indexBodies: ['user_id   UUID PRIMARY KEY REFERENCES users(user_id)'],
     appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
   },
   {

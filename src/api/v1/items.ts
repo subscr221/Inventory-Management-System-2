@@ -288,18 +288,23 @@ function parseItemGroupField(
  * Story 2.10 AC4/AC6: writing item_group_id needs `inventory_controller` plus the item group
  * `edit` right on top of the inventory write gate; a string value must name an active group and
  * marks it ever-assigned (so it can never be deleted afterwards).
+ *
+ * `current` is the item's existing group, so a PATCH that re-sends the same value is not treated
+ * as a first assignment. D9 makes ever_assigned permanent, and marking it on a no-op would let a
+ * PATCH that changed nothing make a group undeletable forever.
  */
 async function prepareItemGroupWrite(
   req: IncomingMessage,
   client: PoolClient,
   value: string | null,
+  current: string | null,
 ): Promise<void> {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHENTICATED', 'Authentication required');
   await assertItemGroupRight(authContext, 'edit', client);
   if (value !== null) {
     const group = await assertItemGroupAssignable(value, client);
-    await markEverAssigned(group.item_group_id, client);
+    if (group.item_group_id !== current) await markEverAssigned(group.item_group_id, client);
   }
 }
 
@@ -367,7 +372,9 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    if (createGroupId !== undefined) await prepareItemGroupWrite(req, client, createGroupId);
+    if (createGroupId !== undefined) {
+      await prepareItemGroupWrite(req, client, createGroupId, null);
+    }
     const item = await createItem(input, client);
     const correlationId = randomUUID();
     await persistEvent(
@@ -490,12 +497,16 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    if (itemGroupId !== undefined) await prepareItemGroupWrite(req, client, itemGroupId);
+    // The item is resolved FIRST: a PATCH to an unknown SKU must answer 404 ITEM_NOT_FOUND, not a
+    // group right or group lookup error about a record that does not exist.
     const before = await getItemBySku(sku, client);
     if (!before) {
       throw new AppError(404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, {
         sku,
       });
+    }
+    if (itemGroupId !== undefined) {
+      await prepareItemGroupWrite(req, client, itemGroupId, before.item_group_id);
     }
     // AC6 merged validation (mirrors src/api/v1/doa.ts's value-band check): a patch that only
     // touches standard_cost_amount must still be checked against the EXISTING designation, and
