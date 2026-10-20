@@ -180,6 +180,10 @@ import {
   approveIndentHandler,
   rejectIndentHandler,
   cancelIndentHandler,
+  issueIndentHandler,
+  closeIndentLineHandler,
+  listIndentIssuesHandler,
+  getIndentIssueHandler,
 } from './api/v1/indents.js';
 import {
   createDamageReportHandler,
@@ -834,6 +838,12 @@ export function createAppRouter(): Router {
   router.post('/api/v1/indents/:indentId/approve', approveIndentHandler);
   router.post('/api/v1/indents/:indentId/reject', rejectIndentHandler);
   router.post('/api/v1/indents/:indentId/cancel', cancelIndentHandler);
+  // Story 4.11: stores counter issue against a requisition. `/indents/issues/:issueId` has a
+  // different segment count from the `/:indentId/...` routes, so the two cannot swallow each other.
+  router.get('/api/v1/indents/issues/:issueId', getIndentIssueHandler);
+  router.post('/api/v1/indents/:indentId/issue', issueIndentHandler);
+  router.post('/api/v1/indents/:indentId/lines/:lineId/close', closeIndentLineHandler);
+  router.get('/api/v1/indents/:indentId/issues', listIndentIssuesHandler);
 
   // Story 8.9: report damage - universal capture, QC task, two keys and the commercial outcome.
   router.post('/api/v1/damage-reports', createDamageReportHandler);

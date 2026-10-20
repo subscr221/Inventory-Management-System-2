@@ -314,6 +314,12 @@ export const config = {
   port: Number.isNaN(parsedPort) ? 3000 : parsedPort,
   hostname: process.env['HOSTNAME'] ?? '0.0.0.0',
   nodeEnv,
+  /**
+   * Story 4.11 (AC 7): the role notified at a requisition's site when a further line is approved
+   * after the requisition was already partly issued. Configuration, never a literal in workflow
+   * code (AD-3); the pilot storekeeper holds the default.
+   */
+  storesIssueRole: process.env['IMS_STORES_ISSUE_ROLE']?.trim() || 'store_assistant',
   db: {
     host: process.env['DB_HOST'] ?? 'localhost',
     port: Number.isNaN(parsedDbPort) ? 5432 : parsedDbPort,

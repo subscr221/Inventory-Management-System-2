@@ -1549,6 +1549,56 @@ export async function indent(ctx: Ctx): Promise<void> {
         return `self-approval refused (${String(self.body['error_code'] ?? self.status)}), approved`;
       },
     ],
+    [
+      // Story 4.11: the storekeeper issues part of the approved line at the counter from BIN-A01
+      // (CON-GLOVES opening stock lives there), closes the remainder with a reason, and a further
+      // issue is refused. Two gloves per run keeps the daily sim from draining the bin.
+      'indent: storekeeper issues at the counter, closes the remainder',
+      async () => {
+        const detail = must(
+          await ctx.request('GET', `/api/v1/indents/${indentId}`, undefined, await ctx.as('store')),
+          200,
+          'read indent for issue',
+        );
+        const lines = (detail['lines'] ?? []) as Json[];
+        const lineId = String(lines[0]?.['indent_line_id'] ?? '');
+        if (!lineId) throw new Error('approved indent has no line to issue');
+        const issued = must(
+          await ctx.request(
+            'POST',
+            `/api/v1/indents/${indentId}/issue`,
+            { lines: [{ indent_line_id: lineId, quantity: '2', location_code: 'BIN-A01' }] },
+            await ctx.as('store'),
+          ),
+          201,
+          'counter issue',
+        );
+        const slip = String(issued['slip_text'] ?? '');
+        if (!slip.startsWith('ISSUE SLIP ')) throw new Error(`no slip text: ${slip.slice(0, 80)}`);
+        must(
+          await ctx.request(
+            'POST',
+            `/api/v1/indents/${indentId}/lines/${lineId}/close`,
+            { reason: 'smoke: remainder to purchase' },
+            await ctx.as('store'),
+          ),
+          200,
+          'close remainder',
+        );
+        const again = await ctx.request(
+          'POST',
+          `/api/v1/indents/${indentId}/issue`,
+          { lines: [{ indent_line_id: lineId, quantity: '1', location_code: 'BIN-A01' }] },
+          await ctx.as('store'),
+        );
+        if (again.status !== 409 || again.body['error_code'] !== 'INDENT_LINE_CLOSED')
+          throw new Error(
+            `issue after close: expected 409 INDENT_LINE_CLOSED, got ${again.status}`,
+          );
+        const number = String((issued['issue'] as Json | undefined)?.['issue_number_ext'] ?? '?');
+        return `slip ${number} for 2 of 100, remainder closed, re-issue refused INDENT_LINE_CLOSED`;
+      },
+    ],
   ]);
 }
 

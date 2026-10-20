@@ -55,22 +55,56 @@ export interface IndentLineRow {
   decided_at: string | null;
   decided_by: string | null;
   rejection_reason: string | null;
+  /** Story 4.11: fulfilment state, separate from the approval fact above. */
+  issued_qty: string;
+  issue_state: 'open' | 'issued' | 'closed';
+  closed_reason: string | null;
+  closed_at: string | null;
+  closed_by: string | null;
 }
 
-/** Story 4.10 (AC 7): header row plus the SQL-computed line counts. */
+/** Story 4.11 (AC 8): the line row as the API returns it, with the open quantity computed. */
+export interface IndentLineView extends IndentLineRow {
+  open_qty: string;
+}
+
+/** Story 4.10 (AC 7) and 4.11 (AC 8): header row plus the SQL-computed line counts. */
 export interface IndentRowWithCounts extends IndentRow {
   line_count: number;
   approved_line_count: number;
+  issued_line_count: number;
 }
 
 const LINE_COUNT_SELECT = `i.*,
   COALESCE(c.line_count, 0)::int AS line_count,
-  COALESCE(c.approved_line_count, 0)::int AS approved_line_count`;
+  COALESCE(c.approved_line_count, 0)::int AS approved_line_count,
+  COALESCE(c.issued_line_count, 0)::int AS issued_line_count`;
 const LINE_COUNT_JOIN = `LEFT JOIN (
   SELECT indent_id, COUNT(*) AS line_count,
-         COUNT(*) FILTER (WHERE line_status = 'approved') AS approved_line_count
+         COUNT(*) FILTER (WHERE line_status = 'approved') AS approved_line_count,
+         COUNT(*) FILTER (WHERE issue_state IN ('issued', 'closed')) AS issued_line_count
   FROM indent_line GROUP BY indent_id
 ) c ON c.indent_id = i.indent_id`;
+
+/**
+ * Story 4.11: open quantity in PostgreSQL NUMERIC text, never a JS float. `requested_qty` is the
+ * approved quantity (Story 4.10 approves whole lines).
+ */
+export function openQtyOf(line: Pick<IndentLineRow, 'requested_qty' | 'issued_qty'>): string {
+  const scale = 3;
+  const toInt = (s: string): bigint => {
+    const [whole, frac = ''] = s.split('.');
+    return BigInt(whole! + frac.padEnd(scale, '0').slice(0, scale));
+  };
+  const diff = toInt(line.requested_qty) - toInt(line.issued_qty ?? '0');
+  const negative = diff < 0n;
+  const abs = (negative ? -diff : diff).toString().padStart(scale + 1, '0');
+  return `${negative ? '-' : ''}${abs.slice(0, -scale)}.${abs.slice(-scale)}`;
+}
+
+export function withOpenQty(line: IndentLineRow): IndentLineView {
+  return { ...line, open_qty: openQtyOf(line) };
+}
 
 type Queryable = Pick<PoolClient, 'query'>;
 
@@ -141,10 +175,49 @@ export async function updateIndentLineDecision(
   );
 }
 
+/**
+ * Story 4.11: one line's issue inside the persist transaction. The state predicate is repeated in
+ * the UPDATE so a concurrent issue cannot slip past the seam's pre-check; zero rows means the line
+ * is no longer open and the caller refuses. The CHECK on issued_qty is the last guard.
+ */
+export async function applyIndentLineIssue(
+  client: PoolClient,
+  lineId: string,
+  quantity: string,
+): Promise<IndentLineRow | null> {
+  const result = await client.query(
+    `UPDATE indent_line
+     SET issued_qty = issued_qty + $2::numeric,
+         issue_state = CASE WHEN issued_qty + $2::numeric >= requested_qty THEN 'issued' ELSE 'open' END
+     WHERE indent_line_id = $1 AND issue_state = 'open' AND line_status = 'approved'
+     RETURNING *`,
+    [lineId, quantity],
+  );
+  return (result.rows[0] as IndentLineRow) ?? null;
+}
+
+/** Story 4.11 (AC 3): closes the remainder of an open approved line with a reason. */
+export async function closeIndentLine(
+  client: PoolClient,
+  lineId: string,
+  patch: { closed_reason: string; closed_at: string; closed_by: string },
+): Promise<IndentLineRow | null> {
+  const result = await client.query(
+    `UPDATE indent_line
+     SET issue_state = 'closed', closed_reason = $2, closed_at = $3, closed_by = $4
+     WHERE indent_line_id = $1 AND issue_state = 'open' AND line_status = 'approved'
+     RETURNING *`,
+    [lineId, patch.closed_reason, patch.closed_at, patch.closed_by],
+  );
+  return (result.rows[0] as IndentLineRow) ?? null;
+}
+
 export interface ListIndentsParams {
   status?: IndentRow['status'] | undefined;
   requesterUserId?: string | undefined;
   search?: string | undefined;
+  /** Story 4.11 (AC 8): only requisitions with at least one approved line still open for issue. */
+  issuable?: boolean | undefined;
   /** Location scoping resolved from the caller's role assignments (site_id filter). */
   permittedSites?: { wildcard: boolean; locations: Set<string> } | undefined;
   limit?: number | undefined;
@@ -183,6 +256,14 @@ export async function listIndents(
     if (sites.length === 0) return [];
     conditions.push(`site_id = ANY($${idx++}::uuid[])`);
     values.push(sites);
+  }
+  if (params.issuable) {
+    conditions.push(
+      `i.status IN ('raised', 'approved') AND EXISTS (
+         SELECT 1 FROM indent_line l
+         WHERE l.indent_id = i.indent_id AND l.line_status = 'approved' AND l.issue_state = 'open'
+       )`,
+    );
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';

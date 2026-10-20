@@ -102,6 +102,42 @@ WHERE l.indent_id = i.indent_id
   AND l.approver_actor_id IS NULL
   AND i.approver_actor_id IS NOT NULL;
 
+-- Story 4.11: per-line fulfilment state for stores counter issue. Separate from the approval
+-- fact (line_status): a rejected line stays 'open' and is never issuable. issued never exceeds
+-- requested (Story 4.10 approves whole lines, so requested_qty is the approved quantity).
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS issued_qty NUMERIC(18,3) NOT NULL DEFAULT 0;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS issue_state TEXT NOT NULL DEFAULT 'open';
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS closed_reason TEXT;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS closed_by TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_issue_state' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_issue_state
+      CHECK (issue_state IN ('open', 'issued', 'closed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_issued_qty' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_issued_qty
+      CHECK (issued_qty >= 0 AND issued_qty <= requested_qty);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_closed_reason' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_closed_reason
+      CHECK (issue_state <> 'closed' OR (closed_reason IS NOT NULL AND length(btrim(closed_reason)) > 0));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_indent_line_issue_state ON indent_line (indent_id, issue_state);
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN

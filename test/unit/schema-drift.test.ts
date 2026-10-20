@@ -566,8 +566,30 @@ const EXPECTED = [
       'chk_indent_line_route',
       'chk_indent_line_status',
       'chk_indent_line_rejection_reason',
+      'chk_indent_line_issue_state',
+      'chk_indent_line_issued_qty',
+      'chk_indent_line_closed_reason',
     ],
-    indexes: ['idx_indent_line_sku', 'idx_indent_line_status'],
+    indexes: ['idx_indent_line_sku', 'idx_indent_line_status', 'idx_indent_line_issue_state'],
+  },
+  // Story 4.11: stores counter issue slips
+  {
+    canonical: 'read/projections/indent_issue.sql',
+    table: 'indent_issue',
+    constraints: ['uq_indent_issue_number_ext', 'uq_indent_issue_source_event'],
+    indexes: ['idx_indent_issue_indent'],
+  },
+  {
+    canonical: 'read/projections/indent_issue.sql',
+    table: 'indent_issue_line',
+    constraints: ['chk_indent_issue_line_qty_positive'],
+    indexes: [
+      'idx_indent_issue_line_issue',
+      'idx_indent_issue_line_indent_line',
+      'uq_indent_issue_line_issue_line',
+    ],
+    // Review: a slip line is immutable once written, so app_user never updates it.
+    appUserGrant: 'INSERT, SELECT',
   },
   // Story 4.4: Purchase Order Management
   {

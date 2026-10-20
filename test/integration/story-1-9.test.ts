@@ -378,6 +378,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/indents/:indentId/approve',
       'POST /api/v1/indents/:indentId/reject',
       'POST /api/v1/indents/:indentId/cancel',
+      // Story 4.11: stores counter issue against a requisition
+      'GET /api/v1/indents/issues/:issueId',
+      'POST /api/v1/indents/:indentId/issue',
+      'POST /api/v1/indents/:indentId/lines/:lineId/close',
+      'GET /api/v1/indents/:indentId/issues',
       // Story 8.9: report damage, the damage-case workbench and the photo store
       'POST /api/v1/damage-reports',
       'GET /api/v1/damage-reports',

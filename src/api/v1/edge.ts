@@ -21,6 +21,7 @@ import { validateEnvelope, persistEvent } from '../../events/store.js';
 import {
   validateEdgeEnvelope,
   assertEdgeMaintenanceEventAllowed,
+  assertEdgeIndentIssueEventRefused,
   // Story 6.4 (FR-MO-13, AC 6): the production-stream allowlist and the edit-log write its refusal
   // requires.
   assertEdgeProductionEventAllowed,
@@ -116,7 +117,12 @@ function assertEdgePayloadSiteWriteAccess(
   const employee = isEmployeeEdgeEvent(body)
     ? permittedLocationsForModuleScope(authContext.roles, EMPLOYEE_MODULE, 'write')
     : { wildcard: false, locations: new Set<string>() };
-  if (!wildcard && !locations.has(siteId) && !employee.wildcard && !employee.locations.has(siteId)) {
+  if (
+    !wildcard &&
+    !locations.has(siteId) &&
+    !employee.wildcard &&
+    !employee.locations.has(siteId)
+  ) {
     throw new AppError(
       403,
       'LOCATION_ACCESS_DENIED',
@@ -324,12 +330,11 @@ function selectOperatingAssignment(authContext: AuthContext): OperatingAssignmen
   // at the site, so adding it never changes a specialist's displayed or stamped role.
   const atSite = concrete.filter((r) => r.locationId === locationId);
   const specialist = atSite.filter((r) => r.module !== EMPLOYEE_MODULE);
-  const assignment = (specialist.length > 0 ? specialist : atSite)
-    .sort((a, b) =>
-      [a.role, a.module, a.functionScope]
-        .join('\0')
-        .localeCompare([b.role, b.module, b.functionScope].join('\0')),
-    )[0]!;
+  const assignment = (specialist.length > 0 ? specialist : atSite).sort((a, b) =>
+    [a.role, a.module, a.functionScope]
+      .join('\0')
+      .localeCompare([b.role, b.module, b.functionScope].join('\0')),
+  )[0]!;
   return { role: assignment.role, locationId };
 }
 
@@ -371,6 +376,8 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   // people who work cases - QC or stores at the site, or a damage DOA authority.
   { name: 'Report damage', modules: [EMPLOYEE_MODULE], functionScope: 'write' },
   { name: 'Damage cases', modules: 'damage-cases', functionScope: 'read' },
+  // Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
+  { name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
 ];
 
 /**
@@ -530,6 +537,8 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   // Return-to-service and every other central-only maintenance operation reject 403
   // CENTRAL_ONLY_OPERATION here, before any identity or version work.
   assertEdgeMaintenanceEventAllowed(body);
+  // Story 4.11 (D8): counter issue and line closure are online-only.
+  assertEdgeIndentIssueEventRefused(body);
   // Story 8.1 (Binding Scope Decision 9): the same allowlist shape for the qc stream - plan
   // creation, approval, completion hand-off and conditional release are central-only.
   assertEdgeQcEventAllowed(body);
@@ -756,7 +765,8 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
         doa_entry_id: routes[i]!.doa_entry_id ?? undefined,
       }));
       const approval = headerApproverOf(routes);
-      if (approval.approver_actor_id) body.payload['approver_actor_id'] = approval.approver_actor_id;
+      if (approval.approver_actor_id)
+        body.payload['approver_actor_id'] = approval.approver_actor_id;
       if (approval.doa_entry_id) body.payload['doa_entry_id'] = approval.doa_entry_id;
     }
   }
@@ -1075,7 +1085,9 @@ export function withRefusedCaptureRecord(handler: RouteHandler): RouteHandler {
     const body = getParsedBody(req);
     // The handler rewrites metadata.actor and stamps payload fields: snapshot what the device sent.
     const snapshot =
-      typeof body === 'object' && body !== null ? (structuredClone(body) as Record<string, unknown>) : null;
+      typeof body === 'object' && body !== null
+        ? (structuredClone(body) as Record<string, unknown>)
+        : null;
     try {
       await handler(req, res, params);
     } catch (err: unknown) {
@@ -1101,7 +1113,9 @@ export function withRefusedCaptureRecord(handler: RouteHandler): RouteHandler {
           endpoint: req.url ?? '',
           method: req.method ?? 'POST',
           user_id: authContext.userId,
-          assignment: assignment ? { role: assignment.role, locationId: assignment.locationId } : undefined,
+          assignment: assignment
+            ? { role: assignment.role, locationId: assignment.locationId }
+            : undefined,
         });
       }
       throw err;

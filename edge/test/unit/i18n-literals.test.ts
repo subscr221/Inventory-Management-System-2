@@ -29,6 +29,9 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^damage-/,
   /^damageCases\./,
   /^damage-cases-/,
+  // Story 4.11: the stores counter issue page.
+  /^storesIssue\./,
+  /^stores-issue-/,
   /^Promise$/,
   /^Dashboard$/,
   /^Frontline$/,
@@ -76,9 +79,7 @@ function scan(dir: string): string[] {
         .map((match) => match[1]!.trim())
         .filter((literal) => /[A-Za-z]/.test(literal));
       const attrNodes = USER_FACING_ATTRS.flatMap((attr) =>
-        [...text.matchAll(new RegExp(`${attr}="([^"]+)"`, 'g'))].map((match) =>
-          match[1]!.trim(),
-        ),
+        [...text.matchAll(new RegExp(`${attr}="([^"]+)"`, 'g'))].map((match) => match[1]!.trim()),
       ).filter((literal) => /[A-Za-z]/.test(literal));
       return [...textNodes, ...attrNodes];
     });

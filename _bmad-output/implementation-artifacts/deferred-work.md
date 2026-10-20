@@ -1300,3 +1300,20 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - A line whose band role is held by the requester is frozen with the requester as approver and SOD-01 blocks it permanently. Pre-existing; Story 4.9.
 - The role-holder fallback ignores value bands, so a large line can reach a smaller band's holder. Moved verbatim from `resolveApprover`; Story 4.9.
 - My Requests list rows get no `lines[]`, so the per-line chips need a detail screen to appear.
+
+## Deferred from: dev of story-4-11 (2026-10-21)
+
+- Offline-first counter issue (UX mock `key-stores.html` line 452 "Issued - Captured - pending sync"), scanner wiring and the "Scan anything" bar on the stores issue page. Story 4.11 D11 ships the page online only; `indent.issued` is refused at the events door and at edge sync. Needs a story of its own once the pilot confirms the counter flow.
+- The stores issue page is reached by URL (`/stores/issue`) and by the `Stores issue` nav entry only when the server bootstrap advertises that name; the bootstrap navigation list is not extended here.
+- Slip quantities print as the NUMERIC text the storekeeper typed (`2` or `2.500`); no unit-aware formatting.
+
+## Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)
+
+- Slip number sequence never resets per year and a rolled-back issue burns a number; document gaps as expected or use a per-year counter.
+- Per-line `getLocationByCode` lookups in the issue route loop (N+1); bounded once the lines[] cap lands.
+- Issue audit entry hard-codes `http_status` and logs `indent.line_issued` in `error_code`; matches the existing audit precedent.
+- Stores issuable list is capped at 100 with no pagination.
+- Story 4-11 integration tests TRUNCATE shared tables CASCADE; repo-wide test pattern.
+- `correlation_id ?? randomUUID()` in the issue and close routes breaks trace continuity for untagged indents.
+- Header of a requisition with a pending or rejected line stays `raised`/`approved` after every approved line is issued or closed; define terminal header handling in Story 4.8.
+- Smoke step issues 2 of 100 then closes the remainder; INDENT_LINE_FULLY_ISSUED is covered by test/integration/story-4-11.test.ts and runbook 2.10k only.

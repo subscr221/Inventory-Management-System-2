@@ -26,6 +26,19 @@ import {
 } from '../../read/projections/indent.js';
 import { routeIndentLines, headerApproverOf } from '../../compliance/indent-routing.js';
 import { pendingLineIdsFor } from '../../compliance/indent.js';
+import {
+  normaliseIssueLines,
+  assertHeaderIssuable,
+  assertHeaderClosable,
+  assertLineIssuable,
+} from '../../compliance/indent-issue.js';
+import { withOpenQty } from '../../read/projections/indent.js';
+import {
+  getIndentIssueById,
+  getIndentIssueLines,
+  listIndentIssuesByIndent,
+} from '../../read/projections/indent_issue.js';
+import { getLocationByCode } from '../../read/projections/location_register.js';
 import type { IndentRow } from '../../read/projections/indent.js';
 import {
   findMatchingDoaEntry,
@@ -304,7 +317,7 @@ export const getIndentBase: RouteHandler = async (req, res, params) => {
   }
   assertIndentReadAccess(req, indent);
 
-  const lines = await getIndentLines(indentId);
+  const lines = (await getIndentLines(indentId)).map(withOpenQty);
   sendJson(res, 200, { indent: await getIndentWithCounts(indentId), lines });
 };
 
@@ -313,6 +326,8 @@ export const listIndentsBase: RouteHandler = async (req, res, _params) => {
   const statusParam = url.searchParams.get('status');
   const search = url.searchParams.get('search');
   const mine = url.searchParams.get('mine');
+  // Story 4.11 (AC 8): the storekeeper's "Issues pending" inbox.
+  const issuable = url.searchParams.get('issuable') === 'true';
   const limitParam = url.searchParams.get('limit');
   const offsetParam = url.searchParams.get('offset');
 
@@ -368,6 +383,25 @@ export const listIndentsBase: RouteHandler = async (req, res, _params) => {
     'read',
   );
   const ownOnly = mine === 'true';
+  if (issuable && !ownOnly) {
+    // Story 4.11 (AC 8, D10; review): the stores inbox is scoped by the caller's warehouse write
+    // sites only - a procurement reader does not widen it.
+    const scope = permittedLocationsForModuleScope(authContext.roles, 'warehouse', 'write');
+    if (!scope.wildcard && scope.locations.size === 0) {
+      throw new AppError(403, 'FUNCTION_ACCESS_DENIED', 'No site grants access to the issue inbox');
+    }
+    const results = await listIndents({
+      status,
+      requesterUserId: undefined,
+      search: search ?? undefined,
+      permittedSites: scope,
+      issuable: true,
+      limit,
+      offset,
+    });
+    sendJson(res, 200, { indents: results });
+    return;
+  }
   // Story 1.15 (D6): a base-role caller lists their own requisitions only, and says so; the list
   // is never silently narrowed. Own requests are visible at every site, so mine=true drops the
   // site filter.
@@ -388,12 +422,271 @@ export const listIndentsBase: RouteHandler = async (req, res, _params) => {
     requesterUserId: ownOnly ? actor.userId : undefined,
     search: search ?? undefined,
     permittedSites,
+    issuable,
     limit,
     offset,
   });
 
   sendJson(res, 200, { indents: results });
 };
+
+// ---------------------------------------------------------------------------
+// Story 4.11: stores counter issue
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /indents/:indentId/issue. The body is validated with the seam's own rules, a
+ * `location_code` is resolved to its id here (the event carries ids only), the guards are
+ * pre-run for a clean early error, and the seam re-runs every one of them under the row locks
+ * (AD-12). `issue_id` is client-supplied (generated once per form) so a retry after a timeout
+ * returns the slip already written instead of issuing twice; absent, the server mints one.
+ */
+export const issueIndentBase: RouteHandler = async (req, res, params) => {
+  const indent = await loadIndentOr404(req, res, params?.['indentId']);
+  if (!indent) return;
+  assertWarehouseWriteAtSite(req, indent);
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  const suppliedIssueId = body?.issue_id;
+  if (
+    suppliedIssueId !== undefined &&
+    (typeof suppliedIssueId !== 'string' || !UUID_REGEX.test(suppliedIssueId))
+  ) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'issue_id must be a UUID when supplied');
+    return;
+  }
+  if (typeof suppliedIssueId === 'string') {
+    const prior = await getIndentIssueById(suppliedIssueId);
+    if (prior) {
+      if (prior.indent_id !== indent.indent_id) {
+        sendRequestError(
+          req,
+          res,
+          409,
+          'INVALID_PARAMS',
+          'issue_id belongs to another requisition',
+        );
+        return;
+      }
+      sendJson(res, 200, {
+        event_id: prior.source_event_id,
+        issue: { ...prior, lines: await getIndentIssueLines(prior.issue_id) },
+        slip_text: prior.slip_content ?? '',
+        indent: await getIndentWithCounts(indent.indent_id),
+        lines: (await getIndentLines(indent.indent_id)).map(withOpenQty),
+        replayed: true,
+      });
+      return;
+    }
+  }
+  const rawLines = Array.isArray(body?.lines) ? (body!.lines as unknown[]) : body?.lines;
+  const resolvedLines: unknown[] = [];
+  if (Array.isArray(rawLines)) {
+    for (const raw of rawLines) {
+      if (typeof raw !== 'object' || raw === null) {
+        resolvedLines.push(raw);
+        continue;
+      }
+      const line = { ...(raw as Record<string, unknown>) };
+      if (typeof line['quantity'] === 'number' && Number.isFinite(line['quantity'])) {
+        line['quantity'] = String(line['quantity']);
+      }
+      if (line['location_id'] === undefined && typeof line['location_code'] === 'string') {
+        const code = line['location_code'].trim();
+        const location = code.length > 0 ? await getLocationByCode(code) : null;
+        if (!location) {
+          sendRequestError(req, res, 404, 'LOCATION_NOT_FOUND', 'Unknown bin code', {
+            indent_id: indent.indent_id,
+            location_code: line['location_code'],
+          });
+          return;
+        }
+        line['location_id'] = location.location_id;
+      }
+      delete line['location_code'];
+      resolvedLines.push(line);
+    }
+  }
+  const inputs = normaliseIssueLines(Array.isArray(rawLines) ? resolvedLines : rawLines);
+  assertHeaderIssuable(indent);
+  const lines = await getIndentLines(indent.indent_id);
+  for (const input of inputs) {
+    const line = lines.find((l) => l.indent_line_id === input.indent_line_id);
+    if (!line) {
+      sendRequestError(
+        req,
+        res,
+        404,
+        'INDENT_LINE_NOT_FOUND',
+        'Line does not belong to this indent',
+        {
+          indent_id: indent.indent_id,
+          indent_line_id: input.indent_line_id,
+        },
+      );
+      return;
+    }
+    assertLineIssuable(indent, line, input.quantity);
+  }
+
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  const issueId = typeof suppliedIssueId === 'string' ? suppliedIssueId : randomUUID();
+  const persisted = await persistEvent(
+    {
+      stream_type: 'procurement',
+      stream_id: indent.indent_id,
+      event_type: 'indent.issued',
+      event_id: randomUUID(),
+      payload: { indent_id: indent.indent_id, issue_id: issueId, lines: inputs },
+      metadata: {
+        correlation_id: indent.correlation_id ?? randomUUID(),
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurred_at: now,
+      },
+    },
+    auditCtxFor(req, actor, 201),
+  );
+  const issue = await getIndentIssueById(issueId);
+  sendJson(res, 201, {
+    event_id: persisted.event_id,
+    issue: issue ? { ...issue, lines: await getIndentIssueLines(issueId) } : null,
+    slip_text: issue?.slip_content ?? '',
+    indent: await getIndentWithCounts(indent.indent_id),
+    lines: (await getIndentLines(indent.indent_id)).map(withOpenQty),
+  });
+};
+
+/** POST /indents/:indentId/lines/:lineId/close (AC 3). */
+export const closeIndentLineBase: RouteHandler = async (req, res, params) => {
+  const indent = await loadIndentOr404(req, res, params?.['indentId']);
+  if (!indent) return;
+  assertWarehouseWriteAtSite(req, indent);
+  const lineId = params?.['lineId'];
+  if (!lineId || !UUID_REGEX.test(lineId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'lineId must be a UUID');
+    return;
+  }
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  const reason = body?.reason;
+  if (typeof reason !== 'string' || reason.trim().length === 0) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INDENT_LINE_CLOSE_REASON_REQUIRED',
+      'A reason is required to close the remainder',
+      { indent_id: indent.indent_id, indent_line_id: lineId },
+    );
+    return;
+  }
+  if (reason.trim().length > 500) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'reason must be at most 500 characters');
+    return;
+  }
+  assertHeaderClosable(indent);
+  const line = (await getIndentLines(indent.indent_id)).find((l) => l.indent_line_id === lineId);
+  if (!line) {
+    sendRequestError(
+      req,
+      res,
+      404,
+      'INDENT_LINE_NOT_FOUND',
+      'Line does not belong to this indent',
+      {
+        indent_id: indent.indent_id,
+        indent_line_id: lineId,
+      },
+    );
+    return;
+  }
+  assertLineIssuable(indent, line);
+
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  const persisted = await persistEvent(
+    {
+      stream_type: 'procurement',
+      stream_id: indent.indent_id,
+      event_type: 'indent.line_closed',
+      event_id: randomUUID(),
+      payload: {
+        indent_id: indent.indent_id,
+        indent_line_id: lineId,
+        closed_reason: reason.trim(),
+      },
+      metadata: {
+        correlation_id: indent.correlation_id ?? randomUUID(),
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurred_at: now,
+      },
+    },
+    auditCtxFor(req, actor, 200),
+  );
+  sendJson(res, 200, {
+    event_id: persisted.event_id,
+    indent: await getIndentWithCounts(indent.indent_id),
+    lines: (await getIndentLines(indent.indent_id)).map(withOpenQty),
+  });
+};
+
+/** GET /indents/:indentId/issues (AC 8): the slips of one requisition, oldest first. */
+export const listIndentIssuesBase: RouteHandler = async (req, res, params) => {
+  const indent = await loadIndentOr404(req, res, params?.['indentId']);
+  if (!indent) return;
+  assertIssueReadAccess(req, indent);
+  sendJson(res, 200, { issues: await listIndentIssuesByIndent(indent.indent_id) });
+};
+
+/** GET /indents/issues/:issueId (AC 6): one slip with its text and lines. */
+export const getIndentIssueBase: RouteHandler = async (req, res, params) => {
+  const issueId = params?.['issueId'];
+  if (!issueId || !UUID_REGEX.test(issueId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'issueId must be a UUID');
+    return;
+  }
+  const issue = await getIndentIssueById(issueId);
+  if (!issue) {
+    sendRequestError(req, res, 404, 'INDENT_ISSUE_NOT_FOUND', 'Issue slip not found', {
+      issue_id: issueId,
+    });
+    return;
+  }
+  const indent = await getIndentById(issue.indent_id);
+  if (!indent) {
+    sendRequestError(req, res, 404, 'INDENT_ISSUE_NOT_FOUND', 'Issue slip not found', {
+      issue_id: issueId,
+    });
+    return;
+  }
+  assertIssueReadAccess(req, indent);
+  sendJson(res, 200, { issue: { ...issue, lines: await getIndentIssueLines(issueId) } });
+};
+
+/** Story 4.11 (D10): warehouse write at the requisition's site, read from the indent row. */
+function assertWarehouseWriteAtSite(req: IncomingMessage, indent: IndentRow): void {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  const scope = permittedLocationsForModuleScope(authContext.roles, 'warehouse', 'write');
+  if (scope.wildcard || scope.locations.has(indent.site_id)) return;
+  throw new AppError(
+    403,
+    'LOCATION_ACCESS_DENIED',
+    `No warehouse write assignment grants access to site "${indent.site_id}"`,
+    { indent_id: indent.indent_id, site_id: indent.site_id },
+  );
+}
+
+/**
+ * Story 4.11 (D10): a slip is readable by anyone with warehouse read at the site, by the
+ * requester, and by procurement readers (the Story 1.15 rule).
+ */
+function assertIssueReadAccess(req: IncomingMessage, indent: IndentRow): void {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  const warehouseRead = permittedLocationsForModuleScope(authContext.roles, 'warehouse', 'read');
+  if (warehouseRead.wildcard || warehouseRead.locations.has(indent.site_id)) return;
+  assertIndentReadAccess(req, indent);
+}
 
 async function loadIndentOr404(
   req: IncomingMessage,
@@ -631,6 +924,22 @@ export const cancelIndentBase: RouteHandler = async (req, res, params) => {
   const indent = await loadIndentOr404(req, res, params?.['indentId']);
   if (!indent) return;
 
+  // Review decision: stock already left the store against this requisition, so it cannot be
+  // cancelled; the remainder is closed line by line instead.
+  const issuedLines = (await getIndentLines(indent.indent_id)).filter(
+    (l) => Number(l.issued_qty) > 0,
+  );
+  if (issuedLines.length > 0) {
+    sendRequestError(
+      req,
+      res,
+      409,
+      'INDENT_CANCEL_AFTER_ISSUE',
+      'Stock was already issued against this requisition; close the remainder instead of cancelling',
+      { indent_id: indent.indent_id, issued_line_count: issuedLines.length },
+    );
+    return;
+  }
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   const actor = actorContext(req);
   const now = new Date().toISOString();
@@ -678,8 +987,10 @@ export const getIndentHandler = requireRole({
   functionScope: 'read',
 })(getIndentBase);
 
+// Story 4.11 (AC 8): `warehouse` joins the list gate for the issuable inbox; without
+// `issuable=true` a warehouse-only caller still gets the Story 1.15 FUNCTION_ACCESS_DENIED.
 export const listIndentsHandler = requireRole({
-  module: [EMPLOYEE_MODULE, 'procurement'],
+  module: [EMPLOYEE_MODULE, 'procurement', 'warehouse'],
   functionScope: 'read',
 })(listIndentsBase);
 
@@ -707,3 +1018,28 @@ export const cancelIndentHandler = requireRole({
   module: 'procurement',
   functionScope: 'write',
 })(cancelIndentBase);
+
+/**
+ * Story 4.11 (D10): issue and close are stores actions, module `warehouse` write at the
+ * requisition's site. The site comes from the indent row (never the body), so the base handlers
+ * run assertWarehouseWriteAtSite after loading it; the gate here only requires the module.
+ */
+export const issueIndentHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(issueIndentBase);
+
+export const closeIndentLineHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(closeIndentLineBase);
+
+export const listIndentIssuesHandler = requireRole({
+  module: [EMPLOYEE_MODULE, 'procurement', 'warehouse'],
+  functionScope: 'read',
+})(listIndentIssuesBase);
+
+export const getIndentIssueHandler = requireRole({
+  module: [EMPLOYEE_MODULE, 'procurement', 'warehouse'],
+  functionScope: 'read',
+})(getIndentIssueBase);

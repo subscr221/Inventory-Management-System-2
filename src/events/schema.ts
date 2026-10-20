@@ -1077,6 +1077,42 @@ export interface IndentClosedEnvelope extends Omit<EventEnvelope, 'payload'> {
   payload: IndentClosedPayload;
 }
 
+// Story 4.11: stores counter issue against approved requisition lines.
+export interface IndentIssuedLineInput {
+  indent_line_id: string;
+  /** NUMERIC text, positive; never exceeds the line's open quantity. */
+  quantity: string;
+  /** Bin (location_register id) under the requisition's site. */
+  location_id: string;
+  lot_id?: string;
+  serials?: Array<{ serial_number: string }>;
+  override_expired_lot?: boolean;
+  fefo_mode?: 'fefo' | 'fifo';
+}
+
+export interface IndentIssuedPayload {
+  indent_id: string;
+  /** Fixed by the route before persistEvent so a replay writes the same slip row. */
+  issue_id: string;
+  lines: IndentIssuedLineInput[];
+}
+
+export interface IndentIssuedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.issued';
+  payload: IndentIssuedPayload;
+}
+
+export interface IndentLineClosedPayload {
+  indent_id: string;
+  indent_line_id: string;
+  closed_reason: string;
+}
+
+export interface IndentLineClosedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.line_closed';
+  payload: IndentLineClosedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Story 4.4: Purchase Order lifecycle
 // ---------------------------------------------------------------------------
@@ -5936,6 +5972,16 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'indent.closed': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  // Story 4.11: counter issue and remainder closure are lifecycle facts on the tagged requisition;
+  // the ledger movement itself is the nested stock.issued event the issue applier persists.
+  'indent.issued': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.line_closed': {
     streamType: 'procurement',
     requiresBusinessStream: false,
   },

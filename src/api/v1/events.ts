@@ -553,6 +553,19 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   // Story 4.10 (review): the routing of a requisition line is server-decided. A direct post must
   // not pre-route (auto-approve) a line, so the per-line route fields are dropped here and the
   // seam defaults every line to doa. The HTTP raise and the edge door overwrite them the same way.
+  // Story 4.11 (D8): counter issue and line closure are online-only facts decided by the issue
+  // route (bin under site, open quantity, slip number); this door never accepts them.
+  if (
+    body.stream_type === 'procurement' &&
+    (body.event_type === 'indent.issued' || body.event_type === 'indent.line_closed')
+  ) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `Event "${body.event_type}" is accepted only through the stores issue routes`,
+      { event_type: body.event_type },
+    );
+  }
   if (body.stream_type === 'procurement' && body.event_type === 'indent.raised') {
     const lines = body.payload['lines'];
     if (Array.isArray(lines)) {

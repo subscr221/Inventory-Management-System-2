@@ -113,6 +113,7 @@ import {
   applyIndentProjection,
   recordIndentDuplicateFlag,
 } from '../compliance/indent.js';
+import { assertIndentIssueShape, applyIndentIssueProjection } from '../compliance/indent-issue.js';
 import {
   assertDamageShape,
   assertAttachmentShape,
@@ -773,6 +774,8 @@ export async function persistEvent(
   // Story 4.3: indent (purchase requisition) shape validation is non-DB and runs with the other
   // pre-transaction asserts, so a malformed indent event never consumes an idempotency key.
   assertIndentShape(envelope);
+  // Story 4.11: counter issue and line-closure shape validation, same rule.
+  assertIndentIssueShape(envelope);
   // Story 4.4: purchase order shape validation is non-DB and runs with the other pre-transaction
   // asserts, so a malformed purchase_order event never consumes an idempotency key.
   assertPurchaseOrderShape(envelope);
@@ -1172,6 +1175,9 @@ export async function persistEvent(
     // the indent row, its lines, the duplicate-hold audit event, and the domain_events insert
     // commit or roll back together.
     await applyIndentProjection(envelope, client, eventId);
+    // Story 4.11: counter issue runs here too; it persists the nested stock.issued events with
+    // this same client so the slip, the line fulfilment and the ledger commit or roll back together.
+    await applyIndentIssueProjection(envelope, client, eventId);
     // Story 4.4: purchase order projection runs inside this same transaction so the PO row,
     // its lines, the outbound message, and the domain_events insert commit or roll back together.
     await applyPurchaseOrderProjection(envelope, client, eventId);

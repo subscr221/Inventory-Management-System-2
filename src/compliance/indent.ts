@@ -17,6 +17,7 @@ import {
   allocateIndentNumber,
 } from '../read/projections/indent.js';
 import { findActiveDelegation } from '../read/projections/doa_registry.js';
+import { listIndentIssuesByIndent } from '../read/projections/indent_issue.js';
 import { logAuditEntry } from '../read/projections/audit_log.js';
 import { emitNotification, emitNotificationInTransaction } from '../notify/emit.js';
 import { assertReplacementLink } from './damage.js';
@@ -303,7 +304,10 @@ export async function pendingLineIdsFor(
  * the row lock that serializes concurrent writers is the indent-row FOR UPDATE each apply
  * handler takes immediately after this guard.
  */
-async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Promise<boolean> {
+export async function alreadyPersisted(
+  envelope: EventEnvelope,
+  client: PoolClient,
+): Promise<boolean> {
   if (!envelope.idempotency_key && !envelope.event_id) return false;
   const existing = await client.query(
     `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 LIMIT 1`,
@@ -923,6 +927,34 @@ async function applyLineDecision(
     },
     client,
   );
+
+  // Story 4.11 (AC 7, party-mode ruling 2026-10-20): a line approved AFTER the requisition was
+  // already partly issued would otherwise reach nobody at the counter. One notification per
+  // decision event to the stores issue role at the requisition's site, naming the lines and the
+  // slips already written; the next issue of that line renders its own slip (D6).
+  if (decision === 'approved') {
+    const slips = await listIndentIssuesByIndent(indentId, client);
+    if (slips.length > 0) {
+      const lineText = targets
+        .map((l) => `line ${l.line_no} ${l.sku} qty ${l.requested_qty}`)
+        .join('; ');
+      await emitNotificationInTransaction(
+        {
+          target: { role: config.storesIssueRole, location_id: indent.site_id },
+          event_type: 'indent_issue_pending',
+          status_verb: 'approved',
+          object_type: 'indent',
+          object_id: indentId,
+          actor_label: `Indent ${indent.indent_number_ext}`,
+          next_step: `${lineText} approved after slip(s) ${slips.map((s) => s.issue_number_ext).join(', ')}; issue on a new slip`,
+          actor: envelope.metadata.actor,
+          correlation_id: envelope.metadata.correlation_id,
+          occurred_at: now,
+        },
+        client,
+      );
+    }
+  }
 }
 
 async function applyIndentApproved(envelope: EventEnvelope, client: PoolClient): Promise<void> {
