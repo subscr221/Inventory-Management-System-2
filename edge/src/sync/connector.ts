@@ -201,6 +201,10 @@ const PERMANENT_ERROR_CODES = new Set([
   'INDENT_PENDING_CONFIRMATION',
   'INDENT_LINE_REQUIRED',
   'APPROVAL_UNRESOLVED',
+  // Story 4.10: per-line decisions and the no-band refusal at raise; structural, never retried.
+  'INDENT_APPROVAL_BAND_MISSING',
+  'INDENT_LINE_NOT_FOUND',
+  'INDENT_LINE_ALREADY_DECIDED',
   // Story 7.8: maintenance technician-flow permanent business rejections (FR-M-17). Every code a
   // seam behind the five edge flows can raise settles the single event as needs_attention; the
   // twin set in src/sync/upload.ts carries the identical block (the Story 4.3 rule).

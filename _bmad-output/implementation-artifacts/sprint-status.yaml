@@ -398,7 +398,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-10-20'   # story 2-10 closed done 2026-10-20, epic-2 done, 4-8 chain remaining: 4-10, 4-11; prior: story 2-10 re-implemented 2026-10-05, two code review passes applied 2026-10-06, in-progress (2588 of 2588; staging row 2.10i open; earlier impl lost, never pushed); prior: story 2-10 item groups master: story file created and revised for owner rulings 2026-10-02, ready-for-dev; 4-8 prerequisite chain remaining: 2-10, 4-10, 4-11
+last_updated: '2026-10-21'   # story 4-10 code review done 2026-10-21, status done; prior: story 4-10 created ready-for-dev 2026-10-20; prior: story 2-10 closed done 2026-10-20, epic-2 done, 4-8 chain remaining: 4-10, 4-11; prior: story 2-10 re-implemented 2026-10-05, two code review passes applied 2026-10-06, in-progress (2588 of 2588; staging row 2.10i open; earlier impl lost, never pushed); prior: story 2-10 item groups master: story file created and revised for owner rulings 2026-10-02, ready-for-dev; 4-8 prerequisite chain remaining: 2-10, 4-10, 4-11
 # story 6-4 dev-story 2026-09-01: implemented all 9 tasks from baseline 905a48e (clean tree). Closes
 #   Epic 6. One new projection (production_consumption_variance, append-only, grain
 #   (production_order_id, bom_line_id)) plus two pure services: src/production/lot-genealogy.ts (no
@@ -959,9 +959,9 @@ development_status:
   4-6-msme-compliance-tracking: done
   4-7-supplier-invoice-capture: done
   4-8-standing-approvals-and-self-approval-limits: ready-for-dev   # PILOT (sprint-change 2026-09-26); story file created 2026-09-29; blocked on 1-16, 2-10, 4-10, 4-11 (user rulings 2026-09-29)
-  4-9-indent-approver-resolution-fallback: backlog   # defect (sprint-change 2026-09-26)
-  4-10-requisition-line-level-approval-and-mixed-routing: backlog   # PILOT; prerequisite of 4-8; seeds pilot DOA value bands; coordinate with 4-9 (user ruling 2026-09-29)
-  4-11-stores-counter-issue-against-a-requisition: backlog   # PILOT; prerequisite of 4-8; depends on 4-10 (user ruling 2026-09-29)
+  4-9-indent-approver-resolution-fallback: backlog   # defect (sprint-change 2026-09-26); party-mode 2026-10-20: 4-10 takes the no-band refusal at raise, 4-9 keeps HOD fallback and re-resolution of stuck indents
+  4-10-requisition-line-level-approval-and-mixed-routing: done   # PILOT; story file created 2026-10-20 (baseline 76b2acf); party-mode 2026-10-20 added AC 6 no-band refusal at raise (takes that half of 4-9) and AC 7 header counts; O1 band amounts confirmed by owner 2026-10-21 (dept head to 1,00,000, finance controller above); prerequisite of 4-8; seeds pilot DOA value bands; coordinate with 4-9 (user ruling 2026-09-29)
+  4-11-stores-counter-issue-against-a-requisition: backlog   # PILOT; prerequisite of 4-8; depends on 4-10 (user ruling 2026-09-29); party-mode 2026-10-20: must define slip and storekeeper notification for a line approved after the requisition was partly issued
   epic-4-retrospective: optional
   # story 4-2 skipped for now: epics.md sequences it LAST in epic 4 (consumes PurchaseOrderIssued/Confirmed
   # from 4.4, GoodsReceived + match results from 4.5, SupplierInvoiceCaptured from 4.7). Create 4-2 after

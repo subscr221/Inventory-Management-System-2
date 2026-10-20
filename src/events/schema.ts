@@ -964,6 +964,10 @@ export interface IndentLineInput {
   requested_qty: number;
   uom: string;
   unit_price_estimate?: number;
+  /** Story 4.10: per-line routing frozen at capture; absent on pre-4.10 events (defaults to doa). */
+  approval_route?: 'doa' | 'standing_approval' | 'self_approval';
+  approver_actor_id?: string;
+  doa_entry_id?: string;
 }
 
 export interface IndentRaisedPayload {
@@ -1020,6 +1024,8 @@ export interface IndentApprovedPayload {
   indent_id: string;
   approver_actor_id: string;
   approved_at?: string;
+  /** Story 4.10 (O4): the explicit decided lines; absent only on pre-4.10 events (all lines). */
+  line_ids?: string[];
 }
 
 export interface IndentApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -1032,6 +1038,8 @@ export interface IndentRejectedPayload {
   rejection_reason: string;
   approver_actor_id: string;
   rejected_at?: string;
+  /** Story 4.10 (O4): the explicit decided lines; absent only on pre-4.10 events (all lines). */
+  line_ids?: string[];
 }
 
 export interface IndentRejectedEnvelope extends Omit<EventEnvelope, 'payload'> {

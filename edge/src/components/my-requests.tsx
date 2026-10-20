@@ -13,6 +13,11 @@ export interface MyIndentRow {
   need_by_date: string | null;
   approver_actor_id: string | null;
   created_at: string;
+  /** Story 4.10 (AC 7): server-side line counts; absent from a pre-4.10 server. */
+  line_count?: number;
+  approved_line_count?: number;
+  /** Story 4.10: per-line state when the API returns lines (detail reads only). */
+  lines?: Array<{ line_no: number; line_status: string }>;
 }
 
 const REQUISITION_LIMIT = 50;
@@ -83,6 +88,25 @@ const STATUS_KEYS: Record<string, MessageKey> = {
   closed: 'myRequests.status.closed',
 };
 
+/** Story 4.10 (Task 6.1): per-line chip labels. */
+const LINE_STATUS_KEYS: Record<string, MessageKey> = {
+  pending: 'myRequests.line.pending',
+  approved: 'myRequests.line.approved',
+  rejected: 'myRequests.line.rejected',
+};
+
+/** Story 4.10 (AC 7): "n of m approved" while some, not all, lines are approved. */
+function statusLabel(row: MyIndentRow): string {
+  const total = row.line_count ?? 0;
+  const approved = row.approved_line_count ?? 0;
+  if (approved > 0 && approved < total) {
+    return t('myRequests.partialApproved')
+      .replace('{approved}', String(approved))
+      .replace('{total}', String(total));
+  }
+  return STATUS_KEYS[row.status] ? t(STATUS_KEYS[row.status]!) : row.status;
+}
+
 /** Story 8.9 Task 9.4: the reporter-facing state of a damage case. */
 const DAMAGE_STATUS_KEYS: Record<string, MessageKey> = {
   on_hold: 'myRequests.damageStatus.on_hold',
@@ -122,10 +146,7 @@ function RequisitionCard({ row }: { row: MyIndentRow }) {
     <li className="base-card base-card-stacked">
       <span className="base-card-title">{row.indent_number_ext}</span>
       <dl className="base-facts">
-        <Fact
-          label="myRequests.statusLabel"
-          value={STATUS_KEYS[row.status] ? t(STATUS_KEYS[row.status]!) : row.status}
-        />
+        <Fact label="myRequests.statusLabel" value={statusLabel(row)} />
         <Fact label="myRequests.raisedAt" value={formatDateTime(row.created_at)} />
         <Fact label="myRequests.needBy" value={row.need_by_date ?? '-'} />
         <Fact
@@ -135,6 +156,18 @@ function RequisitionCard({ row }: { row: MyIndentRow }) {
           }
         />
       </dl>
+      {row.lines && row.lines.length > 0 ? (
+        <span>
+          {row.lines.map((line) => (
+            <span key={line.line_no} className="state-pill">
+              {line.line_no}:{' '}
+              {LINE_STATUS_KEYS[line.line_status]
+                ? t(LINE_STATUS_KEYS[line.line_status]!)
+                : line.line_status}
+            </span>
+          ))}
+        </span>
+      ) : null}
     </li>
   );
 }

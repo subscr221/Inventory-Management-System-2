@@ -47,7 +47,30 @@ export interface IndentLineRow {
   uom: string;
   unit_price_estimate: string | null;
   line_value: string;
+  /** Story 4.10: per-line route and decision state; the header status derives from these. */
+  approval_route: 'doa' | 'standing_approval' | 'self_approval';
+  line_status: 'pending' | 'approved' | 'rejected';
+  approver_actor_id: string | null;
+  doa_entry_id: string | null;
+  decided_at: string | null;
+  decided_by: string | null;
+  rejection_reason: string | null;
 }
+
+/** Story 4.10 (AC 7): header row plus the SQL-computed line counts. */
+export interface IndentRowWithCounts extends IndentRow {
+  line_count: number;
+  approved_line_count: number;
+}
+
+const LINE_COUNT_SELECT = `i.*,
+  COALESCE(c.line_count, 0)::int AS line_count,
+  COALESCE(c.approved_line_count, 0)::int AS approved_line_count`;
+const LINE_COUNT_JOIN = `LEFT JOIN (
+  SELECT indent_id, COUNT(*) AS line_count,
+         COUNT(*) FILTER (WHERE line_status = 'approved') AS approved_line_count
+  FROM indent_line GROUP BY indent_id
+) c ON c.indent_id = i.indent_id`;
 
 type Queryable = Pick<PoolClient, 'query'>;
 
@@ -74,14 +97,48 @@ export async function getIndentById(
 export async function getIndentLines(
   indentId: string,
   client?: PoolClient,
+  forUpdate: boolean = false,
 ): Promise<IndentLineRow[]> {
   if (!UUID_REGEX.test(indentId)) return [];
   const r = runner(client);
+  const lockClause = forUpdate ? ' FOR UPDATE' : '';
   const result = await r.query(
-    `SELECT * FROM indent_line WHERE indent_id = $1 ORDER BY line_no ASC`,
+    `SELECT * FROM indent_line WHERE indent_id = $1 ORDER BY line_no ASC${lockClause}`,
     [indentId],
   );
   return result.rows as IndentLineRow[];
+}
+
+/** Story 4.10 (AC 7): one header with its line counts, computed in SQL. */
+export async function getIndentWithCounts(
+  indentId: string,
+  client?: PoolClient,
+): Promise<IndentRowWithCounts | null> {
+  if (!UUID_REGEX.test(indentId)) return null;
+  const result = await runner(client).query(
+    `SELECT ${LINE_COUNT_SELECT} FROM indent i ${LINE_COUNT_JOIN} WHERE i.indent_id = $1`,
+    [indentId],
+  );
+  return (result.rows[0] as IndentRowWithCounts) ?? null;
+}
+
+/** Story 4.10: writes one line's decision inside the persist transaction. */
+export async function updateIndentLineDecision(
+  client: PoolClient,
+  lineId: string,
+  patch: {
+    line_status: 'approved' | 'rejected';
+    decided_at: string;
+    decided_by: string;
+    rejection_reason?: string | null;
+  },
+): Promise<void> {
+  await client.query(
+    `UPDATE indent_line
+     SET line_status = $2, decided_at = $3, decided_by = $4, rejection_reason = $5
+     WHERE indent_line_id = $1`,
+    [lineId, patch.line_status, patch.decided_at, patch.decided_by, patch.rejection_reason ?? null],
+  );
 }
 
 export interface ListIndentsParams {
@@ -97,7 +154,7 @@ export interface ListIndentsParams {
 export async function listIndents(
   params: ListIndentsParams,
   client?: PoolClient,
-): Promise<IndentRow[]> {
+): Promise<IndentRowWithCounts[]> {
   const r = runner(client);
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -132,11 +189,12 @@ export async function listIndents(
   const limit =
     Number.isInteger(params.limit) && params.limit! > 0 ? Math.min(params.limit!, 200) : 50;
   const offset = Number.isInteger(params.offset) && params.offset! >= 0 ? params.offset! : 0;
+  // Story 4.10 (AC 7): line counts come from one grouped subquery, never per row.
   const result = await r.query(
-    `SELECT * FROM indent ${where} ORDER BY created_at DESC, indent_id ASC LIMIT $${idx} OFFSET $${idx + 1}`,
+    `SELECT ${LINE_COUNT_SELECT} FROM indent i ${LINE_COUNT_JOIN} ${where} ORDER BY i.created_at DESC, i.indent_id ASC LIMIT $${idx} OFFSET $${idx + 1}`,
     [...values, limit, offset],
   );
-  return result.rows as IndentRow[];
+  return result.rows as IndentRowWithCounts[];
 }
 
 /**
@@ -229,6 +287,13 @@ export interface InsertIndentLineInput {
   requested_qty: number;
   uom: string;
   unit_price_estimate: number | null;
+  /** Story 4.10: routing and (for a pre-routed line) the decision; defaults apply when absent. */
+  approval_route?: 'doa' | 'standing_approval' | 'self_approval';
+  approver_actor_id?: string | null;
+  doa_entry_id?: string | null;
+  line_status?: 'pending' | 'approved';
+  decided_at?: string | null;
+  decided_by?: string | null;
 }
 
 /**
@@ -243,9 +308,11 @@ export async function insertIndentLine(
   await client.query(
     `INSERT INTO indent_line (
       indent_line_id, indent_id, line_no, sku, item_category, requested_qty, uom,
-      unit_price_estimate, line_value
+      unit_price_estimate, line_value,
+      approval_route, approver_actor_id, doa_entry_id, line_status, decided_at, decided_by
     ) VALUES ($1,$2,$3,$4,$5,$6::numeric,$7,$8::numeric,
-      $6::numeric * COALESCE($8::numeric, 0))`,
+      $6::numeric * COALESCE($8::numeric, 0),
+      $9, $10, $11::uuid, $12, $13::timestamptz, $14)`,
     [
       row.indent_line_id,
       row.indent_id,
@@ -255,6 +322,12 @@ export async function insertIndentLine(
       row.requested_qty,
       row.uom,
       row.unit_price_estimate,
+      row.approval_route ?? 'doa',
+      row.approver_actor_id ?? null,
+      row.doa_entry_id ?? null,
+      row.line_status ?? 'pending',
+      row.decided_at ?? null,
+      row.decided_by ?? null,
     ],
   );
 }

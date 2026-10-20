@@ -4,17 +4,20 @@ import type { EventEnvelope } from '../events/store.js';
 import { persistEvent } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { config } from '../config/index.js';
-import type { IndentRow } from '../read/projections/indent.js';
+import type { IndentRow, IndentLineRow } from '../read/projections/indent.js';
 import {
   getIndentById,
+  getIndentLines,
   insertIndent,
   insertIndentLine,
   recomputeIndentEstimatedValue,
   updateIndentStatus,
+  updateIndentLineDecision,
   findOpenDuplicate,
   allocateIndentNumber,
 } from '../read/projections/indent.js';
 import { findActiveDelegation } from '../read/projections/doa_registry.js';
+import { logAuditEntry } from '../read/projections/audit_log.js';
 import { emitNotification, emitNotificationInTransaction } from '../notify/emit.js';
 import { assertReplacementLink } from './damage.js';
 
@@ -91,12 +94,14 @@ export function assertIndentShape(envelope: EventEnvelope): void {
         reject('INVALID_PARAMS', 'indent_id is required and must be a UUID');
       if (!isUuid(p['approver_actor_id']))
         reject('INVALID_PARAMS', 'approver_actor_id is required and must be a UUID');
+      assertLineIdsShape(p);
       break;
     case 'indent.rejected':
       if (!isUuid(p['indent_id']))
         reject('INVALID_PARAMS', 'indent_id is required and must be a UUID');
       if (!isUuid(p['approver_actor_id']))
         reject('INVALID_PARAMS', 'approver_actor_id is required and must be a UUID');
+      assertLineIdsShape(p);
       if (!isNonEmptyString(p['rejection_reason']))
         reject(
           'INDENT_REJECTION_REASON_REQUIRED',
@@ -132,6 +137,17 @@ export function assertIndentShape(envelope: EventEnvelope): void {
       break;
   }
 }
+
+/** Story 4.10: line_ids, when present, is a non-empty list of UUIDs (absent only on old events). */
+function assertLineIdsShape(p: Record<string, unknown>): void {
+  const ids = p['line_ids'];
+  if (ids === undefined) return;
+  if (!Array.isArray(ids) || ids.length === 0 || !ids.every((v) => isUuid(v))) {
+    reject('INVALID_PARAMS', 'line_ids must be a non-empty array of indent_line_id UUIDs');
+  }
+}
+
+const LINE_ROUTES = new Set(['doa', 'standing_approval', 'self_approval']);
 
 function assertIndentRaisedShape(p: Record<string, unknown>): void {
   if (!isUuid(p['indent_id'])) reject('INVALID_PARAMS', 'indent_id is required and must be a UUID');
@@ -198,7 +214,82 @@ function assertIndentRaisedShape(p: Record<string, unknown>): void {
     ) {
       reject('INVALID_PARAMS', `Line ${lineNo}: unit_price_estimate must be a non-negative number`);
     }
+    if (
+      line['approval_route'] !== undefined &&
+      !LINE_ROUTES.has(line['approval_route'] as string)
+    ) {
+      reject(
+        'INVALID_PARAMS',
+        `Line ${lineNo}: approval_route must be doa, standing_approval or self_approval`,
+      );
+    }
+    for (const key of ['approver_actor_id', 'doa_entry_id'] as const) {
+      if (line[key] !== undefined && line[key] !== null && !isUuid(line[key])) {
+        reject('INVALID_PARAMS', `Line ${lineNo}: ${key} must be a UUID`);
+      }
+    }
   }
+}
+
+/**
+ * Story 4.10 Table 1: the header status derived from its lines. Header-only states (ordered,
+ * closed, cancelled, pending-confirmation) are never produced here.
+ */
+export function deriveIndentStatus(
+  lines: Pick<IndentLineRow, 'line_status' | 'decided_at' | 'decided_by' | 'rejection_reason'>[],
+): {
+  status: 'raised' | 'approved' | 'rejected';
+  decided_at: string | null;
+  decided_by: string | null;
+  rejection_reason: string | null;
+} {
+  if (lines.some((l) => l.line_status === 'pending')) {
+    return { status: 'raised', decided_at: null, decided_by: null, rejection_reason: null };
+  }
+  // Latest line decision wins the header timestamp and actor (ties: later in line order).
+  let latest: (typeof lines)[number] | null = null;
+  for (const l of lines) {
+    if (l.decided_at === null) continue;
+    if (!latest || new Date(l.decided_at) >= new Date(latest.decided_at!)) latest = l;
+  }
+  const anyApproved = lines.some((l) => l.line_status === 'approved');
+  return {
+    status: anyApproved ? 'approved' : 'rejected',
+    decided_at: latest?.decided_at ?? null,
+    decided_by: latest?.decided_by ?? null,
+    rejection_reason: anyApproved ? null : (latest?.rejection_reason ?? null),
+  };
+}
+
+/**
+ * Story 4.10 (Task 3.1): the pending lines an actor may decide - those whose approver they are or
+ * actively delegate for. The requester is handed every pending line so the seam refuses SOD-01.
+ */
+export async function pendingLineIdsFor(
+  indent: IndentRow,
+  actorUserId: string,
+  occurredAt: string,
+  client?: PoolClient,
+): Promise<string[]> {
+  const lines = await getIndentLines(indent.indent_id, client);
+  const pending = lines.filter((l) => l.line_status === 'pending');
+  if (actorUserId === indent.requester_user_id) return pending.map((l) => l.indent_line_id);
+  const today = occurredAt.slice(0, 10);
+  const delegateOf = new Map<string, boolean>();
+  const held: string[] = [];
+  for (const line of pending) {
+    if (!line.approver_actor_id) continue;
+    if (line.approver_actor_id === actorUserId) {
+      held.push(line.indent_line_id);
+      continue;
+    }
+    if (!delegateOf.has(line.approver_actor_id)) {
+      const d = await findActiveDelegation(line.approver_actor_id, today, client);
+      delegateOf.set(line.approver_actor_id, d?.delegate_user_id === actorUserId);
+    }
+    if (delegateOf.get(line.approver_actor_id)) held.push(line.indent_line_id);
+  }
+  return held;
 }
 
 // ---------------------------------------------------------------------------
@@ -369,9 +460,19 @@ async function applyIndentRaised(
     throw err;
   }
 
+  // Story 4.10 (Task 2.3, 2.5): each line carries its own route; an absent route is doa with the
+  // header's approver (old events replay unchanged). A non-doa line (Story 4.8 seam) is approved
+  // at raise by the system.
+  const headerApprover = isUuid(p['approver_actor_id']) ? (p['approver_actor_id'] as string) : null;
+  const headerEntry = isUuid(p['doa_entry_id']) ? (p['doa_entry_id'] as string) : null;
   let lineNo = 0;
+  let anyPreApproved = false;
   for (const line of lines) {
     lineNo += 1;
+    const route = (typeof line['approval_route'] === 'string' ? line['approval_route'] : 'doa') as
+      'doa' | 'standing_approval' | 'self_approval';
+    const preApproved = route !== 'doa';
+    anyPreApproved ||= preApproved;
     await insertIndentLine(
       {
         indent_line_id: randomUUID(),
@@ -385,11 +486,40 @@ async function applyIndentRaised(
           typeof line['unit_price_estimate'] === 'number'
             ? (line['unit_price_estimate'] as number)
             : null,
+        approval_route: route,
+        approver_actor_id: preApproved
+          ? null
+          : isUuid(line['approver_actor_id'])
+            ? (line['approver_actor_id'] as string)
+            : headerApprover,
+        doa_entry_id: preApproved
+          ? null
+          : isUuid(line['doa_entry_id'])
+            ? (line['doa_entry_id'] as string)
+            : headerEntry,
+        line_status: preApproved ? 'approved' : 'pending',
+        decided_at: preApproved ? occurredAt : null,
+        decided_by: preApproved ? 'system' : null,
       },
       client,
     );
   }
   await recomputeIndentEstimatedValue(indentId, client);
+  if (anyPreApproved && !duplicateOf) {
+    const derived = deriveIndentStatus(await getIndentLines(indentId, client));
+    if (derived.status !== 'raised') {
+      await updateIndentStatus(
+        indentId,
+        derived.status,
+        {
+          decided_at: derived.decided_at,
+          decided_by: isUuid(derived.decided_by) ? derived.decided_by : null,
+          rejection_reason: derived.rejection_reason,
+        },
+        client,
+      );
+    }
+  }
   if (damageReportId !== null) {
     await client.query(`UPDATE indent SET damage_report_id = $2 WHERE indent_id = $1`, [
       indentId,
@@ -533,6 +663,21 @@ async function applyIndentConfirmed(envelope: EventEnvelope, client: PoolClient)
   }
 
   await updateIndentStatus(indentId, 'raised', {}, client);
+  // Story 4.10 (review): a held raise whose lines were pre-routed already has decided lines; the
+  // header must follow them or the confirmed indent would have nothing left to decide.
+  const derived = deriveIndentStatus(await getIndentLines(indentId, client));
+  if (derived.status !== 'raised') {
+    await updateIndentStatus(
+      indentId,
+      derived.status,
+      {
+        decided_at: derived.decided_at,
+        decided_by: isUuid(derived.decided_by) ? derived.decided_by : null,
+        rejection_reason: derived.rejection_reason,
+      },
+      client,
+    );
+  }
 }
 
 async function applyIndentWithdrawn(envelope: EventEnvelope, client: PoolClient): Promise<void> {
@@ -566,23 +711,16 @@ async function applyIndentWithdrawn(envelope: EventEnvelope, client: PoolClient)
 }
 
 /**
- * Shared guards for the approve/reject decision pair (AC 5, AC 6). Runs in the SEAM - not only
- * the HTTP handler - so a direct POST /api/v1/events or an edge upload cannot bypass SOD-01 or
- * the DOA resolution check (the Story 4.1 hole this story closes for indents).
+ * Story 4.10: header-level guards for the approve/reject pair, shared by every named line. Runs in
+ * the SEAM - not only the HTTP handler - so a direct POST /api/v1/events or an edge upload cannot
+ * bypass SOD-01 or the DOA resolution check (the Story 4.1 hole Story 4.3 closed for indents).
  */
-async function assertDecisionAllowed(
-  envelope: EventEnvelope,
-  indent: IndentRow,
-  client: PoolClient,
-): Promise<void> {
+function assertHeaderDecidable(indent: IndentRow): void {
   if (indent.status === 'pending-confirmation') {
     reject(
       'INDENT_PENDING_CONFIRMATION',
       'Indent is held pending duplicate confirmation and is not routed for approval',
-      {
-        indent_id: indent.indent_id,
-        status: indent.status,
-      },
+      { indent_id: indent.indent_id, status: indent.status },
       409,
     );
   }
@@ -590,10 +728,7 @@ async function assertDecisionAllowed(
     reject(
       'INDENT_ALREADY_DECIDED',
       'Indent has already been decided',
-      {
-        indent_id: indent.indent_id,
-        status: indent.status,
-      },
+      { indent_id: indent.indent_id, status: indent.status },
       409,
     );
   }
@@ -601,15 +736,37 @@ async function assertDecisionAllowed(
     reject(
       'INDENT_NOT_IN_RAISED',
       'Only a raised indent can be decided',
+      { indent_id: indent.indent_id, status: indent.status },
+      409,
+    );
+  }
+}
+
+/**
+ * Story 4.10 (Task 3.2): the per-line guards. The line must be pending, SOD-01 applies, a null line
+ * approver refuses (Story 4.9 owns the fallback), and the actor must be the line approver or an
+ * active delegate of that holder.
+ */
+async function assertLineDecisionAllowed(
+  indent: IndentRow,
+  line: IndentLineRow,
+  actorId: string,
+  occurredAt: string,
+  client: PoolClient,
+): Promise<void> {
+  if (line.line_status !== 'pending') {
+    reject(
+      'INDENT_LINE_ALREADY_DECIDED',
+      'This requisition line has already been decided',
       {
         indent_id: indent.indent_id,
-        status: indent.status,
+        indent_line_id: line.indent_line_id,
+        line_no: line.line_no,
+        line_status: line.line_status,
       },
       409,
     );
   }
-
-  const actorId = envelope.metadata.actor.user_id;
 
   // SOD-01: the requester can never decide their own indent.
   if (actorId === indent.requester_user_id) {
@@ -624,29 +781,26 @@ async function assertDecisionAllowed(
     );
   }
 
-  // The acting approver must be the DOA-resolved authority or an active delegate of that holder.
-  // If approver_actor_id is null (no DOA entry matched), reject - any non-requester writer could
-  // otherwise approve.
-  if (!indent.approver_actor_id) {
+  if (!line.approver_actor_id) {
     reject(
       'NOT_RESOLVED_APPROVER',
       'No DOA-resolved approver exists for this indent; approval is not permitted',
-      {
-        indent_id: indent.indent_id,
-      },
+      { indent_id: indent.indent_id, indent_line_id: line.indent_line_id },
       403,
     );
   }
-  if (actorId !== indent.approver_actor_id) {
-    const today = envelope.metadata.occurred_at.slice(0, 10);
-    const delegation = await findActiveDelegation(indent.approver_actor_id, today, client);
+  if (actorId !== line.approver_actor_id) {
+    const today = occurredAt.slice(0, 10);
+    const delegation = await findActiveDelegation(line.approver_actor_id, today, client);
     if (!delegation || delegation.delegate_user_id !== actorId) {
       reject(
         'NOT_RESOLVED_APPROVER',
         'The acting user is not the DOA-resolved approver for this indent',
         {
           indent_id: indent.indent_id,
-          approver_actor_id: indent.approver_actor_id,
+          indent_line_id: line.indent_line_id,
+          line_no: line.line_no,
+          approver_actor_id: line.approver_actor_id,
           acting_user_id: actorId,
         },
         403,
@@ -655,9 +809,17 @@ async function assertDecisionAllowed(
   }
 }
 
-async function applyIndentApproved(envelope: EventEnvelope, client: PoolClient): Promise<void> {
-  if (await alreadyPersisted(envelope, client)) return;
-
+/**
+ * Story 4.10 (Task 3.3): decides the named lines (all lines for a pre-4.10 event without line_ids),
+ * all or nothing, under the header lock then the line locks; one audit entry per line; then the
+ * header is derived per Table 1 and the requester is told once, in the same transaction.
+ */
+async function applyLineDecision(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  decision: 'approved' | 'rejected',
+  rejectionReason: string | null,
+): Promise<void> {
   const p = envelope.payload as Record<string, unknown>;
   const indentId = p['indent_id'] as string;
 
@@ -665,30 +827,96 @@ async function applyIndentApproved(envelope: EventEnvelope, client: PoolClient):
   if (!indent) {
     reject('INDENT_NOT_FOUND', 'Indent not found', { indent_id: indentId }, 404);
   }
-  await assertDecisionAllowed(envelope, indent, client);
+  assertHeaderDecidable(indent);
 
+  const lines = await getIndentLines(indentId, client, true);
+  const byId = new Map(lines.map((l) => [l.indent_line_id, l]));
+  const requested = Array.isArray(p['line_ids'])
+    ? [...new Set(p['line_ids'] as string[])]
+    : lines.map((l) => l.indent_line_id);
+  const actorId = envelope.metadata.actor.user_id;
   const now = envelope.metadata.occurred_at;
-  await updateIndentStatus(
-    indentId,
-    'approved',
-    { decided_at: now, decided_by: envelope.metadata.actor.user_id },
-    client,
-  );
 
-  // AC 5: the decision notification is part of the business fact (AD-17) - transactional, to the
-  // requester directly, through the Story 1.11 foundation.
+  const targets: IndentLineRow[] = [];
+  for (const id of requested) {
+    const line = byId.get(id);
+    if (!line) {
+      reject(
+        'INDENT_LINE_NOT_FOUND',
+        'No such line on this indent',
+        { indent_id: indentId, indent_line_id: id },
+        404,
+      );
+    }
+    await assertLineDecisionAllowed(indent, line, actorId, now, client);
+    targets.push(line);
+  }
+
+  for (const line of targets) {
+    await updateIndentLineDecision(client, line.indent_line_id, {
+      line_status: decision,
+      decided_at: now,
+      decided_by: actorId,
+      rejection_reason: rejectionReason,
+    });
+    line.line_status = decision;
+    line.decided_at = now;
+    line.decided_by = actorId;
+    line.rejection_reason = rejectionReason;
+    await logAuditEntry(client, {
+      trace_id: envelope.metadata.correlation_id ?? '',
+      user_id: actorId,
+      role: envelope.metadata.actor.role,
+      location_id: envelope.metadata.actor.location_id,
+      endpoint: `/indents/${indentId}/${decision === 'approved' ? 'approve' : 'reject'}`,
+      method: 'POST',
+      event_id: envelope.event_id ?? null,
+      http_status: 200,
+      error_code: `indent.line_${decision}`,
+      details: {
+        indent_id: indentId,
+        indent_line_id: line.indent_line_id,
+        line_no: line.line_no,
+        sku: line.sku,
+        line_value: line.line_value,
+        doa_entry_id: line.doa_entry_id,
+        ...(rejectionReason !== null ? { rejection_reason: rejectionReason } : {}),
+      },
+    });
+  }
+
+  const derived = deriveIndentStatus(lines);
+  if (derived.status !== indent.status) {
+    await updateIndentStatus(
+      indentId,
+      derived.status,
+      {
+        decided_at: derived.decided_at,
+        decided_by: isUuid(derived.decided_by) ? derived.decided_by : null,
+        rejection_reason: derived.rejection_reason,
+      },
+      client,
+    );
+  }
+
+  const lineNos = targets.map((l) => l.line_no);
+  const outstanding = lines.filter((l) => l.line_status === 'pending').length;
+  // AC 5 (Story 4.3): the decision notification is part of the business fact (AD-17) -
+  // transactional, to the requester directly, through the Story 1.11 foundation.
   await emitNotificationInTransaction(
     {
-      target: {
-        role: envelope.metadata.actor.role,
-        user_id: indent.requester_user_id,
-      },
+      target: { role: envelope.metadata.actor.role, user_id: indent.requester_user_id },
       event_type: 'indent_decision',
-      status_verb: 'approved',
+      status_verb: decision,
       object_type: 'indent',
       object_id: indentId,
       actor_label: `Indent ${indent.indent_number_ext}`,
-      next_step: 'A purchase order will be placed against this requisition',
+      next_step:
+        decision === 'approved'
+          ? outstanding > 0
+            ? `Lines ${lineNos.join(', ')} approved; ${outstanding} line(s) still await a decision`
+            : 'A purchase order will be placed against this requisition'
+          : `Lines ${lineNos.join(', ')} rejected${outstanding > 0 ? `; ${outstanding} line(s) still await a decision` : ''}. Rejection reason: ${rejectionReason}`,
       actor: envelope.metadata.actor,
       correlation_id: envelope.metadata.correlation_id,
       occurred_at: now,
@@ -697,56 +925,24 @@ async function applyIndentApproved(envelope: EventEnvelope, client: PoolClient):
   );
 }
 
+async function applyIndentApproved(envelope: EventEnvelope, client: PoolClient): Promise<void> {
+  if (await alreadyPersisted(envelope, client)) return;
+  await applyLineDecision(envelope, client, 'approved', null);
+}
+
 async function applyIndentRejected(envelope: EventEnvelope, client: PoolClient): Promise<void> {
   if (await alreadyPersisted(envelope, client)) return;
 
   const p = envelope.payload as Record<string, unknown>;
-  const indentId = p['indent_id'] as string;
-
   // AC 5: the reason is mandatory - checked before touching the projection.
   if (!isNonEmptyString(p['rejection_reason'])) {
     reject(
       'INDENT_REJECTION_REASON_REQUIRED',
       'A rejection requires a non-empty rejection_reason',
-      {
-        indent_id: indentId,
-      },
+      { indent_id: p['indent_id'] },
     );
   }
-
-  const indent = await getIndentById(indentId, client, true);
-  if (!indent) {
-    reject('INDENT_NOT_FOUND', 'Indent not found', { indent_id: indentId }, 404);
-  }
-  await assertDecisionAllowed(envelope, indent, client);
-
-  const now = envelope.metadata.occurred_at;
-  const reason = (p['rejection_reason'] as string).trim();
-  await updateIndentStatus(
-    indentId,
-    'rejected',
-    { decided_at: now, decided_by: envelope.metadata.actor.user_id, rejection_reason: reason },
-    client,
-  );
-
-  await emitNotificationInTransaction(
-    {
-      target: {
-        role: envelope.metadata.actor.role,
-        user_id: indent.requester_user_id,
-      },
-      event_type: 'indent_decision',
-      status_verb: 'rejected',
-      object_type: 'indent',
-      object_id: indentId,
-      actor_label: `Indent ${indent.indent_number_ext}`,
-      next_step: `Rejection reason: ${reason}`,
-      actor: envelope.metadata.actor,
-      correlation_id: envelope.metadata.correlation_id,
-      occurred_at: now,
-    },
-    client,
-  );
+  await applyLineDecision(envelope, client, 'rejected', (p['rejection_reason'] as string).trim());
 }
 
 async function applyIndentOrdered(envelope: EventEnvelope, client: PoolClient): Promise<void> {

@@ -478,7 +478,9 @@ const operations = {
   // calibration work in the pilot) and migration.variance_explanation belongs to the rehearsal.
   doa_entries: [
     ['inventory.count_adjustment', 'warehouse_manager'],
-    ['indent_approval', 'department_head'],
+    // Story 4.10 (owner ruling O1): two value bands, department head to 1,00,000 inclusive.
+    ['indent_approval', 'department_head', null, 100000],
+    ['indent_approval', 'finance_controller', 100000, null],
     ['purchase_order_approval', 'department_head'],
     ['supplier_onboarding', 'department_head'],
     ['transfer_request', 'warehouse_manager'],
@@ -503,7 +505,12 @@ const operations = {
     ['damage.qc_concurrence', 'qc_head'],
     ['damage.finance_concurrence', 'finance_controller'],
     ['damage.escalation', 'ceo'],
-  ].map(([transaction_type, role]) => ({ transaction_type, role, value_min: null, value_max: null })),
+  ].map(([transaction_type, role, value_min = null, value_max = null]) => ({
+    transaction_type,
+    role,
+    value_min,
+    value_max,
+  })),
   // Unique per (criticality_class, safety_flag); together they cover every priority p1 to p4.
   sla_policies: [
     ['critical', true, 'p1', 15, 4], ['critical', false, 'p1', 30, 8],

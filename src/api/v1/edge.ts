@@ -48,7 +48,7 @@ import { config } from '../../config/index.js';
 import type { AuthContext } from '../../middleware/context.js';
 import { getCrossDockTaskById } from '../../read/projections/cross_dock_task.js';
 import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
-import { resolveApprover, INDENT_DOA_TYPE } from './indents.js';
+import { routeIndentLines, headerApproverOf } from '../../compliance/indent-routing.js';
 import { damageAuthorityTypesFor } from '../../compliance/damage.js';
 import {
   countOpenWorkOrders,
@@ -745,21 +745,20 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     // approver throws APPROVAL_UNRESOLVED (409), a permanent code that settles the outbox row as
     // needs_attention rather than retrying forever.
     const rawLines = body.payload['lines'];
-    let estimatedValue = 0;
+    // Story 4.10 (Task 2.4): the same per-line resolver as the HTTP raise; no second idiom.
     if (Array.isArray(rawLines)) {
-      for (const line of rawLines as Array<Record<string, unknown>>) {
-        const qty =
-          typeof line?.['requested_qty'] === 'number' ? (line['requested_qty'] as number) : 0;
-        const price =
-          typeof line?.['unit_price_estimate'] === 'number'
-            ? (line['unit_price_estimate'] as number)
-            : 0;
-        estimatedValue += qty * price;
-      }
+      const lines = rawLines as Array<Record<string, unknown>>;
+      const routes = await routeIndentLines(lines);
+      body.payload['lines'] = lines.map((line, i) => ({
+        ...line,
+        approval_route: routes[i]!.approval_route,
+        approver_actor_id: routes[i]!.approver_actor_id ?? undefined,
+        doa_entry_id: routes[i]!.doa_entry_id ?? undefined,
+      }));
+      const approval = headerApproverOf(routes);
+      if (approval.approver_actor_id) body.payload['approver_actor_id'] = approval.approver_actor_id;
+      if (approval.doa_entry_id) body.payload['doa_entry_id'] = approval.doa_entry_id;
     }
-    const approval = await resolveApprover(INDENT_DOA_TYPE, estimatedValue);
-    if (approval.approverActorId) body.payload['approver_actor_id'] = approval.approverActorId;
-    if (approval.doaEntryId) body.payload['doa_entry_id'] = approval.doaEntryId;
   }
   // Story 8.9 (D3): the reporter is the authenticated actor, never trusted from the edge payload
   // (the requester_user_id stamp above). The damage applier re-stamps it from the actor as well.

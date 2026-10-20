@@ -560,8 +560,14 @@ const EXPECTED = [
   {
     canonical: 'read/projections/indent_line.sql',
     table: 'indent_line',
-    constraints: ['uq_indent_line_no', 'chk_indent_line_qty_positive'],
-    indexes: ['idx_indent_line_sku'],
+    constraints: [
+      'uq_indent_line_no',
+      'chk_indent_line_qty_positive',
+      'chk_indent_line_route',
+      'chk_indent_line_status',
+      'chk_indent_line_rejection_reason',
+    ],
+    indexes: ['idx_indent_line_sku', 'idx_indent_line_status'],
   },
   // Story 4.4: Purchase Order Management
   {

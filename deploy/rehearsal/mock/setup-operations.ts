@@ -109,11 +109,15 @@ export async function setupOperations(ctx: Ctx): Promise<void> {
     let created = 0;
     const entries = ops['doa_entries'] as Json[];
     for (const e of entries) {
-      // There is no list route: resolve tells whether an active band already answers the type.
+      // There is no list route: resolve tells whether an active band already answers the type at
+      // a value inside this band (Story 4.10 seeds two value bands for indent_approval).
+      const vmin = e['value_min'];
+      const vmax = e['value_max'];
+      const probe = typeof vmin === 'number' ? vmin + 1 : typeof vmax === 'number' ? vmax : 1;
       const resolved = await ctx.request(
         'POST',
         '/api/v1/doa/resolve',
-        { transaction_type: e['transaction_type'], value: 1 },
+        { transaction_type: e['transaction_type'], value: probe },
         headers,
       );
       if (!(resolved.status === 404 && resolved.body['error_code'] === 'NO_DOA_ENTRY_MATCH'))

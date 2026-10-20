@@ -24,7 +24,8 @@ TOKEN="$(curl -sS -m 20 "${RESOLVE[@]}" -X POST "${AUTH}:8443/realms/ims/protoco
 unset FIN_PW
 [ -n "$TOKEN" ] || { echo "no token for ${FIN}"; exit 3; }
 
-band() { # role transaction_type idempotency-suffix
+band() { # role transaction_type idempotency-suffix [value_min value_max]  (null = unbounded)
+  local vmin="${4:-null}" vmax="${5:-null}"
   local code
   # An active band for this type+role already in the projection is "present" whatever key made it
   # (the 2026-09-13 bands were created with other keys, so the 409 path alone duplicated them).
@@ -33,7 +34,7 @@ band() { # role transaction_type idempotency-suffix
   fi
   code="$(curl -sS -m 20 "${RESOLVE[@]}" -o /tmp/doa-band.out -w '%{http_code}' -X POST "${API}:8443/api/v1/doa/entries" \
     -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
-    -d "{\"role\":\"$1\",\"transaction_type\":\"$2\",\"idempotency_key\":\"pilot-band-$3\"}")"
+    -d "{\"role\":\"$1\",\"transaction_type\":\"$2\",\"value_min\":${vmin},\"value_max\":${vmax},\"idempotency_key\":\"pilot-band-$3\"}")"
   case "$code" in
     200|201) echo "band $2 -> $1: created";;
     409)     echo "band $2 -> $1: already present";;
@@ -52,6 +53,10 @@ band department_head    edge.refused_capture_resolution refused-capture-resoluti
 band qc_head            damage.qc_concurrence           damage-qc-concurrence
 band finance_controller damage.finance_concurrence      damage-finance-concurrence
 band ceo                damage.escalation               damage-escalation
+# Story 4.10 (UX ruling Q6, owner 2026-10-21): requisition lines route on their own value; the
+# department head signs up to Rs 1,00,000 inclusive, the finance controller above that.
+band department_head    indent_approval                 indent-approval-dept-head    null   100000
+band finance_controller indent_approval                 indent-approval-finance      100000 null
 unset TOKEN
 echo "=== verify:roles"
 # tail -40: the report lists four required roles per active site after the pair lines (Story 1.16).

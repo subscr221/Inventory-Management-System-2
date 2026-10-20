@@ -1293,3 +1293,10 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - `src/api/v1/items.ts` attributes `item.updated` and the item group notification to the gate-authorized assignment, so a caller holding both `warehouse_manager` and `inventory_controller` is recorded as `warehouse_manager` when assigning an item group. Deferred because the item event is an inventory write and the attribution is defensible; the item actor handling is pre-existing. Revisit if audit review wants the group change attributed to `inventory_controller`.
 - `putRightsBase` reads the existing rights without a row lock before its no-op comparison. Two CEO or Finance Head users changing rights for the same grantee at the same instant can let a real revoke be treated as a no-op and skip its event and notification. Deferred because it needs two grantors racing on one grantee.
 - `PATCH /api/v1/items/:sku` reads the item with no lock, so two concurrent PATCHes of one SKU can both see the same current group and one can skip `markEverAssigned`. Deferred because `fk_item_master_item_group ON DELETE RESTRICT` is the backstop and `deleteGroupBase` maps its 23503 to 409 `ITEM_GROUP_IN_USE`.
+
+## Deferred from: code review of story-4-10 (2026-10-21)
+
+- Pre-approved (non-doa) lines write no audit entry and no notification at raise. Story 4.8 owns the grant path.
+- A line whose band role is held by the requester is frozen with the requester as approver and SOD-01 blocks it permanently. Pre-existing; Story 4.9.
+- The role-holder fallback ignores value bands, so a large line can reach a smaller band's holder. Moved verbatim from `resolveApprover`; Story 4.9.
+- My Requests list rows get no `lines[]`, so the per-line chips need a detail screen to appear.

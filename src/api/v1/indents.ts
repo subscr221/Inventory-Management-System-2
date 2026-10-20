@@ -20,9 +20,12 @@ import { config } from '../../config/index.js';
 import {
   getIndentById,
   getIndentLines,
+  getIndentWithCounts,
   listIndents,
   findOpenDuplicate,
 } from '../../read/projections/indent.js';
+import { routeIndentLines, headerApproverOf } from '../../compliance/indent-routing.js';
+import { pendingLineIdsFor } from '../../compliance/indent.js';
 import type { IndentRow } from '../../read/projections/indent.js';
 import {
   findMatchingDoaEntry,
@@ -32,7 +35,7 @@ import {
 } from '../../read/projections/doa_registry.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
-export const INDENT_DOA_TYPE = 'indent_approval';
+export { INDENT_DOA_TYPE } from '../../compliance/indent-routing.js';
 
 interface ActorContext {
   userId: string;
@@ -198,19 +201,17 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
     }
   }
 
-  // AC 6: DOA band resolution against the indent's real estimated value - never hard-coded.
-  // Use string-based decimal arithmetic to match the DB's NUMERIC(18,4) computation and avoid
-  // IEEE 754 floating-point imprecision at band boundaries.
-  let estimatedValueStr = '0';
-  for (const line of lines) {
-    const qty = typeof line?.requested_qty === 'number' ? line.requested_qty : 0;
-    const price = typeof line?.unit_price_estimate === 'number' ? line.unit_price_estimate : 0;
-    const lineValue = qty * price;
-    // Accumulate as string to preserve precision
-    estimatedValueStr = (parseFloat(estimatedValueStr) + lineValue).toFixed(4);
-  }
-  const estimatedValue = parseFloat(estimatedValueStr);
-  const approval = await resolveApprover(INDENT_DOA_TYPE, estimatedValue);
+  // Story 4.10 (AC 2, AC 6): every line resolves its own DOA band on its own value; a line with no
+  // band refuses the whole raise before anything is persisted. The header keeps the approver of
+  // the highest-value line for compatibility (D5).
+  const routes = await routeIndentLines(lines);
+  const approval = headerApproverOf(routes);
+  const routedLines = lines.map((line, i) => ({
+    ...line,
+    approval_route: routes[i]!.approval_route,
+    approver_actor_id: routes[i]!.approver_actor_id ?? undefined,
+    doa_entry_id: routes[i]!.doa_entry_id ?? undefined,
+  }));
 
   // Story 8.9 (AC 5, D15): a damage replacement names its case, and its indent id was minted with
   // the report (the report names it back), so the client's id is kept for that raise only. Every
@@ -241,9 +242,9 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
         need_by_date: body.need_by_date,
         urgent: body.urgent === true,
         reason: body.reason ?? null,
-        lines,
-        approver_actor_id: approval.approverActorId ?? undefined,
-        doa_entry_id: approval.doaEntryId ?? undefined,
+        lines: routedLines,
+        approver_actor_id: approval.approver_actor_id ?? undefined,
+        doa_entry_id: approval.doa_entry_id ?? undefined,
         duplicate_confirmed: body.confirm_duplicate === true,
         ...(damageReportId !== undefined ? { damage_report_id: damageReportId } : {}),
       },
@@ -260,10 +261,10 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
     auditCtxFor(req, actor, 201),
   );
 
-  const indent = await getIndentById(indentId);
+  const indent = await getIndentWithCounts(indentId);
   const indentLines = await getIndentLines(indentId);
 
-  if (approval.requiresApproval) {
+  if (routes.some((r) => r.requires_approval)) {
     // AC 6: the requisition carries APPROVAL_REQUIRED until the resolved authority acts.
     sendJson(res, 201, {
       event_id: persisted.event_id,
@@ -273,8 +274,8 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
       lines: indentLines,
       details: {
         indent_id: indentId,
-        approver_actor_id: approval.approverActorId,
-        doa_entry_id: approval.doaEntryId,
+        approver_actor_id: approval.approver_actor_id,
+        doa_entry_id: approval.doa_entry_id,
       },
     });
     return;
@@ -304,7 +305,7 @@ export const getIndentBase: RouteHandler = async (req, res, params) => {
   assertIndentReadAccess(req, indent);
 
   const lines = await getIndentLines(indentId);
-  sendJson(res, 200, { indent, lines });
+  sendJson(res, 200, { indent: await getIndentWithCounts(indentId), lines });
 };
 
 export const listIndentsBase: RouteHandler = async (req, res, _params) => {
@@ -496,6 +497,45 @@ export const withdrawIndentBase: RouteHandler = async (req, res, params) => {
 };
 
 /**
+ * Story 4.10 (Task 3.1, O4): the decided line ids are fixed HERE, before persistEvent - the body's
+ * list as given, else every pending line the actor holds (as approver or active delegate). The
+ * persisted event always carries the explicit list so a replay decides the same lines.
+ */
+async function resolveDecisionLineIds(
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+  indent: IndentRow,
+  actorUserId: string,
+  now: string,
+): Promise<string[] | null> {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  const given = body?.line_ids;
+  if (given !== undefined) {
+    if (!Array.isArray(given) || given.length === 0 || !given.every((v) => isUuid(v))) {
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'line_ids must be a non-empty array of indent_line_id UUIDs',
+        { indent_id: indent.indent_id },
+      );
+      return null;
+    }
+    return given as string[];
+  }
+  const held = await pendingLineIdsFor(indent, actorUserId, now);
+  if (held.length > 0) return held;
+  // Holding no pending line: name every line so the seam answers with the precise guard
+  // (INDENT_ALREADY_DECIDED, SOD-01, NOT_RESOLVED_APPROVER) exactly as Story 4.3 clients expect.
+  return (await getIndentLines(indent.indent_id)).map((l) => l.indent_line_id);
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_REGEX.test(value);
+}
+
+/**
  * AC 5 / AC 6 approval decision. SOD-01 (requester is not approver) and the DOA-resolution match
  * are enforced in the compliance seam (src/compliance/indent.ts), so a direct POST /api/v1/events
  * or an edge upload hits the same guards as this route.
@@ -506,6 +546,8 @@ export const approveIndentBase: RouteHandler = async (req, res, params) => {
 
   const actor = actorContext(req);
   const now = new Date().toISOString();
+  const lineIds = await resolveDecisionLineIds(req, res, indent, actor.userId, now);
+  if (!lineIds) return;
   const persisted = await persistEvent(
     {
       stream_type: 'procurement',
@@ -515,6 +557,7 @@ export const approveIndentBase: RouteHandler = async (req, res, params) => {
       payload: {
         indent_id: indent.indent_id,
         approver_actor_id: actor.userId,
+        line_ids: lineIds,
       },
       metadata: {
         correlation_id: indent.correlation_id ?? randomUUID(),
@@ -525,8 +568,11 @@ export const approveIndentBase: RouteHandler = async (req, res, params) => {
     auditCtxFor(req, actor, 200),
   );
 
-  const updated = await getIndentById(indent.indent_id);
-  sendJson(res, 200, { event_id: persisted.event_id, indent: updated });
+  sendJson(res, 200, {
+    event_id: persisted.event_id,
+    indent: await getIndentWithCounts(indent.indent_id),
+    lines: await getIndentLines(indent.indent_id),
+  });
 };
 
 export const rejectIndentBase: RouteHandler = async (req, res, params) => {
@@ -551,6 +597,8 @@ export const rejectIndentBase: RouteHandler = async (req, res, params) => {
 
   const actor = actorContext(req);
   const now = new Date().toISOString();
+  const lineIds = await resolveDecisionLineIds(req, res, indent, actor.userId, now);
+  if (!lineIds) return;
   const persisted = await persistEvent(
     {
       stream_type: 'procurement',
@@ -561,6 +609,7 @@ export const rejectIndentBase: RouteHandler = async (req, res, params) => {
         indent_id: indent.indent_id,
         rejection_reason: reason.trim(),
         approver_actor_id: actor.userId,
+        line_ids: lineIds,
       },
       metadata: {
         correlation_id: indent.correlation_id ?? randomUUID(),
@@ -571,8 +620,11 @@ export const rejectIndentBase: RouteHandler = async (req, res, params) => {
     auditCtxFor(req, actor, 200),
   );
 
-  const updated = await getIndentById(indent.indent_id);
-  sendJson(res, 200, { event_id: persisted.event_id, indent: updated });
+  sendJson(res, 200, {
+    event_id: persisted.event_id,
+    indent: await getIndentWithCounts(indent.indent_id),
+    lines: await getIndentLines(indent.indent_id),
+  });
 };
 
 export const cancelIndentBase: RouteHandler = async (req, res, params) => {
