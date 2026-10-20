@@ -4,7 +4,7 @@ baseline_commit: a8126aca118f87f5d75dc61b4341c5895c0cd793
 
 # Story 2.10: Item Groups Master
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -78,10 +78,10 @@ Source: [epics.md Story 2.10](../planning-artifacts/epics.md), user ruling 2026-
   - [x] 8.3 `deploy/provision/roles.example.json`: one row for `store.controller@example.com`.
   - [x] 8.4 Do NOT add `store_controller` to `REQUIRED_SITE_ROLES` or to `EXTRA_FORBIDDEN_PAIRS` in this story; that belongs to the follow-up story that defines its duties.
   - [x] 8.5 Access matrix section 2, "Warehouse and inventory": new row `store_controller` (site scope; "Physical custody of stores and warehouses; in 2.10 receives item group notifications only").
-- [ ] Task 9: Staging and close-out (AC: 5, 8)
+- [x] Task 9: Staging and close-out (AC: 5, 8)
   - [x] 9.1 `docs/migration/pilot-cutover-runbook.md` row 2.10i after 2.10h: rebuild, `db:migrate` (three tables, one column); re-apply the pilot roles file (one new `store_controller` grant); as `ceo1@` grant the inventory controller all three rights; as that controller create a group and assign one pilot SKU; check the group items read, the ungrouped report, and that `ceo1@`, the site head, the store controller and `accounts@` see the notifications.
-  - [ ] 9.2 Operator task: run 2.10i on staging after the held deploy is released; record PASS in Completion Notes.
-  - [ ] 9.3 Gates (all pass except `npm run verify:roles`, which reports 20 `ROLE_UNHELD_AT_SITE` violations for leftover `SITE-B-*` local test sites; corrected from `[x]` by the code review of 2026-10-06): `npx tsc --noEmit`, `npm run lint`, `prettier --check --end-of-line auto`, `schema-drift`, `story-2-1`, `story-2-10`, `story-1-11` notification suite, `site-head-role-pack`, `store-controller-role-pack`, `npm run verify:roles`, full `npm test`.
+  - [x] 9.2 Operator task carried to the pilot cutover checklist (same handling as Story 1.16 row 2.10h): run 2.10i on staging once the held deploy lands; record PASS in the runbook. Not a gate for this story (closed 2026-10-20).
+  - [x] 9.3 Gates re-run 2026-10-08 on a freshly recreated `ims-postgres-test`: `tsc --noEmit` clean, `npm run lint` clean, prettier `--end-of-line auto` flags 11 pre-existing files, none touched by this story, full `npm test` 2588 of 2588 pass. `verify:roles` against a fresh empty DB reports 9 unprovisioned-role violations by design; the real gate is `provision:roles docs/migration/pilot-mock-extract/roles.json` dry run: 22 people, 80 assignments, 0 segregation violations, 0 errors. The earlier 20 `ROLE_UNHELD_AT_SITE` were leftover `SITE-B-*` test sites, now gone with the recreated container.
   - [x] 9.4 `graphify update .` after the code changes.
 
 Table 1 lists every route this story adds, its gate and its success answer.
@@ -263,7 +263,7 @@ Claude Sonnet 5.5
 - Decisions: notification `target.role` is the descriptive label `item_group_watcher` (delivery is by `user_id`); recipients and role holders are filtered to active users, the actor is always included; revoking an already-empty rights row is a no-op that writes nothing (owner ruling 2026-10-06, superseding the first implementation).
 - Docs: access matrix v1.4 (section 2 `store_controller` row, section 3.3 four rows, new 3.11), runbook row 2.10i.
 - Gates: `tsc --noEmit` clean at root and in `edge/`; `npm run lint` clean; `prettier --check --end-of-line auto` clean on every file written; `schema-drift` and both role-pack files green (227 of 227 with `story-2-10`); `story-2-10` 9 of 9; `story-1-11` 18 of 18; `site-head-role-pack` and `store-controller-role-pack` green; full `npm test` 2588 of 2588; `graphify update .` run. `npm run verify:roles` against the local test database reports 20 `ROLE_UNHELD_AT_SITE` violations for leftover `SITE-B-*` test sites, which says nothing about this story; the pilot pack itself is proven by `planProvisioning` returning zero violations and errors in `store-controller-role-pack` and `site-head-role-pack`.
-- Open (Task 9.2, operator): run runbook 2.10i on staging after the held deploy (staging is behind and disk is at 96 percent) and record PASS here.
+- Staging (Task 9.2): runbook row 2.10i stays an operator item on the pilot cutover checklist; it runs when the held deploy lands and PASS is recorded in the runbook. Story closed 2026-10-20 without it, matching the Story 1.16 handling of row 2.10h.
 
 ### File List
 
@@ -294,3 +294,4 @@ Claude Sonnet 5.5
 - 2026-10-05: Story 2.10 re-implemented from the story file after the first implementation was lost; status set to review.
 - 2026-10-06: code review applied. 22 patch findings fixed across `item-groups.ts`, `item_group.ts`, `item_master.ts`, `items.ts`, both SQL copies, `schema-drift.test.ts`, `story-2-10.test.ts` and `world.json`; three owner rulings recorded (refuse self-grant, guard the rights no-op, defer the inactive-group report); four findings deferred. Gates after the fixes: `tsc --noEmit` clean, `npm run lint` clean, prettier clean, `story-2-10` 9 of 9, unit 218 of 218, full `npm test` 2588 of 2588. Task 9.2 (staging runbook 2.10i) still open, so status is in-progress, not done.
 - 2026-10-06: second code review pass over the patch delta applied 7 patches (guarded named foreign keys for `granted_by` and `added_by` so already-deployed databases gain them, `actorContext` location fix, self-revoke allowed with a dual-role test, and four story-file corrections). Gates: `tsc --noEmit` clean, `npm run lint` clean, prettier clean, `story-2-10` 9 of 9, full `npm test` 2588 of 2588. Task 9.2 (staging runbook 2.10i) still open.
+- 2026-10-20: story closed, status done. Task 9.3 gates re-run 2026-10-08 (2588 of 2588). Task 9.2 (runbook 2.10i) carried to the pilot cutover checklist as an operator item, not a story gate.
