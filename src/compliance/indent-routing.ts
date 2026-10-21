@@ -1,5 +1,12 @@
 import type { PoolClient } from 'pg';
 import { AppError } from '../middleware/error.js';
+import { toIstCalendarDate } from '../lib/business-days.js';
+import { numberToQtyText, toMilli } from '../lib/milli.js';
+import {
+  findCoveringStandingApprovals,
+  getItemGroupIdOfSku,
+  monthToDateIssued,
+} from '../read/projections/standing_grant.js';
 import {
   findMatchingDoaEntry,
   findRoleHolder,
@@ -16,6 +23,7 @@ import {
 export const INDENT_DOA_TYPE = 'indent_approval';
 
 export interface RoutableLine {
+  sku?: unknown;
   requested_qty?: unknown;
   unit_price_estimate?: unknown;
 }
@@ -26,10 +34,64 @@ export interface LineRoute {
   doa_entry_id: string | null;
   requires_approval: boolean;
   line_value: number;
+  /** Story 4.8 (D6): set when the line rides a standing approval; never taken from a client. */
+  standing_grant_id: string | null;
+}
+
+/**
+ * Story 4.8 (D6): who is raising and where, so each line can be checked against the requester's
+ * active standing approvals. Absent, every line takes the DOA route exactly as in Story 4.10.
+ */
+export interface GrantRoutingContext {
+  requesterUserId: string;
+  siteId: string;
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * D6 and D7: the first active grant of the requester covering the line whose month-to-date issued
+ * quantity (IST calendar month) plus the quantity already routed to it in this same requisition
+ * plus this line fits the monthly cap. No cap means no limit. Null falls the line back to DOA (AC 3).
+ */
+async function findRidingGrant(
+  line: RoutableLine,
+  ctx: GrantRoutingContext,
+  routedMilli: Map<string, bigint>,
+  client?: PoolClient,
+): Promise<string | null> {
+  if (!UUID_REGEX.test(ctx.requesterUserId) || !UUID_REGEX.test(ctx.siteId)) return null;
+  if (typeof line.sku !== 'string' || line.sku.trim().length === 0) return null;
+  if (typeof line.requested_qty !== 'number' || !(line.requested_qty > 0)) return null;
+  const sku = line.sku.trim();
+  const today = toIstCalendarDate(new Date());
+  const groupId = await getItemGroupIdOfSku(sku, client);
+  const candidates = await findCoveringStandingApprovals(
+    ctx.requesterUserId,
+    ctx.siteId,
+    sku,
+    groupId,
+    today,
+    client,
+  );
+  const lineMilli = toMilli(numberToQtyText(line.requested_qty));
+  for (const grant of candidates) {
+    const already = routedMilli.get(grant.grant_id) ?? 0n;
+    if (grant.monthly_qty_cap !== null) {
+      const used = toMilli(await monthToDateIssued(grant.grant_id, today.slice(0, 7), client));
+      if (used + already + lineMilli > toMilli(grant.monthly_qty_cap)) continue;
+    }
+    routedMilli.set(grant.grant_id, already + lineMilli);
+    return grant.grant_id;
+  }
+  return null;
 }
 
 /** Story 4.8 seam: a line index already routed by a grant skips DOA resolution. */
-export type PreRouted = Map<number, { approval_route: LineRoute['approval_route'] }>;
+export type PreRouted = Map<
+  number,
+  { approval_route: LineRoute['approval_route']; standing_grant_id?: string }
+>;
 
 /** requested_qty * unit_price_estimate rounded to 4 decimals; a null price is a zero value (D2). */
 export function lineValueOf(line: RoutableLine): number {
@@ -38,9 +100,9 @@ export function lineValueOf(line: RoutableLine): number {
   return Number((qty * price).toFixed(4));
 }
 
-async function resolveLineApprover(
+export async function resolveLineApprover(
   transactionType: string,
-  value: number,
+  value: number | string,
   lineNo: number,
   client?: PoolClient,
 ): Promise<{ approverActorId: string; doaEntryId: string }> {
@@ -84,8 +146,10 @@ export async function routeIndentLines(
   lines: RoutableLine[],
   client?: PoolClient,
   preRouted?: PreRouted,
+  grants?: GrantRoutingContext,
 ): Promise<LineRoute[]> {
   const routes: LineRoute[] = [];
+  const routedMilli = new Map<string, bigint>();
   for (let i = 0; i < lines.length; i += 1) {
     if (typeof lines[i] !== 'object' || lines[i] === null) {
       throw new AppError(400, 'INVALID_PARAMS', `Line ${i + 1}: must be an object`);
@@ -99,6 +163,21 @@ export async function routeIndentLines(
         doa_entry_id: null,
         requires_approval: false,
         line_value: value,
+        standing_grant_id: pre.standing_grant_id ?? null,
+      });
+      continue;
+    }
+    // Story 4.8 (D6): a covered line within its cap rides the grant and needs no approver; any
+    // other line (outside scope, over cap, grant lapsed) takes the DOA route, never a rejection.
+    const grantId = grants ? await findRidingGrant(lines[i]!, grants, routedMilli, client) : null;
+    if (grantId !== null) {
+      routes.push({
+        approval_route: 'standing_approval',
+        approver_actor_id: null,
+        doa_entry_id: null,
+        requires_approval: false,
+        line_value: value,
+        standing_grant_id: grantId,
       });
       continue;
     }
@@ -109,6 +188,7 @@ export async function routeIndentLines(
       doa_entry_id: r.doaEntryId,
       requires_approval: true,
       line_value: value,
+      standing_grant_id: null,
     });
   }
   return routes;

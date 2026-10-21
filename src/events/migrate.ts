@@ -59,6 +59,7 @@ const MIGRATIONS = [
   '../../read/projections/indent.sql',
   '../../read/projections/indent_line.sql',
   '../../read/projections/indent_issue.sql',
+  '../../read/projections/standing_grant.sql',
   '../../read/projections/purchase_order.sql',
   '../../read/projections/purchase_order_line.sql',
   '../../read/projections/po_outbound_message.sql',

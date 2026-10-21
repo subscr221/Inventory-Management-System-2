@@ -394,6 +394,20 @@ export const config = {
     // requisition for the same SKU by the same requester counts as a potential duplicate.
     duplicateWindowDays: parsePositiveIntEnv('INDENT_DUPLICATE_WINDOW_DAYS', 7),
   },
+  standingGrant: {
+    // Story 4.8 (D13): the daily standing-grant sweep that expires grants past their end date and
+    // sends each assigner their pruning list when it falls due (cadence is per assigner, default
+    // 30 days, in standing_grant_prune_setting). Same interval-knob shape as the job-work sweeps.
+    sweepIntervalMs: parsePositiveIntEnv(
+      'STANDING_GRANT_SWEEP_INTERVAL_MS',
+      86_400_000,
+      MAX_INTERVAL_MS,
+      true,
+    ),
+    sweepBatchSize: parsePositiveIntEnv('STANDING_GRANT_SWEEP_BATCH_SIZE', 500, 10_000, true),
+    // A live grant not used for this many days is flagged "consider revoking" on the pruning list.
+    unusedFlagDays: parsePositiveIntEnv('STANDING_GRANT_UNUSED_FLAG_DAYS', 90, 3_650, true),
+  },
   erp: {
     // Story 2.9 (INT-ERP-01): an ERP inbound reference projection is stale when its heartbeat's
     // last_successful_at is older than this threshold (default 15 minutes per AC3). Staleness is

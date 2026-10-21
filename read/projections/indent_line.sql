@@ -138,6 +138,12 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_indent_line_issue_state ON indent_line (indent_id, issue_state);
 
+-- Story 4.8: the grant a line rode on at raise (standing_approval) and the limit a requester used to
+-- approve their own line (self_approval). Both nullable; no FK (projection convention).
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS standing_grant_id UUID;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS self_approved BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS self_approval_grant_id UUID;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN

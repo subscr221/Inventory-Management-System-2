@@ -1296,7 +1296,7 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 
 ## Deferred from: code review of story-4-10 (2026-10-21)
 
-- Pre-approved (non-doa) lines write no audit entry and no notification at raise. Story 4.8 owns the grant path.
+- Pre-approved (non-doa) lines write no audit entry and no notification at raise. Story 4.8 owns the grant path. RESOLVED in Story 4.8 (2026-10-21): a grant-approved line writes an `indent.line_standing_approved` audit entry and tells the stores role once.
 - A line whose band role is held by the requester is frozen with the requester as approver and SOD-01 blocks it permanently. Pre-existing; Story 4.9.
 - The role-holder fallback ignores value bands, so a large line can reach a smaller band's holder. Moved verbatim from `resolveApprover`; Story 4.9.
 - My Requests list rows get no `lines[]`, so the per-line chips need a detail screen to appear.
@@ -1317,3 +1317,15 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - `correlation_id ?? randomUUID()` in the issue and close routes breaks trace continuity for untagged indents.
 - Header of a requisition with a pending or rejected line stays `raised`/`approved` after every approved line is issued or closed; define terminal header handling in Story 4.8.
 - Smoke step issues 2 of 100 then closes the remainder; INDENT_LINE_FULLY_ISSUED is covered by test/integration/story-4-11.test.ts and runbook 2.10k only.
+
+## Deferred from: dev of story-4-8 (2026-10-21)
+
+- Screens for the grant lifecycle (assign, the finance approver's inbox entry, revoke, my grants, the pruning list) are not built; Story 4.8 D14 puts edge UI out of scope. The API and the notifications carry everything a screen needs. The stores issue page shows the grant sentence under a covered line; nothing else changed in the edge app.
+- Web push of the pruning list follows the platform rule that push is opt-in per event type (`standing_grant_review`, default off) and needs a push subscription; in-app delivery is unconditional. If the pilot wants push by default, seed the preference at provisioning.
+- Cap is counted on quantity ISSUED (D7). A requisition raised under a grant does not reserve any cap, so two requisitions can both ride a grant and the later issue lapses and re-routes to normal approval (D8). This is the ruled behaviour, not a defect, but it surprises a storekeeper who sees a line approved at raise and refused at the counter; the refusal names the lapsed line and the line is re-routed in the same call.
+- A line part-issued under a grant and then re-routed resolves its DOA band on the whole line value, not on the remaining open quantity.
+- Re-routing a lapsed line needs a resolvable DOA approver for the line value. With none (Story 4.9 owns the no-band and no-holder fallback) the issue stays refused 409 `STANDING_APPROVAL_LAPSED`, the line stays `standing_approval`, and the response lists it under `reroute_failed` with the resolver's error code.
+- Item group membership is read when the requisition is raised (D5); moving an item to another group afterwards does not change a line already routed.
+- The expiry and pruning sweep runs as one transaction per tick and expires at most `STANDING_GRANT_SWEEP_BATCH_SIZE` (500) grants per tick; a larger backlog drains over successive daily ticks.
+- Terminal header handling for a requisition whose approved lines are all issued or closed while another line is pending or rejected (deferred from Story 4.11 review) is still undefined; Story 4.8 does not change header derivation.
+- `findRoleHolder` with a location still returns the oldest of the site's own and every-location holders. Story 4.8 does not depend on it for authority (assign and finance approval are membership tests on the DOA role at the site, so a newer site holder is never locked out; covered by test); it uses it only to pick the active delegate and the finance approver whose list receives a disabled assigner's grants.

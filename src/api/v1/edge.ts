@@ -378,6 +378,8 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   { name: 'Damage cases', modules: 'damage-cases', functionScope: 'read' },
   // Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
   { name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
+  // Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
+  { name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
 ];
 
 /**
@@ -517,6 +519,17 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
       403,
       'CENTRAL_ONLY_OPERATION',
       'Refused-capture records are written by the server, not from an edge device',
+      { stream_type: body.stream_type, event_type: body.event_type },
+    );
+  }
+
+  // Story 4.8 (D11): assigning, deciding, revoking and expiring a standing approval or limit need a
+  // live connection (EXPERIENCE.md); the grant routes are the only producers.
+  if (body.stream_type === 'standing_grant' || body.event_type.startsWith('standing_grant.')) {
+    throw new AppError(
+      403,
+      'CENTRAL_ONLY_OPERATION',
+      'Standing approvals and limits are managed online, not from an edge device',
       { stream_type: body.stream_type, event_type: body.event_type },
     );
   }
@@ -757,12 +770,17 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     // Story 4.10 (Task 2.4): the same per-line resolver as the HTTP raise; no second idiom.
     if (Array.isArray(rawLines)) {
       const lines = rawLines as Array<Record<string, unknown>>;
-      const routes = await routeIndentLines(lines);
+      const siteId = body.payload['site_id'];
+      const routes = await routeIndentLines(lines, undefined, undefined, {
+        requesterUserId: authContext.userId,
+        siteId: typeof siteId === 'string' ? siteId : '',
+      });
       body.payload['lines'] = lines.map((line, i) => ({
         ...line,
         approval_route: routes[i]!.approval_route,
         approver_actor_id: routes[i]!.approver_actor_id ?? undefined,
         doa_entry_id: routes[i]!.doa_entry_id ?? undefined,
+        standing_grant_id: routes[i]!.standing_grant_id ?? undefined,
       }));
       const approval = headerApproverOf(routes);
       if (approval.approver_actor_id)

@@ -591,6 +591,34 @@ const EXPECTED = [
     // Review: a slip line is immutable once written, so app_user never updates it.
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 4.8: standing approvals and self-approval limits. The CHECKs are inline in the CREATE
+  // TABLE (compared between the two copies); the item-group FK is a named guarded block.
+  {
+    canonical: 'read/projections/standing_grant.sql',
+    table: 'standing_grant',
+    constraints: ['fk_standing_grant_item_group'],
+    indexes: [
+      'idx_standing_grant_active_grantee',
+      'idx_standing_grant_assigner',
+      'idx_standing_grant_status_end',
+    ],
+    indexBodies: [
+      'CONSTRAINT uq_standing_grant_ref UNIQUE (grant_ref)',
+      "CONSTRAINT chk_standing_grant_kind CHECK (grant_kind IN ('standing_approval', 'self_approval_limit'))",
+      "CONSTRAINT chk_standing_grant_status CHECK (status IN ('pending-finance', 'active', 'rejected', 'revoked', 'expired'))",
+      'CONSTRAINT chk_standing_grant_shape CHECK (',
+      'CONSTRAINT chk_standing_grant_cap CHECK (monthly_qty_cap IS NULL OR monthly_qty_cap > 0)',
+      'CONSTRAINT chk_standing_grant_parties CHECK (grantee_user_id <> assigner_user_id)',
+      "CONSTRAINT chk_standing_grant_revoke_reason CHECK (revoke_reason IS NULL OR revoke_reason IN ('assigner', 'account_disabled'))",
+    ],
+  },
+  {
+    canonical: 'read/projections/standing_grant.sql',
+    table: 'standing_grant_prune_setting',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    indexBodies: ['CONSTRAINT chk_standing_grant_prune_interval CHECK (prune_interval_days >= 1)'],
+  },
   // Story 4.4: Purchase Order Management
   {
     canonical: 'read/projections/purchase_order.sql',

@@ -28,6 +28,15 @@ import { emitNotificationInTransaction } from '../notify/emit.js';
 import { toIstCalendarDate } from '../lib/business-days.js';
 import { renderIssueSlip, type IssueSlipLine } from '../warehouse/document-renderer.js';
 import { alreadyPersisted } from './indent.js';
+import { qtyExceeds, toMilli } from '../lib/milli.js';
+import {
+  getGrantById,
+  getGrantForUpdate,
+  getGrantLabel,
+  monthToDateIssued,
+  standingApprovalText,
+  type StandingGrantRow,
+} from '../read/projections/standing_grant.js';
 
 /**
  * Story 4.11 compliance seam: stores counter issue against approved requisition lines, and the
@@ -54,15 +63,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 // number for the nested stock.issued payload) and three decimals, not zero.
 const QTY_REGEX = /^\d{1,12}(\.\d{1,3})?$/;
 
-/** NUMERIC text to thousandths as a BigInt, so quantity comparisons never touch floats. */
-function toMilli(value: string): bigint {
-  const [whole = '0', frac = ''] = value.split('.');
-  return BigInt(whole) * 1000n + BigInt((frac + '000').slice(0, 3));
-}
-
-export function qtyExceeds(quantity: string, open: string): boolean {
-  return toMilli(quantity) > toMilli(open);
-}
+export { qtyExceeds };
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
@@ -315,12 +316,16 @@ export function assertLineIssuable(
 }
 
 /**
- * Table 2: the approval basis printed per issued line. The two non-DOA branches are Story 4.8's
- * seam: that story replaces them with its `standing_approval_text` (D9).
+ * Table 2: the approval basis printed per issued line. A standing_approval line prints the D9
+ * sentence (Story 4.8) when the caller resolved it from the grant.
  */
-export function approvalBasisText(line: IndentLineRow, doaRole: string | null): string {
+export function approvalBasisText(
+  line: IndentLineRow,
+  doaRole: string | null,
+  standingText: string | null = null,
+): string {
   if (line.approval_route === 'standing_approval') {
-    return 'Standing approval (grant pending Story 4.8)';
+    return standingText ?? 'Standing approval';
   }
   if (line.approval_route === 'self_approval') {
     return 'Within self-approval limit';
@@ -333,14 +338,90 @@ export function approvalBasisText(line: IndentLineRow, doaRole: string | null): 
   return `Approved by ${role} (${who}) on ${when}`;
 }
 
-export async function approvalBasisOf(line: IndentLineRow): Promise<string> {
+/** D9: "Standing approval SA-2026-014 for <display name> (<SKU or item group name>). Storekeeper please issue." */
+export async function standingTextOf(
+  line: Pick<IndentLineRow, 'approval_route' | 'standing_grant_id'>,
+  client?: PoolClient,
+): Promise<string | null> {
+  if (line.approval_route !== 'standing_approval' || !line.standing_grant_id) return null;
+  const grant = await getGrantById(line.standing_grant_id, client);
+  if (!grant) return null;
+  const label = await getGrantLabel(grant, client);
+  return standingApprovalText(grant.grant_ref, label.grantee_name, label.scope_label);
+}
+
+export async function approvalBasisOf(line: IndentLineRow, client?: PoolClient): Promise<string> {
   const entry =
     line.approval_route !== 'standing_approval' &&
     line.approval_route !== 'self_approval' &&
     line.doa_entry_id
       ? await getDoaEntry(line.doa_entry_id)
       : null;
-  return approvalBasisText(line, entry?.role ?? null);
+  return approvalBasisText(line, entry?.role ?? null, await standingTextOf(line, client));
+}
+
+export interface LapsedLine {
+  indent_line_id: string;
+  line_no: number;
+  standing_grant_id: string | null;
+  reason: 'no_grant' | 'grant_not_active' | 'end_date_passed' | 'monthly_cap_exceeded';
+}
+
+/**
+ * Story 4.8 (D8): the binding check for every line routed standing_approval, under the grant row
+ * lock (taken in id order so two issues cannot deadlock), after the Story 4.11 guards and before
+ * any write. Returns nothing when every grant still holds; otherwise refuses the WHOLE issue with
+ * 409 STANDING_APPROVAL_LAPSED naming each lapsed line. The route re-routes those lines to DOA in
+ * its own committed transaction (this one rolls back with the refusal). Cap arithmetic is exact
+ * thousandths; the month is the IST calendar month of the issue (D7).
+ */
+async function assertStandingGrantsHold(
+  indent: IndentRow,
+  resolved: Array<{ input: IssueLineInput; line: IndentLineRow }>,
+  occurredAt: string,
+  client: PoolClient,
+): Promise<void> {
+  const riding = resolved.filter((r) => r.line.approval_route === 'standing_approval');
+  if (riding.length === 0) return;
+  const today = toIstCalendarDate(new Date(occurredAt));
+  const month = today.slice(0, 7);
+  const grants = new Map<string, StandingGrantRow | null>();
+  const ids = [...new Set(riding.map((r) => r.line.standing_grant_id).filter((v) => v !== null))];
+  for (const id of ids.sort()) grants.set(id, await getGrantForUpdate(id, client));
+
+  const issuing = new Map<string, bigint>();
+  const lapsed: LapsedLine[] = [];
+  for (const { input, line } of riding) {
+    const gid = line.standing_grant_id;
+    const grant = gid ? (grants.get(gid) ?? null) : null;
+    let reason: LapsedLine['reason'] | null = null;
+    if (!gid) reason = 'no_grant';
+    else if (!grant || grant.status !== 'active') reason = 'grant_not_active';
+    else if (grant.end_date !== null && grant.end_date < today) reason = 'end_date_passed';
+    else if (grant.monthly_qty_cap !== null) {
+      const used = toMilli(await monthToDateIssued(gid, month, client));
+      const total = used + (issuing.get(gid) ?? 0n) + toMilli(input.quantity);
+      if (total > toMilli(grant.monthly_qty_cap)) reason = 'monthly_cap_exceeded';
+    }
+    if (reason === null && gid) {
+      issuing.set(gid, (issuing.get(gid) ?? 0n) + toMilli(input.quantity));
+    } else if (reason !== null) {
+      lapsed.push({
+        indent_line_id: line.indent_line_id,
+        line_no: line.line_no,
+        standing_grant_id: gid,
+        reason,
+      });
+    }
+  }
+  if (lapsed.length > 0) {
+    reject(
+      'STANDING_APPROVAL_LAPSED',
+      `Standing approval no longer covers line ${lapsed.map((l) => l.line_no).join(', ')}; the line goes to normal approval`,
+      { indent_id: indent.indent_id, lapsed_lines: lapsed },
+      409,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +477,8 @@ async function applyIndentIssued(
   }
 
   const occurredAt = envelope.metadata.occurred_at;
+  // Story 4.8 (D8): lock-then-check every standing grant a line rides, before any write.
+  await assertStandingGrantsHold(indent, resolved, occurredAt, client);
   const earlier = await listIndentIssuesByIndent(indentId, client);
   const issueNumber = await allocateIssueNumber(
     Number(toIstCalendarDate(new Date(occurredAt)).slice(0, 4)),
@@ -458,7 +541,7 @@ async function applyIndentIssued(
         409,
       );
     }
-    const basis = await approvalBasisOf(line);
+    const basis = await approvalBasisOf(line, client);
     const issueLine: IndentIssueLineRow = {
       issue_line_id: randomUUID(),
       issue_id: issueId,
@@ -474,7 +557,8 @@ async function applyIndentIssued(
       serials: input.serials,
       stock_issued_event_id: stockEventId,
       approval_basis: basis,
-      standing_grant_id: null,
+      standing_grant_id:
+        line.approval_route === 'standing_approval' ? line.standing_grant_id : null,
     };
     await insertIndentIssueLine(issueLine, client);
     await logAuditEntry(client, {

@@ -524,6 +524,8 @@ describe('Story 1.15 Employee Base Role', () => {
       'My requests',
       // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
       'Report damage',
+      // Story 4.8: every signed-in person can open the grants they hold.
+      'Standing grants',
     ]);
     assert.strictEqual(res.body['role'], 'employee');
   });
@@ -540,6 +542,8 @@ describe('Story 1.15 Employee Base Role', () => {
       'My requests',
       // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
       'Report damage',
+      // Story 4.8: every signed-in person can open the grants they hold.
+      'Standing grants',
     ]);
   });
 
@@ -556,6 +560,8 @@ describe('Story 1.15 Employee Base Role', () => {
       'My requests',
       // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
       'Report damage',
+      // Story 4.8: every signed-in person can open the grants they hold.
+      'Standing grants',
     ]);
   });
 

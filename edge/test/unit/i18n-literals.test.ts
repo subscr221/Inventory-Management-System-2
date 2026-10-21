@@ -31,6 +31,9 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^damage-cases-/,
   // Story 4.11: the stores counter issue page.
   /^storesIssue\./,
+  // Story 4.8: the standing grants page.
+  /^standingGrants\./,
+  /^standing-grants-/,
   /^stores-issue-/,
   /^Promise$/,
   /^Dashboard$/,

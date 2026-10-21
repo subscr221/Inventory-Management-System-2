@@ -462,7 +462,9 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     // Story 8.9: damage cases and photo uploads have their own routes, which gate the hat and
     // shape the body; the appliers hold every decision guard, but no one posts them raw.
     body.stream_type === 'damage' ||
-    body.stream_type === 'attachment'
+    body.stream_type === 'attachment' ||
+    // Story 4.8 (D11): assign, finance decision, revoke and expiry are online server routes.
+    body.stream_type === 'standing_grant'
   ) {
     sendRequestError(
       req,
@@ -572,7 +574,15 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
       body.payload['lines'] = lines.map((line) => {
         if (typeof line !== 'object' || line === null) return line;
         const rest = { ...(line as Record<string, unknown>) };
-        for (const key of ['approval_route', 'approver_actor_id', 'doa_entry_id']) delete rest[key];
+        for (const key of [
+          'approval_route',
+          'approver_actor_id',
+          'doa_entry_id',
+          'standing_grant_id',
+          'self_approved',
+          'self_approval_grant_id',
+        ])
+          delete rest[key];
         return rest;
       });
     }

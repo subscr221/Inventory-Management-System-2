@@ -26,6 +26,8 @@ export interface IssuableLineRow {
   line_status: string;
   issue_state: string;
   approval_route: string;
+  /** Story 4.8 (D9): the server's sentence naming the standing approval a line rides, else null. */
+  standing_approval_text?: string | null;
 }
 
 /** What the storekeeper typed for one line; empty quantity means "not on this slip". */

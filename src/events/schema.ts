@@ -968,6 +968,8 @@ export interface IndentLineInput {
   approval_route?: 'doa' | 'standing_approval' | 'self_approval';
   approver_actor_id?: string;
   doa_entry_id?: string;
+  /** Story 4.8 (D6): the standing approval a standing_approval line rides on; set by the server. */
+  standing_grant_id?: string;
 }
 
 export interface IndentRaisedPayload {
@@ -990,6 +992,48 @@ export interface IndentRaisedPayload {
 export interface IndentRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'indent.raised';
   payload: IndentRaisedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 4.8: Standing Approvals and Self-Approval Limits
+// ---------------------------------------------------------------------------
+
+export interface StandingGrantAssignedPayload {
+  grant_id: string;
+  grant_kind: 'standing_approval' | 'self_approval_limit';
+  grantee_user_id: string;
+  site_id: string;
+  /** Exactly one of these two for a standing approval; neither for a limit. */
+  scope_sku?: string;
+  scope_item_group_id?: string;
+  /** Standing approval only; NUMERIC text or number, counted against quantity issued per IST month. */
+  monthly_qty_cap?: string | number;
+  /** Self-approval limit only; rupees, NUMERIC text or number. */
+  limit_amount?: string | number;
+  end_date?: string;
+}
+
+export interface StandingGrantAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'standing_grant.assigned';
+  payload: StandingGrantAssignedPayload;
+}
+
+export interface StandingGrantFinanceApprovedPayload {
+  grant_id: string;
+}
+
+export interface StandingGrantFinanceRejectedPayload {
+  grant_id: string;
+  reason: string;
+}
+
+export interface StandingGrantRevokedPayload {
+  grant_id: string;
+  revoke_reason: 'assigner' | 'account_disabled';
+}
+
+export interface StandingGrantExpiredPayload {
+  grant_id: string;
 }
 
 export interface IndentDuplicateFlaggedPayload {
@@ -5983,6 +6027,31 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'indent.line_closed': {
     streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  // Story 4.8: standing approval and self-approval limit lifecycle on its own 'standing_grant'
+  // stream (stream_id = grant_id). Grants are site-scoped authorisations, not tagged business
+  // transactions, so none of these carries requiresBusinessStream. All five are server-written
+  // (the grant routes, the SCIM deprovision and the expiry sweep): the events door refuses the
+  // stream and the edge upload allow list never names it (D11).
+  'standing_grant.assigned': {
+    streamType: 'standing_grant',
+    requiresBusinessStream: false,
+  },
+  'standing_grant.finance_approved': {
+    streamType: 'standing_grant',
+    requiresBusinessStream: false,
+  },
+  'standing_grant.finance_rejected': {
+    streamType: 'standing_grant',
+    requiresBusinessStream: false,
+  },
+  'standing_grant.revoked': {
+    streamType: 'standing_grant',
+    requiresBusinessStream: false,
+  },
+  'standing_grant.expired': {
+    streamType: 'standing_grant',
     requiresBusinessStream: false,
   },
   // Story 4.4: purchase order lifecycle on the 'procurement' stream. Only

@@ -724,6 +724,14 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/item-groups/:code',
       'PATCH /api/v1/item-groups/:code',
       'DELETE /api/v1/item-groups/:code',
+      // Story 4.8: Standing Approvals and Self-Approval Limits
+      'PUT /api/v1/standing-grants/prune-setting',
+      'POST /api/v1/standing-grants',
+      'GET /api/v1/standing-grants',
+      'GET /api/v1/standing-grants/:id',
+      'POST /api/v1/standing-grants/:id/finance-approve',
+      'POST /api/v1/standing-grants/:id/finance-reject',
+      'POST /api/v1/standing-grants/:id/revoke',
     ].sort();
     assert.deepStrictEqual(
       routeSurface,

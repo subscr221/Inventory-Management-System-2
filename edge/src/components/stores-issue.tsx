@@ -225,6 +225,7 @@ export function StoresIssue() {
                   {t('storesIssue.line')} {line.line_no} · {line.sku} · {t('storesIssue.open')}{' '}
                   {line.open_qty} {line.uom}
                 </legend>
+                {line.standing_approval_text ? <p>{line.standing_approval_text}</p> : null}
                 <label htmlFor={`${id}-qty`}>{t('storesIssue.quantity')}</label>
                 <input
                   id={`${id}-qty`}

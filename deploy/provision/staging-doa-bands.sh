@@ -57,6 +57,12 @@ band ceo                damage.escalation               damage-escalation
 # department head signs up to Rs 1,00,000 inclusive, the finance controller above that.
 band department_head    indent_approval                 indent-approval-dept-head    null   100000
 band finance_controller indent_approval                 indent-approval-finance      100000 null
+# Story 4.8 (D3): who may assign a standing approval or self-approval limit at a site, and who
+# approves each one once. No value bands; with no finance band every assignment is refused 409
+# GRANT_FINANCE_NOT_RESOLVED rather than left pending for nobody.
+band site_head          standing_grant_assign           standing-grant-assign-site-head
+band department_head    standing_grant_assign           standing-grant-assign-dept-head
+band finance_controller standing_grant_finance          standing-grant-finance
 unset TOKEN
 echo "=== verify:roles"
 # tail -40: the report lists four required roles per active site after the pair lines (Story 1.16).

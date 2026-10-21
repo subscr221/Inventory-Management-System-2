@@ -57,6 +57,11 @@ describe('in-process background cycle registry', () => {
       intervalMs: () => config.jobwork.billingSweepIntervalMs,
       why: 'unacknowledged job-work billing feeds never enter the exception queue and never alert the coordinator (Story 9.6 AC 5)',
     },
+    {
+      name: 'standing grant pruning',
+      intervalMs: () => config.standingGrant.sweepIntervalMs,
+      why: 'standing grants past their end date never expire and assigners never receive their pruning list (Story 4.8 AC 6)',
+    },
   ];
 
   it('registers exactly the expected cycles, in order', () => {
@@ -116,6 +121,7 @@ describe('in-process background cycle registry', () => {
       QC_BIS_LICENCE_EXPIRY_INTERVAL_MS: '15000',
       JOBWORK_CLOCK_SWEEP_INTERVAL_MS: '16000',
       JOBWORK_BILLING_SWEEP_INTERVAL_MS: '17000',
+      STANDING_GRANT_SWEEP_INTERVAL_MS: '18000',
     };
     const result = spawnSync(
       process.execPath,
@@ -149,6 +155,7 @@ describe('in-process background cycle registry', () => {
       ['bis licence expiry', 15000],
       ['jobwork clock breach', 16000],
       ['jobwork billing feed retry', 17000],
+      ['standing grant pruning', 18000],
     ]);
   });
 });

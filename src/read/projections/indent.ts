@@ -55,6 +55,10 @@ export interface IndentLineRow {
   decided_at: string | null;
   decided_by: string | null;
   rejection_reason: string | null;
+  /** Story 4.8: the grant a standing_approval line rode on, and the limit behind a self-approval. */
+  standing_grant_id: string | null;
+  self_approved: boolean;
+  self_approval_grant_id: string | null;
   /** Story 4.11: fulfilment state, separate from the approval fact above. */
   issued_qty: string;
   issue_state: 'open' | 'issued' | 'closed';
@@ -165,14 +169,49 @@ export async function updateIndentLineDecision(
     decided_at: string;
     decided_by: string;
     rejection_reason?: string | null;
+    /** Story 4.8 (D10): the requester approved their own line under this self-approval limit. */
+    self_approval_grant_id?: string | null;
   },
 ): Promise<void> {
+  const selfApprovalGrantId = patch.self_approval_grant_id ?? null;
   await client.query(
     `UPDATE indent_line
-     SET line_status = $2, decided_at = $3, decided_by = $4, rejection_reason = $5
+     SET line_status = $2, decided_at = $3, decided_by = $4, rejection_reason = $5,
+         self_approved = ($6::uuid IS NOT NULL), self_approval_grant_id = $6::uuid,
+         approval_route = CASE WHEN $6::uuid IS NOT NULL THEN 'self_approval' ELSE approval_route END
      WHERE indent_line_id = $1`,
-    [lineId, patch.line_status, patch.decided_at, patch.decided_by, patch.rejection_reason ?? null],
+    [
+      lineId,
+      patch.line_status,
+      patch.decided_at,
+      patch.decided_by,
+      patch.rejection_reason ?? null,
+      selfApprovalGrantId,
+    ],
   );
+}
+
+/**
+ * Story 4.8 (D8): a standing_approval line whose grant lapsed goes back to the normal DOA path.
+ * The state predicate is in the UPDATE so a line already moved or decided elsewhere is untouched
+ * (zero rows). The grant id stays on the line as history; the issued quantity is untouched, so a
+ * line part-issued under the grant keeps what left the store and only its remainder is re-decided.
+ */
+export async function rerouteLineToDoa(
+  client: PoolClient,
+  lineId: string,
+  route: { approver_actor_id: string; doa_entry_id: string },
+): Promise<IndentLineRow | null> {
+  const result = await client.query(
+    `UPDATE indent_line
+     SET approval_route = 'doa', line_status = 'pending', approver_actor_id = $2,
+         doa_entry_id = $3::uuid, decided_at = NULL, decided_by = NULL
+     WHERE indent_line_id = $1 AND approval_route = 'standing_approval'
+       AND line_status = 'approved' AND issue_state = 'open'
+     RETURNING *`,
+    [lineId, route.approver_actor_id, route.doa_entry_id],
+  );
+  return (result.rows[0] as IndentLineRow) ?? null;
 }
 
 /**
@@ -375,6 +414,8 @@ export interface InsertIndentLineInput {
   line_status?: 'pending' | 'approved';
   decided_at?: string | null;
   decided_by?: string | null;
+  /** Story 4.8 (D6): the grant a standing_approval line rides on; validated by the seam. */
+  standing_grant_id?: string | null;
 }
 
 /**
@@ -390,10 +431,11 @@ export async function insertIndentLine(
     `INSERT INTO indent_line (
       indent_line_id, indent_id, line_no, sku, item_category, requested_qty, uom,
       unit_price_estimate, line_value,
-      approval_route, approver_actor_id, doa_entry_id, line_status, decided_at, decided_by
+      approval_route, approver_actor_id, doa_entry_id, line_status, decided_at, decided_by,
+      standing_grant_id
     ) VALUES ($1,$2,$3,$4,$5,$6::numeric,$7,$8::numeric,
       $6::numeric * COALESCE($8::numeric, 0),
-      $9, $10, $11::uuid, $12, $13::timestamptz, $14)`,
+      $9, $10, $11::uuid, $12, $13::timestamptz, $14, $15::uuid)`,
     [
       row.indent_line_id,
       row.indent_id,
@@ -409,6 +451,7 @@ export async function insertIndentLine(
       row.line_status ?? 'pending',
       row.decided_at ?? null,
       row.decided_by ?? null,
+      row.standing_grant_id ?? null,
     ],
   );
 }

@@ -18,6 +18,15 @@ import {
 } from '../read/projections/indent.js';
 import { findActiveDelegation } from '../read/projections/doa_registry.js';
 import { listIndentIssuesByIndent } from '../read/projections/indent_issue.js';
+import {
+  findActiveSelfApprovalLimit,
+  findCoveringStandingApprovals,
+  getGrantById,
+  getItemGroupIdOfSku,
+  type StandingGrantRow,
+} from '../read/projections/standing_grant.js';
+import { toIstCalendarDate } from '../lib/business-days.js';
+import { amountLte } from '../lib/milli.js';
 import { logAuditEntry } from '../read/projections/audit_log.js';
 import { emitNotification, emitNotificationInTransaction } from '../notify/emit.js';
 import { assertReplacementLink } from './damage.js';
@@ -224,7 +233,7 @@ function assertIndentRaisedShape(p: Record<string, unknown>): void {
         `Line ${lineNo}: approval_route must be doa, standing_approval or self_approval`,
       );
     }
-    for (const key of ['approver_actor_id', 'doa_entry_id'] as const) {
+    for (const key of ['approver_actor_id', 'doa_entry_id', 'standing_grant_id'] as const) {
       if (line[key] !== undefined && line[key] !== null && !isUuid(line[key])) {
         reject('INVALID_PARAMS', `Line ${lineNo}: ${key} must be a UUID`);
       }
@@ -355,6 +364,104 @@ export async function applyIndentProjection(
   }
 }
 
+/**
+ * Story 4.8 (D6): the grant a standing_approval line claims must be active, belong to this
+ * requester at this site, be inside its end date and cover the line's SKU or item group. The
+ * doors compute the route server-side, so this guards the seam against any caller that does not.
+ */
+async function assertRidingGrant(
+  line: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  lineNo: number,
+  occurredAt: string,
+  client: PoolClient,
+): Promise<StandingGrantRow> {
+  const grantId = line['standing_grant_id'];
+  const lapsed = (message: string): never =>
+    reject(
+      'STANDING_APPROVAL_LAPSED',
+      message,
+      { line_no: lineNo, standing_grant_id: isUuid(grantId) ? grantId : null },
+      409,
+    );
+  if (!isUuid(grantId))
+    return lapsed(`Line ${lineNo}: a standing_approval line must name its grant`);
+  const sku = (line['sku'] as string).trim();
+  const covering = await findCoveringStandingApprovals(
+    payload['requester_user_id'] as string,
+    payload['site_id'] as string,
+    sku,
+    await getItemGroupIdOfSku(sku, client),
+    toIstCalendarDate(new Date(occurredAt)),
+    client,
+  );
+  if (!covering.some((g) => g.grant_id === grantId)) {
+    return lapsed(
+      `Line ${lineNo}: the standing approval does not cover this line for this requester`,
+    );
+  }
+  return (await getGrantById(grantId, client))!;
+}
+
+/**
+ * Story 4.8 (deferred from 4.10): a line approved at raise by its grant writes the audit entry the
+ * DOA path writes on a decision, and tells stores once that the requisition is ready to issue. A
+ * duplicate-held raise audits but does not notify: it is not issuable until confirmed.
+ */
+async function recordStandingApprovedLines(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+  indentId: string,
+  indentNumber: string,
+  siteId: string,
+  grantLines: Array<{ line_id: string; line_no: number; sku: string; grant: StandingGrantRow }>,
+  notifyStores: boolean,
+): Promise<void> {
+  if (grantLines.length === 0) return;
+  for (const g of grantLines) {
+    await logAuditEntry(client, {
+      trace_id: envelope.metadata.correlation_id ?? '',
+      user_id: envelope.metadata.actor.user_id,
+      role: envelope.metadata.actor.role,
+      location_id: envelope.metadata.actor.location_id,
+      endpoint: `/indents/${indentId}/raise`,
+      method: 'POST',
+      event_id: eventId,
+      http_status: 201,
+      error_code: 'indent.line_standing_approved',
+      details: {
+        indent_id: indentId,
+        indent_line_id: g.line_id,
+        line_no: g.line_no,
+        sku: g.sku,
+        decided_by: 'system',
+        standing_grant_id: g.grant.grant_id,
+        standing_grant_ref: g.grant.grant_ref,
+      },
+    });
+  }
+  if (!notifyStores) return;
+  const text = grantLines
+    .map((g) => `line ${g.line_no} ${g.sku} (${g.grant.grant_ref})`)
+    .join('; ');
+  await emitNotificationInTransaction(
+    {
+      target: { role: config.storesIssueRole, location_id: siteId },
+      event_type: 'indent_issue_pending',
+      status_verb: 'approved',
+      object_type: 'indent',
+      object_id: indentId,
+      actor_label: `Indent ${indentNumber}`,
+      next_step: `Standing approval: ${text}. Storekeeper please issue.`,
+      actor: envelope.metadata.actor,
+      correlation_id: envelope.metadata.correlation_id,
+      occurred_at: envelope.metadata.occurred_at,
+    },
+    client,
+  );
+}
+
 async function applyIndentRaised(
   envelope: EventEnvelope,
   client: PoolClient,
@@ -471,15 +578,36 @@ async function applyIndentRaised(
   const headerEntry = isUuid(p['doa_entry_id']) ? (p['doa_entry_id'] as string) : null;
   let lineNo = 0;
   let anyPreApproved = false;
+  const grantLines: Array<{
+    line_id: string;
+    line_no: number;
+    sku: string;
+    grant: StandingGrantRow;
+  }> = [];
   for (const line of lines) {
     lineNo += 1;
     const route = (typeof line['approval_route'] === 'string' ? line['approval_route'] : 'doa') as
       'doa' | 'standing_approval' | 'self_approval';
     const preApproved = route !== 'doa';
     anyPreApproved ||= preApproved;
+    // Story 4.8 (D6): a standing_approval line must name a grant that is real, active and covers
+    // it for this requester at this site - the seam never trusts the route alone.
+    const grant =
+      route === 'standing_approval'
+        ? await assertRidingGrant(line, p, lineNo, occurredAt, client)
+        : null;
+    const lineId = randomUUID();
+    if (grant) {
+      grantLines.push({
+        line_id: lineId,
+        line_no: lineNo,
+        sku: (line['sku'] as string).trim(),
+        grant,
+      });
+    }
     await insertIndentLine(
       {
-        indent_line_id: randomUUID(),
+        indent_line_id: lineId,
         indent_id: indentId,
         line_no: lineNo,
         sku: (line['sku'] as string).trim(),
@@ -504,11 +632,22 @@ async function applyIndentRaised(
         line_status: preApproved ? 'approved' : 'pending',
         decided_at: preApproved ? occurredAt : null,
         decided_by: preApproved ? 'system' : null,
+        standing_grant_id: grant?.grant_id ?? null,
       },
       client,
     );
   }
   await recomputeIndentEstimatedValue(indentId, client);
+  await recordStandingApprovedLines(
+    envelope,
+    client,
+    eventId,
+    indentId,
+    indentNumber,
+    p['site_id'] as string,
+    grantLines,
+    duplicateOf === null,
+  );
   if (anyPreApproved && !duplicateOf) {
     const derived = deriveIndentStatus(await getIndentLines(indentId, client));
     if (derived.status !== 'raised') {
@@ -757,7 +896,8 @@ async function assertLineDecisionAllowed(
   actorId: string,
   occurredAt: string,
   client: PoolClient,
-): Promise<void> {
+  decision: 'approved' | 'rejected',
+): Promise<{ selfApprovalGrantId: string | null }> {
   if (line.line_status !== 'pending') {
     reject(
       'INDENT_LINE_ALREADY_DECIDED',
@@ -772,8 +912,22 @@ async function assertLineDecisionAllowed(
     );
   }
 
-  // SOD-01: the requester can never decide their own indent.
+  // SOD-01, as amended by Story 4.8 (D10): the requester never decides their own line, except
+  // that they may APPROVE (never reject) a line whose value is within their own active,
+  // finance-approved self-approval limit at the site. Rejecting, an over-limit line, a pending
+  // or revoked limit all keep the refusal below.
   if (actorId === indent.requester_user_id) {
+    if (decision === 'approved') {
+      const limit = await findActiveSelfApprovalLimit(
+        actorId,
+        indent.site_id,
+        toIstCalendarDate(new Date(occurredAt)),
+        client,
+      );
+      if (limit && limit.limit_amount !== null && amountLte(line.line_value, limit.limit_amount)) {
+        return { selfApprovalGrantId: limit.grant_id };
+      }
+    }
     reject(
       'INDENT_RAISER_CANNOT_APPROVE',
       'The requester cannot approve or reject their own indent (SOD-01)',
@@ -784,7 +938,17 @@ async function assertLineDecisionAllowed(
       403,
     );
   }
+  return decideAsApprover(indent, line, actorId, occurredAt, client);
+}
 
+/** The non-requester half of the line guard, unchanged from Story 4.10. */
+async function decideAsApprover(
+  indent: IndentRow,
+  line: IndentLineRow,
+  actorId: string,
+  occurredAt: string,
+  client: PoolClient,
+): Promise<{ selfApprovalGrantId: string | null }> {
   if (!line.approver_actor_id) {
     reject(
       'NOT_RESOLVED_APPROVER',
@@ -811,6 +975,7 @@ async function assertLineDecisionAllowed(
       );
     }
   }
+  return { selfApprovalGrantId: null };
 }
 
 /**
@@ -842,6 +1007,7 @@ async function applyLineDecision(
   const now = envelope.metadata.occurred_at;
 
   const targets: IndentLineRow[] = [];
+  const selfGrantOf = new Map<string, string>();
   for (const id of requested) {
     const line = byId.get(id);
     if (!line) {
@@ -852,16 +1018,19 @@ async function applyLineDecision(
         404,
       );
     }
-    await assertLineDecisionAllowed(indent, line, actorId, now, client);
+    const allowed = await assertLineDecisionAllowed(indent, line, actorId, now, client, decision);
+    if (allowed.selfApprovalGrantId) selfGrantOf.set(id, allowed.selfApprovalGrantId);
     targets.push(line);
   }
 
   for (const line of targets) {
+    const selfGrantId = selfGrantOf.get(line.indent_line_id) ?? null;
     await updateIndentLineDecision(client, line.indent_line_id, {
       line_status: decision,
       decided_at: now,
       decided_by: actorId,
       rejection_reason: rejectionReason,
+      self_approval_grant_id: selfGrantId,
     });
     line.line_status = decision;
     line.decided_at = now;
@@ -884,6 +1053,9 @@ async function applyLineDecision(
         sku: line.sku,
         line_value: line.line_value,
         doa_entry_id: line.doa_entry_id,
+        ...(selfGrantId !== null
+          ? { self_approved: true, self_approval_grant_id: selfGrantId }
+          : {}),
         ...(rejectionReason !== null ? { rejection_reason: rejectionReason } : {}),
       },
     });

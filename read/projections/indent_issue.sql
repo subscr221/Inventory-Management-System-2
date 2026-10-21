@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS indent_issue_line (
   serials                JSONB,
   stock_issued_event_id  UUID NOT NULL,
   approval_basis         TEXT NOT NULL,
-  -- Story 4.8 seam: the standing approval a line rode on; null until that story lands.
+  -- Story 4.8: the standing approval a line rode on; null for a line that did not ride a grant.
   standing_grant_id      UUID,
   CONSTRAINT chk_indent_issue_line_qty_positive CHECK (quantity > 0)
 );
@@ -74,6 +74,9 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_indent_issue_line_issue ON indent_issue_line (issue_id);
 CREATE INDEX IF NOT EXISTS idx_indent_issue_line_indent_line ON indent_issue_line (indent_line_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_indent_issue_line_issue_line ON indent_issue_line (issue_id, indent_line_id);
+
+-- Story 4.8 (D7): month-to-date issued quantity per grant is summed from here.
+CREATE INDEX IF NOT EXISTS idx_indent_issue_line_grant ON indent_issue_line (standing_grant_id) WHERE standing_grant_id IS NOT NULL;
 
 -- Server-side human-ID allocation for the ISS-YYYY-NNNN format (the indent_number_seq idiom).
 CREATE SEQUENCE IF NOT EXISTS indent_issue_number_seq;

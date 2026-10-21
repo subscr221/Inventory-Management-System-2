@@ -556,7 +556,17 @@ import { runExpiryCycle } from './notify/expire.js';
 import { runRetentionExpiryCycle } from './notify/retention-expiry.js';
 import { runBisLicenceExpiryCycle } from './compliance/bis-licence-expiry.js';
 import { runJobworkClockSweepCycle } from './notify/jobwork-clock-sweep.js';
+import {
+  assignGrantHandler,
+  financeApproveGrantHandler,
+  financeRejectGrantHandler,
+  revokeGrantHandler,
+  listGrantsHandler,
+  getGrantHandler,
+  putPruneSettingHandler,
+} from './api/v1/standing-grants.js';
 import { runJobWorkBillingFeedSweepCycle } from './notify/jobwork-billing-sweep.js';
+import { runStandingGrantSweepCycle } from './notify/standing-grant-sweep.js';
 import {
   listRefusedCapturesHandler,
   getRefusedCaptureHandler,
@@ -591,6 +601,15 @@ export function createAppRouter(): Router {
   router.get('/api/v1/items/:sku', getItemHandler);
   // Story 2.10: item group master. Literal paths first; the router takes the first match.
   router.get('/api/v1/item-groups/ungrouped-items', listUngroupedItemsHandler);
+  // Story 4.8: standing approvals and self-approval limits (online only, D11). The static
+  // prune-setting path is registered before the :id routes.
+  router.put('/api/v1/standing-grants/prune-setting', putPruneSettingHandler);
+  router.post('/api/v1/standing-grants', assignGrantHandler);
+  router.get('/api/v1/standing-grants', listGrantsHandler);
+  router.get('/api/v1/standing-grants/:id', getGrantHandler);
+  router.post('/api/v1/standing-grants/:id/finance-approve', financeApproveGrantHandler);
+  router.post('/api/v1/standing-grants/:id/finance-reject', financeRejectGrantHandler);
+  router.post('/api/v1/standing-grants/:id/revoke', revokeGrantHandler);
   router.get('/api/v1/item-groups/rights', listItemGroupRightsHandler);
   router.put('/api/v1/item-groups/rights/:userId', putItemGroupRightsHandler);
   router.get('/api/v1/item-groups/recipients', listItemGroupRecipientsHandler);
@@ -1559,6 +1578,13 @@ export function backgroundCycles(): BackgroundCycle[] {
       name: 'jobwork billing feed retry',
       intervalMs: config.jobwork.billingSweepIntervalMs,
       cycle: () => runJobWorkBillingFeedSweepCycle(),
+    },
+    // Story 4.8 (D13): expire grants past their end date and send each assigner the pruning list of
+    // their live grants (in_app and web_push), flagging any unused for 90 days.
+    {
+      name: 'standing grant pruning',
+      intervalMs: config.standingGrant.sweepIntervalMs,
+      cycle: () => runStandingGrantSweepCycle(),
     },
   ];
 }

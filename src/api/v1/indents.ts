@@ -25,6 +25,15 @@ import {
   findOpenDuplicate,
 } from '../../read/projections/indent.js';
 import { routeIndentLines, headerApproverOf } from '../../compliance/indent-routing.js';
+import { rerouteLapsedLinesToDoa } from '../../compliance/standing-reroute.js';
+import { toIstCalendarDate } from '../../lib/business-days.js';
+import {
+  findActiveSelfApprovalLimit,
+  getGrantById,
+  getGrantLabel,
+  monthToDateIssued,
+  standingApprovalText,
+} from '../../read/projections/standing_grant.js';
 import { pendingLineIdsFor } from '../../compliance/indent.js';
 import {
   normaliseIssueLines,
@@ -39,7 +48,8 @@ import {
   listIndentIssuesByIndent,
 } from '../../read/projections/indent_issue.js';
 import { getLocationByCode } from '../../read/projections/location_register.js';
-import type { IndentRow } from '../../read/projections/indent.js';
+import type { IndentRow, IndentLineRow } from '../../read/projections/indent.js';
+import type { IndentIssueLineRow } from '../../read/projections/indent_issue.js';
 import {
   findMatchingDoaEntry,
   findRoleHolder,
@@ -123,6 +133,72 @@ export async function resolveApprover(
     );
   }
   return { requiresApproval: true, approverActorId: approver, doaEntryId: doaEntry.entry_id };
+}
+
+/**
+ * Story 4.8 (Task 4.2, 5.2): what a screen needs to show a standing-approval line - the grant ref,
+ * its monthly cap, the quantity issued against it this IST month (the "4 of 6 used" chip) and the
+ * D9 sentence. All null for a line that does not ride a grant.
+ */
+export interface GrantLineView {
+  standing_grant_ref: string | null;
+  cap: string | null;
+  month_to_date_issued: string | null;
+  standing_approval_text: string | null;
+}
+
+const NO_GRANT_VIEW: GrantLineView = {
+  standing_grant_ref: null,
+  cap: null,
+  month_to_date_issued: null,
+  standing_approval_text: null,
+};
+
+export async function presentLines<T extends IndentLineRow>(
+  lines: T[],
+): Promise<Array<T & GrantLineView>> {
+  const month = toIstCalendarDate(new Date()).slice(0, 7);
+  const cache = new Map<string, GrantLineView>();
+  const out: Array<T & GrantLineView> = [];
+  for (const line of lines) {
+    let view = NO_GRANT_VIEW;
+    const gid = line.standing_grant_id;
+    if (line.approval_route === 'standing_approval' && gid) {
+      let cached = cache.get(gid);
+      if (!cached) {
+        const grant = await getGrantById(gid);
+        if (grant) {
+          const label = await getGrantLabel(grant);
+          cached = {
+            standing_grant_ref: grant.grant_ref,
+            cap: grant.monthly_qty_cap,
+            month_to_date_issued: await monthToDateIssued(gid, month),
+            standing_approval_text: standingApprovalText(
+              grant.grant_ref,
+              label.grantee_name,
+              label.scope_label,
+            ),
+          };
+        } else {
+          cached = NO_GRANT_VIEW;
+        }
+        cache.set(gid, cached);
+      }
+      view = cached;
+    }
+    out.push({ ...line, ...view });
+  }
+  return out;
+}
+
+/** D9: a slip line that rode a grant carries the sentence it printed, for the issue screen. */
+function presentIssueLines(
+  lines: IndentIssueLineRow[],
+): Array<IndentIssueLineRow & { standing_approval_text: string | null }> {
+  return lines.map((l) => ({
+    ...l,
+    standing_approval_text: l.standing_grant_id ? l.approval_basis : null,
+  }));
 }
 
 function assertSiteReadAccess(req: IncomingMessage, siteId: string): void {
@@ -217,13 +293,19 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
   // Story 4.10 (AC 2, AC 6): every line resolves its own DOA band on its own value; a line with no
   // band refuses the whole raise before anything is persisted. The header keeps the approver of
   // the highest-value line for compatibility (D5).
-  const routes = await routeIndentLines(lines);
+  // Story 4.8 (D6): a line covered by the requester's active standing approval, within its cap,
+  // rides the grant; the grant id is decided here on the server, never read from the body.
+  const routes = await routeIndentLines(lines, undefined, undefined, {
+    requesterUserId: actor.userId,
+    siteId: typeof body.site_id === 'string' ? body.site_id : '',
+  });
   const approval = headerApproverOf(routes);
   const routedLines = lines.map((line, i) => ({
     ...line,
     approval_route: routes[i]!.approval_route,
     approver_actor_id: routes[i]!.approver_actor_id ?? undefined,
     doa_entry_id: routes[i]!.doa_entry_id ?? undefined,
+    standing_grant_id: routes[i]!.standing_grant_id ?? undefined,
   }));
 
   // Story 8.9 (AC 5, D15): a damage replacement names its case, and its indent id was minted with
@@ -275,7 +357,7 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
   );
 
   const indent = await getIndentWithCounts(indentId);
-  const indentLines = await getIndentLines(indentId);
+  const indentLines = await presentLines(await getIndentLines(indentId));
 
   if (routes.some((r) => r.requires_approval)) {
     // AC 6: the requisition carries APPROVAL_REQUIRED until the resolved authority acts.
@@ -317,7 +399,7 @@ export const getIndentBase: RouteHandler = async (req, res, params) => {
   }
   assertIndentReadAccess(req, indent);
 
-  const lines = (await getIndentLines(indentId)).map(withOpenQty);
+  const lines = await presentLines((await getIndentLines(indentId)).map(withOpenQty));
   sendJson(res, 200, { indent: await getIndentWithCounts(indentId), lines });
 };
 
@@ -427,6 +509,20 @@ export const listIndentsBase: RouteHandler = async (req, res, _params) => {
     offset,
   });
 
+  // Story 4.8 (Task 6.3, EXPERIENCE.md): the estimated value of one's own requisitions is shown
+  // only to a person holding a live self-approval limit; Story 1.15's no-number rule holds for
+  // everyone else, so the figure is withheld rather than the list narrowed.
+  if (ownOnly) {
+    const limit = await findActiveSelfApprovalLimit(
+      actor.userId,
+      null,
+      toIstCalendarDate(new Date()),
+    );
+    if (!limit) {
+      sendJson(res, 200, { indents: results.map((r) => ({ ...r, estimated_value: null })) });
+      return;
+    }
+  }
   sendJson(res, 200, { indents: results });
 };
 
@@ -469,10 +565,10 @@ export const issueIndentBase: RouteHandler = async (req, res, params) => {
       }
       sendJson(res, 200, {
         event_id: prior.source_event_id,
-        issue: { ...prior, lines: await getIndentIssueLines(prior.issue_id) },
+        issue: { ...prior, lines: presentIssueLines(await getIndentIssueLines(prior.issue_id)) },
         slip_text: prior.slip_content ?? '',
         indent: await getIndentWithCounts(indent.indent_id),
-        lines: (await getIndentLines(indent.indent_id)).map(withOpenQty),
+        lines: await presentLines((await getIndentLines(indent.indent_id)).map(withOpenQty)),
         replayed: true,
       });
       return;
@@ -531,28 +627,65 @@ export const issueIndentBase: RouteHandler = async (req, res, params) => {
   const actor = actorContext(req);
   const now = new Date().toISOString();
   const issueId = typeof suppliedIssueId === 'string' ? suppliedIssueId : randomUUID();
-  const persisted = await persistEvent(
-    {
-      stream_type: 'procurement',
-      stream_id: indent.indent_id,
-      event_type: 'indent.issued',
-      event_id: randomUUID(),
-      payload: { indent_id: indent.indent_id, issue_id: issueId, lines: inputs },
-      metadata: {
-        correlation_id: indent.correlation_id ?? randomUUID(),
-        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
-        occurred_at: now,
+  let persisted;
+  try {
+    persisted = await persistEvent(
+      {
+        stream_type: 'procurement',
+        stream_id: indent.indent_id,
+        event_type: 'indent.issued',
+        event_id: randomUUID(),
+        payload: { indent_id: indent.indent_id, issue_id: issueId, lines: inputs },
+        metadata: {
+          correlation_id: indent.correlation_id ?? randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
       },
-    },
-    auditCtxFor(req, actor, 201),
-  );
+      auditCtxFor(req, actor, 201),
+    );
+  } catch (err) {
+    // Story 4.8 (D8): the seam refused the issue because a standing approval no longer holds. That
+    // transaction is rolled back; the lapsed lines go back to normal approval in a committed one
+    // of their own, and the caller is told both facts. Never a rejection of the line.
+    const lapsed = err instanceof AppError ? err.details['lapsed_lines'] : undefined;
+    if (
+      err instanceof AppError &&
+      err.errorCode === 'STANDING_APPROVAL_LAPSED' &&
+      Array.isArray(lapsed)
+    ) {
+      const outcome = await rerouteLapsedLinesToDoa(
+        indent.indent_id,
+        lapsed as Array<{
+          indent_line_id: string;
+          reason?: string;
+          standing_grant_id?: string | null;
+        }>,
+        { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        indent.correlation_id,
+      );
+      throw new AppError(409, 'STANDING_APPROVAL_LAPSED', err.message, {
+        ...err.details,
+        rerouted_lines: outcome.rerouted,
+        reroute_failed: outcome.failed,
+      });
+    }
+    throw err;
+  }
   const issue = await getIndentIssueById(issueId);
   sendJson(res, 201, {
     event_id: persisted.event_id,
-    issue: issue ? { ...issue, lines: await getIndentIssueLines(issueId) } : null,
+    issue: issue
+      ? { ...issue, lines: presentIssueLines(await getIndentIssueLines(issueId)) }
+      : null,
     slip_text: issue?.slip_content ?? '',
+    standing_approval_texts: issue
+      ? presentIssueLines(await getIndentIssueLines(issueId))
+          .map((l) => l.standing_approval_text)
+          .filter((t): t is string => t !== null)
+      : [],
     indent: await getIndentWithCounts(indent.indent_id),
-    lines: (await getIndentLines(indent.indent_id)).map(withOpenQty),
+    lines: await presentLines((await getIndentLines(indent.indent_id)).map(withOpenQty)),
   });
 };
 
@@ -625,7 +758,7 @@ export const closeIndentLineBase: RouteHandler = async (req, res, params) => {
   sendJson(res, 200, {
     event_id: persisted.event_id,
     indent: await getIndentWithCounts(indent.indent_id),
-    lines: (await getIndentLines(indent.indent_id)).map(withOpenQty),
+    lines: await presentLines((await getIndentLines(indent.indent_id)).map(withOpenQty)),
   });
 };
 
@@ -659,7 +792,9 @@ export const getIndentIssueBase: RouteHandler = async (req, res, params) => {
     return;
   }
   assertIssueReadAccess(req, indent);
-  sendJson(res, 200, { issue: { ...issue, lines: await getIndentIssueLines(issueId) } });
+  sendJson(res, 200, {
+    issue: { ...issue, lines: presentIssueLines(await getIndentIssueLines(issueId)) },
+  });
 };
 
 /** Story 4.11 (D10): warehouse write at the requisition's site, read from the indent row. */
@@ -864,7 +999,7 @@ export const approveIndentBase: RouteHandler = async (req, res, params) => {
   sendJson(res, 200, {
     event_id: persisted.event_id,
     indent: await getIndentWithCounts(indent.indent_id),
-    lines: await getIndentLines(indent.indent_id),
+    lines: await presentLines(await getIndentLines(indent.indent_id)),
   });
 };
 
@@ -916,7 +1051,7 @@ export const rejectIndentBase: RouteHandler = async (req, res, params) => {
   sendJson(res, 200, {
     event_id: persisted.event_id,
     indent: await getIndentWithCounts(indent.indent_id),
-    lines: await getIndentLines(indent.indent_id),
+    lines: await presentLines(await getIndentLines(indent.indent_id)),
   });
 };
 

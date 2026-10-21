@@ -299,9 +299,9 @@ The site head capability table below lists what the `site_head` hat grants and w
 |---|---|---|
 | Correct a challan classification (statutory clock) | U | Live (Story 9.5) |
 | Receive job-work clock and billing escalations | R | Live (Stories 9.5, 9.6) |
-| Assign a standing approval | C | Story 4.8 |
-| Assign a per-person self-approval limit | C | Story 4.8 |
-| Revoke a grant they assigned | U | Story 4.8 |
+| Assign a standing approval | C | Live (Story 4.8) |
+| Assign a per-person self-approval limit | C | Live (Story 4.8) |
+| Revoke a grant they assigned | U | Live (Story 4.8) |
 | Approve their own grant | Not permitted | Finance department head approves (SOD-01 as amended) |
 
 ### 3.11 Item group administration
@@ -312,6 +312,19 @@ The item group administration table below lists who may grant item group rights 
 |---|---|---|---|
 | Grant or revoke item group rights (create, edit, delete) | C | C | - |
 | Maintain item group recipient list | C | C | - |
+
+### 3.12 Standing approvals and self-approval limits
+
+The standing grant capability table below lists who may do what with a standing approval or a per-person self-approval limit (Story 4.8). The right comes from the DOA registry, not from a hat: `standing_grant_assign` names the roles that may assign at a site and `standing_grant_finance` names the role that approves each grant once (section 8). A grant has no effect until finance approves it, the assigner revokes alone and at once, and disabling a sign-in account revokes every grant its owner holds the same day. Assigning, deciding and revoking need a live connection.
+
+| Capability | Who | Authority |
+|---|---|---|
+| Assign a standing approval or limit at a site | `site_head`, `department_head` | DOA `standing_grant_assign`, held at the grant site; never to oneself |
+| Approve or reject a grant once | `finance_controller` or the active delegate of its holder | DOA `standing_grant_finance`; never the assigner or the grantee |
+| Revoke a grant | The assigner alone; the system when the grantee's account is disabled | No second approver |
+| Read the grants one holds | Any signed-in person | `employee` base hat |
+| Receive the pruning list of live grants | Each assigner (default every 30 days); the finance approver for a disabled assigner's grants | In-app and web push; email is a recorded pilot gap |
+| Approve one's own requisition line | The holder of an active, finance-approved limit, within the limit only | SOD-01 as amended; the audit entry flags the line as self-approved |
 
 ## 4. Dashboards and Reporting (pilot interim)
 
@@ -382,6 +395,8 @@ Collected during the §7 interview pass and written to the DOA registry (FR-DOA-
 | Damage-case QC key (Story 8.9) | `qc_head` | One unbounded band, `damage.qc_concurrence`: every damage case needs the QC head's key and whole-lot decision. | DOA registry (FR-DOA-01) | pilot band, pending Super Admin review |
 | Damage-case finance key (Story 8.9) | `finance_controller` | One unbounded band, `damage.finance_concurrence`: every damage case needs the finance controller's key and ERP reference. | DOA registry (FR-DOA-01) | pilot band, pending Super Admin review |
 | Damage-case escalation (Story 8.9) | `ceo` | One unbounded band, `damage.escalation`: the CEO decides every case QC and finance disagree on. | DOA registry (FR-DOA-01) | pilot band, pending Super Admin review |
+| Standing grant assignment (Story 4.8) | `site_head`, `department_head` | Two unbounded entries, `standing_grant_assign`, no value bands: either role may assign a standing approval or self-approval limit at a site where it holds the role. | DOA registry (FR-DOA-01) | pilot band, pending Super Admin review |
+| Standing grant finance approval (Story 4.8) | `finance_controller` | One unbounded entry, `standing_grant_finance`: the finance controller (or the active delegate of its holder) approves each grant once; never the assigner or the grantee. | DOA registry (FR-DOA-01) | pilot band, pending Super Admin review |
 
 ## 9. Changelog
 
@@ -393,3 +408,4 @@ Collected during the §7 interview pass and written to the DOA registry (FR-DOA-
 | v1.2 | 2026-09-27 | Story 8.9 (Report Damage): section 2 gains the `ceo` role (decides escalated damage cases through DOA `damage.escalation`, site scope); section 3.8 gains "Report damage" for the employee base hat; new section 3.9 lists the damage-case capabilities (inspection, custody marks, the two DOA keys, the whole-lot decision, escalation, the ERP reference); section 8 gains the three damage DOA bands. | Story 8.9 dev record; pending Super Admin (security lead) review |
 | v1.3 | 2026-09-30 | Story 1.16 (Site Head Role): section 2 gains the "Site leadership" subsection with the `site_head` role (site scope); new section 3.10 lists the site head capabilities: two live, three delivered by Story 4.8 and one not permitted; section 5 records the two assignment-time pairs that keep `site_head` apart from `finance_controller` and `cfo`. No existing row or ruling is changed. | Story 1.16 dev record; pending Super Admin (security lead) review |
 | v1.4 | 2026-10-05 | Story 2.10 (Item Groups Master): section 2 gains the `store_controller` role (site scope, notifications only) and notes item group maintenance on `inventory_controller`; section 3.3 gains the item group rows (create, edit and assign, delete, ungrouped report), restricted to `inventory_controller` with a per-person right and excluding `warehouse_manager` (owner rulings 2026-10-02); new section 3.11 lists the CEO and Finance Head as the only granters of item group rights and keepers of the recipient list. No existing row or ruling is changed. | Story 2.10 dev record; pending Super Admin (security lead) review |
+| v1.5 | 2026-10-21 | Story 4.8 (Standing Approvals and Self-Approval Limits): new section 3.12 lists the standing grant capabilities (assign, finance approval once, revoke, read, pruning list, self-approval within a limit); the three live rows of section 3.10 are marked live; section 8 gains the two DOA entries `standing_grant_assign` and `standing_grant_finance`. The SOD-01 amendment in section 5 is applied as recorded and not re-edited. | Story 4.8 dev record; pending Super Admin (security lead) review |

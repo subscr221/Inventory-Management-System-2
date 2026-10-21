@@ -645,10 +645,27 @@ describe('Story 4.10 line-level approval and mixed routing', () => {
 
   it('AC2 (Task 2.5): a pre-routed line is approved at raise while the DOA line still waits - no split', async () => {
     const lines = [line(`SKU-410-PRE-A-${run}`, 1, 10), line(`SKU-410-PRE-B-${run}`, 1, 10)];
+    // Story 4.8 (D6): the seam only accepts a standing_approval line that names an active grant of
+    // this requester at this site covering its SKU, so the fixture inserts one.
+    const grantId = randomUUID();
+    await getPool().query(
+      `INSERT INTO standing_grant (grant_id, grant_ref, grant_kind, grantee_user_id, assigner_user_id,
+         site_id, scope_sku, status, source_event_id)
+       VALUES ($1, $2, 'standing_approval', $3, $4, $5, $6, 'active', $7)`,
+      [
+        grantId,
+        `SA-T410-${run}`,
+        requesterId,
+        deptHeadId,
+        siteA,
+        `SKU-410-PRE-A-${run}`,
+        randomUUID(),
+      ],
+    );
     const routes = await routeIndentLines(
       lines,
       undefined,
-      new Map([[0, { approval_route: 'standing_approval' }]]),
+      new Map([[0, { approval_route: 'standing_approval', standing_grant_id: grantId }]]),
     );
     assert.strictEqual(routes[0]!.approver_actor_id, null);
     assert.strictEqual(routes[0]!.requires_approval, false);
@@ -672,6 +689,7 @@ describe('Story 4.10 line-level approval and mixed routing', () => {
           approval_route: routes[i]!.approval_route,
           approver_actor_id: routes[i]!.approver_actor_id ?? undefined,
           doa_entry_id: routes[i]!.doa_entry_id ?? undefined,
+          standing_grant_id: routes[i]!.standing_grant_id ?? undefined,
         })),
         approver_actor_id: deptHeadId,
         doa_entry_id: deptEntryId,

@@ -1602,6 +1602,188 @@ export async function indent(ctx: Ctx): Promise<void> {
   ]);
 }
 
+const STANDING_STEPS = [
+  'standing approval: a requisition before the grant takes the normal path',
+  'standing approval: the site head assigns and the finance controller approves once',
+  'standing approval: a covered line goes straight to stores and the slip names the grant',
+  'standing approval: the assigner revokes and the next requisition falls back',
+];
+const STANDING_SKU = 'CON-GLOVES';
+
+/**
+ * Story 4.8: a standing approval end to end. The site head grants the employee base-hat person a
+ * standing approval for CON-GLOVES, the finance controller approves it once, a requisition rides
+ * it, the storekeeper issues one glove and the slip carries the grant sentence, then the site head
+ * revokes it so the daily sim leaves nothing live. Its own flow so a failure does not SKIP the rest
+ * of the day; a pack missing an actor is a named SKIP.
+ */
+export async function standingApproval(ctx: Ctx): Promise<void> {
+  type Actor = Awaited<ReturnType<Ctx['as']>>;
+  let employee: Actor;
+  let siteHeadHeaders: Actor;
+  let financeHeaders: Actor;
+  let storeHeaders: Actor;
+  try {
+    employee = await ctx.as('employee');
+    siteHeadHeaders = await ctx.as('sitehead');
+    financeHeaders = await ctx.as('compliance');
+    storeHeaders = await ctx.as('store');
+  } catch (error) {
+    for (const name of STANDING_STEPS)
+      skip(name, `an actor of the standing approval flow is unavailable: ${(error as Error).message}`);
+    return;
+  }
+  const raise = async (): Promise<{ indent: Json; line: Json }> => {
+    const res = must(
+      await ctx.request(
+        'POST',
+        '/api/v1/indents',
+        {
+          site_id: ctx.siteId,
+          department_code: 'STORES',
+          business_stream: 'production',
+          need_by_date: nextYear(),
+          urgent: false,
+          reason: 'Operations smoke test: standing approval',
+          confirm_duplicate: true,
+          lines: [
+            {
+              sku: STANDING_SKU,
+              item_category: 'consumable',
+              requested_qty: 1,
+              uom: 'EA',
+              unit_price_estimate: 29.25,
+            },
+          ],
+        },
+        employee,
+      ),
+      201,
+      'raise requisition',
+    );
+    return {
+      indent: (res['indent'] ?? {}) as Json,
+      line: ((res['lines'] ?? []) as Json[])[0] ?? {},
+    };
+  };
+  let granteeId = '';
+  let grantId = '';
+  let grantRef = '';
+  let coveredIndentId = '';
+  let coveredLineId = '';
+  await flow([
+    [
+      STANDING_STEPS[0]!,
+      async () => {
+        const first = await raise();
+        granteeId = String(first.indent['requester_user_id'] ?? '');
+        if (!granteeId) throw new Error('the raise did not name the requester');
+        if (first.line['approval_route'] !== 'doa')
+          throw new Error(`expected the doa route, got ${String(first.line['approval_route'])}`);
+        return `line ${String(first.line['line_status'])} on the doa route`;
+      },
+    ],
+    [
+      STANDING_STEPS[1]!,
+      async () => {
+        const created = must(
+          await ctx.request(
+            'POST',
+            '/api/v1/standing-grants',
+            {
+              grant_kind: 'standing_approval',
+              grantee_user_id: granteeId,
+              site_id: ctx.siteId,
+              scope_sku: STANDING_SKU,
+              monthly_qty_cap: 1000,
+            },
+            siteHeadHeaders,
+          ),
+          201,
+          'assign standing approval',
+        );
+        const grant = (created['grant'] ?? {}) as Json;
+        grantId = String(grant['grant_id'] ?? '');
+        grantRef = String(grant['grant_ref'] ?? '');
+        if (grant['status'] !== 'pending-finance') throw new Error('a new grant must be pending');
+        const own = await ctx.request(
+          'POST',
+          `/api/v1/standing-grants/${grantId}/finance-approve`,
+          {},
+          siteHeadHeaders,
+        );
+        if (own.status !== 403)
+          throw new Error(`the assigner approved the own grant: ${own.status}, expected 403`);
+        must(
+          await ctx.request(
+            'POST',
+            `/api/v1/standing-grants/${grantId}/finance-approve`,
+            {},
+            financeHeaders,
+          ),
+          200,
+          'finance approval',
+        );
+        return `${grantRef} pending, assigner refused, finance approved once`;
+      },
+    ],
+    [
+      STANDING_STEPS[2]!,
+      async () => {
+        const covered = await raise();
+        coveredIndentId = String(covered.indent['indent_id'] ?? '');
+        coveredLineId = String(covered.line['indent_line_id'] ?? '');
+        if (covered.line['approval_route'] !== 'standing_approval' || covered.line['line_status'] !== 'approved')
+          throw new Error(
+            `expected an approved standing_approval line, got ${String(covered.line['approval_route'])}/${String(covered.line['line_status'])}`,
+          );
+        const issued = must(
+          await ctx.request(
+            'POST',
+            `/api/v1/indents/${coveredIndentId}/issue`,
+            { lines: [{ indent_line_id: coveredLineId, quantity: '1', location_code: 'BIN-A01' }] },
+            storeHeaders,
+          ),
+          201,
+          'issue against the grant',
+        );
+        const slip = String(issued['slip_text'] ?? '');
+        if (!slip.includes(`Standing approval ${grantRef} for `) || !slip.includes('Storekeeper please issue.'))
+          throw new Error(`the slip does not name the grant: ${slip.slice(0, 200)}`);
+        if (slip.includes('No approval required')) throw new Error('forbidden phrase on the slip');
+        return `${grantRef} on the line and on the slip`;
+      },
+    ],
+    [
+      STANDING_STEPS[3]!,
+      async () => {
+        must(
+          await ctx.request(
+            'POST',
+            `/api/v1/standing-grants/${grantId}/revoke`,
+            {},
+            siteHeadHeaders,
+          ),
+          200,
+          'revoke',
+        );
+        const again = await ctx.request(
+          'POST',
+          `/api/v1/standing-grants/${grantId}/revoke`,
+          {},
+          siteHeadHeaders,
+        );
+        if (again.status !== 409 || again.body['error_code'] !== 'GRANT_NOT_LIVE')
+          throw new Error(`second revoke: expected 409 GRANT_NOT_LIVE, got ${again.status}`);
+        const after = await raise();
+        if (after.line['approval_route'] !== 'doa')
+          throw new Error(`after revoke the line took ${String(after.line['approval_route'])}`);
+        return 'revoked at once, a second revoke is GRANT_NOT_LIVE, the next line is on the doa route';
+      },
+    ],
+  ]);
+}
+
 export async function maintenance(ctx: Ctx): Promise<void> {
   const asset = (ctx.ops['assets'] as Json[])[0]!;
   let faultId = '';
@@ -1761,6 +1943,7 @@ async function main(): Promise<void> {
     await indent(ctx);
     await employeeRequisition(ctx);
     await siteHead(ctx);
+    await standingApproval(ctx);
     await damageReport(ctx);
     await maintenance(ctx);
   } catch (error) {

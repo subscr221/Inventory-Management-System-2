@@ -481,6 +481,11 @@ const operations = {
     // Story 4.10 (owner ruling O1): two value bands, department head to 1,00,000 inclusive.
     ['indent_approval', 'department_head', null, 100000],
     ['indent_approval', 'finance_controller', 100000, null],
+    // Story 4.8 (D3): the site head and the head of department assign standing approvals and
+    // self-approval limits; the finance controller approves each once. No value bands.
+    ['standing_grant_assign', 'site_head'],
+    ['standing_grant_assign', 'department_head'],
+    ['standing_grant_finance', 'finance_controller'],
     ['purchase_order_approval', 'department_head'],
     ['supplier_onboarding', 'department_head'],
     ['transfer_request', 'warehouse_manager'],

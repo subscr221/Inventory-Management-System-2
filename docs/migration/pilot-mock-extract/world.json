@@ -862,6 +862,24 @@
         "value_max": null
       },
       {
+        "transaction_type": "standing_grant_assign",
+        "role": "site_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "standing_grant_assign",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "standing_grant_finance",
+        "role": "finance_controller",
+        "value_min": null,
+        "value_max": null
+      },
+      {
         "transaction_type": "purchase_order_approval",
         "role": "department_head",
         "value_min": null,
