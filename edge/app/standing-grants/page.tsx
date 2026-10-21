@@ -1,6 +1,6 @@
-import { StandingGrants } from '../../src/components/standing-grants';
+import { EdgeClient } from '../../src/components/edge-client';
 
-/** Story 4.8: standing approvals and self-approval limits; all state lives in the component. */
+/** Story 4.8: the standing grants screen, a base view inside the app shell. */
 export default function StandingGrantsPage() {
-  return <StandingGrants />;
+  return <EdgeClient view="standing-grants" />;
 }

@@ -16,10 +16,11 @@ import {
 } from './standing-grants-model';
 
 /**
- * Story 4.8: the online standing grants page. One screen: the grants I hold, the grants I assigned
- * (revoke), the grants waiting for my finance approval (approve, or reject with a reason), a form
- * to assign a new grant, and my pruning-reminder interval. The server decides every right; a
- * refusal is shown in plain words. Online only, nothing is queued.
+ * Story 4.8: the standing grants screen, a base view of the app shell (same frame, cards and
+ * buttons as My requests and Damage cases). Lists the grants I hold, the grants I assigned (revoke),
+ * the grants waiting for my finance approval (approve, or reject with a reason), a form to assign a
+ * grant, and my reminder interval. The server decides every right; a refusal is shown in plain
+ * words. Online only, nothing is queued.
  */
 
 type Section = 'held' | 'assigned' | 'pending';
@@ -50,7 +51,7 @@ async function readError(response: Response): Promise<string> {
   }
 }
 
-export function StandingGrants() {
+export function StandingGrants({ online = true }: { online?: boolean }) {
   const [lists, setLists] = useState<Lists>({ held: null, assigned: null, pending: null });
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -81,6 +82,10 @@ export function StandingGrants() {
   }, []);
 
   useEffect(() => {
+    if (!online) {
+      setLoading(false);
+      return;
+    }
     void load();
     // Prefill the site from the device bootstrap; the field stays editable.
     void (async () => {
@@ -96,7 +101,7 @@ export function StandingGrants() {
         /* the operator can type it */
       }
     })();
-  }, [load]);
+  }, [load, online]);
 
   const send = async (path: string, body: unknown, method = 'POST'): Promise<boolean> => {
     if (busy) return false;
@@ -148,55 +153,56 @@ export function StandingGrants() {
   const renderList = (section: Section, heading: string, empty: string) => {
     const rows = lists[section];
     return (
-      <section aria-labelledby={`standing-grants-${section}`}>
+      <section className="edge-card" aria-labelledby={`standing-grants-${section}`}>
         <h2 id={`standing-grants-${section}`}>{heading}</h2>
         {rows === null ? null : rows.length === 0 ? (
           <p>{empty}</p>
         ) : (
-          <ul>
+          <ul className="base-list">
             {rows.map((g) => (
-              <li key={g.grant_id}>
-                {describeGrant(g)} ({g.status})
+              <li key={g.grant_id} className="base-card base-card-stacked">
+                <span className="base-card-title">{describeGrant(g)}</span>
+                <span>
+                  <span className="state-pill">{g.status}</span>
+                </span>
                 {section === 'assigned' && canRevoke(g) ? (
-                  <>
-                    {' '}
+                  <div className="edge-actions">
                     <button
                       type="button"
                       className="secondary-action"
-                      disabled={busy}
+                      disabled={busy || !online}
                       onClick={() => void send(`/api/v1/standing-grants/${g.grant_id}/revoke`, {})}
                     >
                       {t('standingGrants.revoke')}
                     </button>
-                  </>
+                  </div>
                 ) : null}
                 {section === 'pending' ? (
-                  <>
-                    {' '}
+                  <div className="edge-actions">
                     <button
                       type="button"
                       className="primary-action"
-                      disabled={busy}
+                      disabled={busy || !online}
                       onClick={() =>
                         void send(`/api/v1/standing-grants/${g.grant_id}/finance-approve`, {})
                       }
                     >
                       {t('standingGrants.approve')}
-                    </button>{' '}
+                    </button>
                     <label htmlFor={`standing-grants-reason-${g.grant_id}`}>
                       {t('standingGrants.rejectReason')}
-                    </label>{' '}
-                    <input
-                      id={`standing-grants-reason-${g.grant_id}`}
-                      value={rejectReasons[g.grant_id] ?? ''}
-                      onChange={(e) =>
-                        setRejectReasons((r) => ({ ...r, [g.grant_id]: e.target.value }))
-                      }
-                    />{' '}
+                      <input
+                        id={`standing-grants-reason-${g.grant_id}`}
+                        value={rejectReasons[g.grant_id] ?? ''}
+                        onChange={(e) =>
+                          setRejectReasons((r) => ({ ...r, [g.grant_id]: e.target.value }))
+                        }
+                      />
+                    </label>
                     <button
                       type="button"
                       className="secondary-action"
-                      disabled={busy || (rejectReasons[g.grant_id] ?? '').trim() === ''}
+                      disabled={busy || !online || (rejectReasons[g.grant_id] ?? '').trim() === ''}
                       onClick={() =>
                         void send(`/api/v1/standing-grants/${g.grant_id}/finance-reject`, {
                           reason: (rejectReasons[g.grant_id] ?? '').trim(),
@@ -205,7 +211,7 @@ export function StandingGrants() {
                     >
                       {t('standingGrants.reject')}
                     </button>
-                  </>
+                  </div>
                 ) : null}
               </li>
             ))}
@@ -216,116 +222,125 @@ export function StandingGrants() {
   };
 
   return (
-    <section className="card" aria-labelledby="standing-grants-heading">
-      <h1 id="standing-grants-heading">{t('standingGrants.title')}</h1>
-      <p>
-        <a className="secondary-action" href="/">
-          {t('standingGrants.back')}
-        </a>
-      </p>
-      {loading ? <p role="status">{t('standingGrants.loading')}</p> : null}
+    <div className="base-screen" id="standing-grants" aria-busy={loading}>
+      <h2 className="base-screen-title">{t('standingGrants.title')}</h2>
+      {!online ? (
+        <p className="base-notice" role="status">
+          {t('standingGrants.offline')}
+        </p>
+      ) : null}
+      {loading && online ? <p role="status">{t('standingGrants.loading')}</p> : null}
       {renderList('held', t('standingGrants.held'), t('standingGrants.heldEmpty'))}
       {renderList('assigned', t('standingGrants.assigned'), t('standingGrants.assignedEmpty'))}
       {renderList('pending', t('standingGrants.pending'), t('standingGrants.pendingEmpty'))}
 
-      <form
-        aria-labelledby="standing-grants-assign"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submitAssign();
-        }}
-      >
+      <section className="edge-card" aria-labelledby="standing-grants-assign">
         <h2 id="standing-grants-assign">{t('standingGrants.assign')}</h2>
-        <label htmlFor="standing-grants-kind">{t('standingGrants.kind')}</label>
-        <select
-          id="standing-grants-kind"
-          value={form.grant_kind}
-          onChange={(e) => set({ grant_kind: e.target.value as AssignForm['grant_kind'] })}
+        <form
+          className="base-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitAssign();
+          }}
         >
-          <option value="standing_approval">{t('standingGrants.kindStanding')}</option>
-          <option value="self_approval_limit">{t('standingGrants.kindLimit')}</option>
-        </select>
-        <label htmlFor="standing-grants-grantee">{t('standingGrants.grantee')}</label>
-        <input
-          id="standing-grants-grantee"
-          value={form.grantee_user_id}
-          onChange={(e) => set({ grantee_user_id: e.target.value })}
-        />
-        <label htmlFor="standing-grants-site">{t('standingGrants.site')}</label>
-        <input
-          id="standing-grants-site"
-          value={form.site_id}
-          onChange={(e) => set({ site_id: e.target.value })}
-        />
-        {form.grant_kind === 'standing_approval' ? (
-          <>
-            <label htmlFor="standing-grants-scope-type">{t('standingGrants.scopeType')}</label>
-            <select
-              id="standing-grants-scope-type"
-              value={form.scope_type}
-              onChange={(e) => set({ scope_type: e.target.value as AssignForm['scope_type'] })}
-            >
-              <option value="sku">{t('standingGrants.scopeSku')}</option>
-              <option value="group">{t('standingGrants.scopeGroup')}</option>
-            </select>
-            <label htmlFor="standing-grants-scope">{t('standingGrants.scope')}</label>
-            <input
-              id="standing-grants-scope"
-              value={form.scope}
-              onChange={(e) => set({ scope: e.target.value })}
-            />
-            <label htmlFor="standing-grants-cap">{t('standingGrants.cap')}</label>
-            <input
-              id="standing-grants-cap"
-              inputMode="decimal"
-              value={form.monthly_qty_cap}
-              onChange={(e) => set({ monthly_qty_cap: e.target.value })}
-            />
-          </>
-        ) : (
-          <>
-            <label htmlFor="standing-grants-limit">{t('standingGrants.limit')}</label>
-            <input
-              id="standing-grants-limit"
-              inputMode="decimal"
-              value={form.limit_amount}
-              onChange={(e) => set({ limit_amount: e.target.value })}
-            />
-          </>
-        )}
-        <label htmlFor="standing-grants-end">{t('standingGrants.endDate')}</label>
-        <input
-          id="standing-grants-end"
-          value={form.end_date}
-          onChange={(e) => set({ end_date: e.target.value })}
-        />
-        <button className="primary-action" type="submit" disabled={busy}>
-          {t('standingGrants.submit')}
-        </button>
-      </form>
+          <label htmlFor="standing-grants-kind">{t('standingGrants.kind')}</label>
+          <select
+            id="standing-grants-kind"
+            value={form.grant_kind}
+            onChange={(e) => set({ grant_kind: e.target.value as AssignForm['grant_kind'] })}
+          >
+            <option value="standing_approval">{t('standingGrants.kindStanding')}</option>
+            <option value="self_approval_limit">{t('standingGrants.kindLimit')}</option>
+          </select>
+          <label htmlFor="standing-grants-grantee">{t('standingGrants.grantee')}</label>
+          <input
+            id="standing-grants-grantee"
+            value={form.grantee_user_id}
+            onChange={(e) => set({ grantee_user_id: e.target.value })}
+          />
+          <label htmlFor="standing-grants-site">{t('standingGrants.site')}</label>
+          <input
+            id="standing-grants-site"
+            value={form.site_id}
+            onChange={(e) => set({ site_id: e.target.value })}
+          />
+          {form.grant_kind === 'standing_approval' ? (
+            <>
+              <label htmlFor="standing-grants-scope-type">{t('standingGrants.scopeType')}</label>
+              <select
+                id="standing-grants-scope-type"
+                value={form.scope_type}
+                onChange={(e) => set({ scope_type: e.target.value as AssignForm['scope_type'] })}
+              >
+                <option value="sku">{t('standingGrants.scopeSku')}</option>
+                <option value="group">{t('standingGrants.scopeGroup')}</option>
+              </select>
+              <label htmlFor="standing-grants-scope">{t('standingGrants.scope')}</label>
+              <input
+                id="standing-grants-scope"
+                value={form.scope}
+                onChange={(e) => set({ scope: e.target.value })}
+              />
+              <label htmlFor="standing-grants-cap">{t('standingGrants.cap')}</label>
+              <input
+                id="standing-grants-cap"
+                inputMode="decimal"
+                value={form.monthly_qty_cap}
+                onChange={(e) => set({ monthly_qty_cap: e.target.value })}
+              />
+            </>
+          ) : (
+            <>
+              <label htmlFor="standing-grants-limit">{t('standingGrants.limit')}</label>
+              <input
+                id="standing-grants-limit"
+                inputMode="decimal"
+                value={form.limit_amount}
+                onChange={(e) => set({ limit_amount: e.target.value })}
+              />
+            </>
+          )}
+          <label htmlFor="standing-grants-end">{t('standingGrants.endDate')}</label>
+          <input
+            id="standing-grants-end"
+            value={form.end_date}
+            onChange={(e) => set({ end_date: e.target.value })}
+          />
+          <div className="edge-actions">
+            <button className="primary-action" type="submit" disabled={busy || !online}>
+              {t('standingGrants.submit')}
+            </button>
+          </div>
+        </form>
+      </section>
 
-      <form
-        aria-labelledby="standing-grants-prune"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submitPrune();
-        }}
-      >
+      <section className="edge-card" aria-labelledby="standing-grants-prune">
         <h2 id="standing-grants-prune">{t('standingGrants.prune')}</h2>
-        <label htmlFor="standing-grants-prune-days">{t('standingGrants.pruneDays')}</label>
-        <input
-          id="standing-grants-prune-days"
-          inputMode="numeric"
-          value={pruneDays}
-          onChange={(e) => setPruneDays(e.target.value)}
-        />
-        <button className="secondary-action" type="submit" disabled={busy}>
-          {t('standingGrants.pruneSave')}
-        </button>
-      </form>
-      <p role="status" aria-live="polite">
+        <form
+          className="base-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitPrune();
+          }}
+        >
+          <label htmlFor="standing-grants-prune-days">{t('standingGrants.pruneDays')}</label>
+          <input
+            id="standing-grants-prune-days"
+            inputMode="numeric"
+            value={pruneDays}
+            onChange={(e) => setPruneDays(e.target.value)}
+          />
+          <div className="edge-actions">
+            <button className="secondary-action" type="submit" disabled={busy || !online}>
+              {t('standingGrants.pruneSave')}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <p className="base-notice" role="status" aria-live="polite">
         {message}
       </p>
-    </section>
+    </div>
   );
 }

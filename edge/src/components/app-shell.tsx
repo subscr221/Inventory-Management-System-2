@@ -30,6 +30,7 @@ import { ReportsView } from './enterprise/reports-view';
 import { SampleDataNotice } from './enterprise/sample-data-notice';
 import { CheckStock } from './check-stock';
 import { MyRequests } from './my-requests';
+import { StandingGrants } from './standing-grants';
 import { ReportDamage, type ReportDamageProps } from './report-damage';
 import { DamageCases } from './damage-cases';
 import { entriesFor } from './navigation/nav-model';
@@ -126,7 +127,13 @@ export interface AppShellProps {
   waitingForOthers?: Array<{ userName: string; count: number }>;
 }
 
-type BaseView = 'new-requisition' | 'check-stock' | 'my-requests' | 'report-damage' | 'damage-cases';
+type BaseView =
+  | 'new-requisition'
+  | 'check-stock'
+  | 'my-requests'
+  | 'report-damage'
+  | 'damage-cases'
+  | 'standing-grants';
 
 /** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
 const BASE_VIEW_ENTRY: Record<BaseView, string> = {
@@ -136,6 +143,8 @@ const BASE_VIEW_ENTRY: Record<BaseView, string> = {
   // Story 8.9 (Task 11.1): a deep link without the entry gets the same no-access card.
   'report-damage': 'Report damage',
   'damage-cases': 'Damage cases',
+  // Story 4.8: the grants a person holds, assigns and approves.
+  'standing-grants': 'Standing grants',
 };
 
 function isBaseView(view: string): view is BaseView {
@@ -222,39 +231,39 @@ export function AppShell({
           />
         ) : null}
         {navSurface === 'sidebar' ? (
-        <aside className="edge-sidebar">
-          <div className="edge-sidebar-brand">
-            <h1 className="brand-name">{t('app.title')}</h1>
-          </div>
-          <p className="edge-sidebar-site">{siteName}</p>
-          <div className="edge-sidebar-section">
-            <p className="edge-sidebar-caption">{userName}</p>
-            {navEntries.length > 0 ? (
-              <ul className="edge-sidebar-nav">
-                {navEntries.map((link) => (
-                  <li key={link.href}>
-                    <a className="edge-sidebar-item" href={link.href}>
-                      {t(link.label as MessageKey)}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-          {onSignOut ? (
-            <div className="edge-sidebar-footer">
-              <button
-                type="button"
-                className="edge-sidebar-item"
-                onClick={onSignOut}
-                disabled={signingOut}
-                aria-busy={signingOut}
-              >
-                {t('auth.signOut')}
-              </button>
+          <aside className="edge-sidebar">
+            <div className="edge-sidebar-brand">
+              <h1 className="brand-name">{t('app.title')}</h1>
             </div>
-          ) : null}
-        </aside>
+            <p className="edge-sidebar-site">{siteName}</p>
+            <div className="edge-sidebar-section">
+              <p className="edge-sidebar-caption">{userName}</p>
+              {navEntries.length > 0 ? (
+                <ul className="edge-sidebar-nav">
+                  {navEntries.map((link) => (
+                    <li key={link.href}>
+                      <a className="edge-sidebar-item" href={link.href}>
+                        {t(link.label as MessageKey)}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+            {onSignOut ? (
+              <div className="edge-sidebar-footer">
+                <button
+                  type="button"
+                  className="edge-sidebar-item"
+                  onClick={onSignOut}
+                  disabled={signingOut}
+                  aria-busy={signingOut}
+                >
+                  {t('auth.signOut')}
+                </button>
+              </div>
+            ) : null}
+          </aside>
         ) : null}
         <div className="edge-content">
           <header className="edge-header">
@@ -297,183 +306,213 @@ export function AppShell({
             </nav>
           ) : null}
           <main id="main-content" className="edge-main" tabIndex={-1}>
-        {authRequired ? (
-          <div className="auth-required" role="alert">
-            {t('sync.authRequired')}
-          </div>
-        ) : null}
-        {setupError ? (
-          <div className="auth-required" role="alert">
-            {t('sync.setupError')}
-          </div>
-        ) : null}
-        {offlineNoSession ? (
-          <div className="auth-required" role="alert">
-            {t('auth.offlineNoSession')}
-          </div>
-        ) : null}
-        {siteRefusal ? (
-          <section className="edge-card" role="alert" aria-labelledby="site-refusal-heading">
-            <h2 id="site-refusal-heading">
-              {t(siteRefusal === 'no_site' ? 'bootstrap.noSiteTitle' : 'bootstrap.ambiguousSiteTitle')}
-            </h2>
-            <p>{t(siteRefusal === 'no_site' ? 'bootstrap.noSiteBody' : 'bootstrap.ambiguousSiteBody')}</p>
-          </section>
-        ) : firstSyncRequired ? (
-          <section className="edge-card" aria-labelledby="first-sync-heading">
-            <h2 id="first-sync-heading">{t('bootstrap.firstSyncTitle')}</h2>
-            <p>{t('bootstrap.firstSyncBody')}</p>
-            <button className="secondary-action" type="button">
-              {t('bootstrap.checkConnection')}
-            </button>
-          </section>
-        ) : isBaseView(view) &&
-          navigationConfirmed &&
-          !navigation.includes(BASE_VIEW_ENTRY[view]) ? (
-          <section className="edge-card" role="alert" aria-labelledby="base-denied-heading">
-            <h2 id="base-denied-heading">{t('nav.deniedTitle')}</h2>
-            <p>{t('nav.deniedBody')}</p>
-            <a className="secondary-action" href="/">
-              {t('nav.home')}
-            </a>
-          </section>
-        ) : view === 'new-requisition' ? (
-          <div className="card-grid" id="new-requisition">
-            <IndentCapture
-              syncState={syncState}
-              {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
-            />
-          </div>
-        ) : view === 'check-stock' ? (
-          <CheckStock online={online} />
-        ) : view === 'my-requests' ? (
-          <MyRequests online={online} />
-        ) : view === 'report-damage' ? (
-          <ReportDamage {...(reportDamage ?? {})} />
-        ) : view === 'damage-cases' ? (
-          <DamageCases online={online} userId={userId} />
-        ) : view === 'refused-captures' ? (
-          refusedCaptures ? (
-            <RefusedCapturesScreen {...refusedCaptures} />
-          ) : (
-            <section className="edge-card" id="refused-captures" aria-labelledby="refused-unavailable-heading">
-              <h2 id="refused-unavailable-heading">{t('refused.title')}</h2>
-              <p>{t('refused.needsConnection')}</p>
-            </section>
-          )
-        ) : view === 'maintenance' ? (
-          <div className="card-grid" id="maintenance">
-            {maintenance ? (
-              <>
-                <MaintenanceWorklist
+            {authRequired ? (
+              <div className="auth-required" role="alert">
+                {t('sync.authRequired')}
+              </div>
+            ) : null}
+            {setupError ? (
+              <div className="auth-required" role="alert">
+                {t('sync.setupError')}
+              </div>
+            ) : null}
+            {offlineNoSession ? (
+              <div className="auth-required" role="alert">
+                {t('auth.offlineNoSession')}
+              </div>
+            ) : null}
+            {siteRefusal ? (
+              <section className="edge-card" role="alert" aria-labelledby="site-refusal-heading">
+                <h2 id="site-refusal-heading">
+                  {t(
+                    siteRefusal === 'no_site'
+                      ? 'bootstrap.noSiteTitle'
+                      : 'bootstrap.ambiguousSiteTitle',
+                  )}
+                </h2>
+                <p>
+                  {t(
+                    siteRefusal === 'no_site'
+                      ? 'bootstrap.noSiteBody'
+                      : 'bootstrap.ambiguousSiteBody',
+                  )}
+                </p>
+              </section>
+            ) : firstSyncRequired ? (
+              <section className="edge-card" aria-labelledby="first-sync-heading">
+                <h2 id="first-sync-heading">{t('bootstrap.firstSyncTitle')}</h2>
+                <p>{t('bootstrap.firstSyncBody')}</p>
+                <button className="secondary-action" type="button">
+                  {t('bootstrap.checkConnection')}
+                </button>
+              </section>
+            ) : isBaseView(view) &&
+              navigationConfirmed &&
+              !navigation.includes(BASE_VIEW_ENTRY[view]) ? (
+              <section className="edge-card" role="alert" aria-labelledby="base-denied-heading">
+                <h2 id="base-denied-heading">{t('nav.deniedTitle')}</h2>
+                <p>{t('nav.deniedBody')}</p>
+                <a className="secondary-action" href="/">
+                  {t('nav.home')}
+                </a>
+              </section>
+            ) : view === 'new-requisition' ? (
+              <div className="card-grid" id="new-requisition">
+                <IndentCapture
                   syncState={syncState}
-                  workOrders={maintenance.workOrders}
-                  total={maintenance.total}
-                  truncated={maintenance.truncated}
-                  fetchedAt={maintenance.fetchedAt}
-                  selectedWorkOrderId={maintenance.selectedWorkOrderId}
-                  {...(maintenance.onSelectWorkOrder ? { onSelect: maintenance.onSelectWorkOrder } : {})}
-                  {...(maintenance.onRefreshWorklist ? { onRefresh: maintenance.onRefreshWorklist } : {})}
+                  {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
                 />
-                <FaultReportCapture
-                  {...(maintenance.onSubmitFaultReport ? { onSubmit: maintenance.onSubmitFaultReport } : {})}
-                />
-                <WorkOrderStatusCapture
-                  key={maintenance.selectedWorkOrderId ?? 'none'}
-                  workOrderId={maintenance.selectedWorkOrderId}
-                  currentStatus={
-                    maintenance.workOrders.find(
-                      (row) => row.work_order_id === maintenance.selectedWorkOrderId,
-                    )?.status ?? null
-                  }
-                  {...(maintenance.onSubmitStatusUpdate ? { onSubmit: maintenance.onSubmitStatusUpdate } : {})}
-                />
-                <MeterReadingCapture
-                  key={maintenance.selectedWorkOrderId ?? 'none'}
-                  meters={maintenance.selectedMeters}
-                  {...(maintenance.onSubmitMeterReading ? { onSubmit: maintenance.onSubmitMeterReading } : {})}
-                />
-                <SpareIssueCapture
-                  key={maintenance.selectedWorkOrderId ?? 'none'}
-                  reservations={maintenance.selectedReservations}
-                  {...(maintenance.onSubmitSpareIssue ? { onSubmit: maintenance.onSubmitSpareIssue } : {})}
-                />
-                <WorkOrderClosureCapture
-                  key={maintenance.selectedWorkOrderId ?? 'none'}
-                  workOrderId={maintenance.selectedWorkOrderId}
-                  origin={
-                    maintenance.workOrders.find(
-                      (row) => row.work_order_id === maintenance.selectedWorkOrderId,
-                    )?.origin ?? null
-                  }
-                  catalogue={maintenance.closureCatalogue}
-                  {...(maintenance.onSubmitClosure ? { onSubmit: maintenance.onSubmitClosure } : {})}
+              </div>
+            ) : view === 'check-stock' ? (
+              <CheckStock online={online} />
+            ) : view === 'my-requests' ? (
+              <MyRequests online={online} />
+            ) : view === 'report-damage' ? (
+              <ReportDamage {...(reportDamage ?? {})} />
+            ) : view === 'damage-cases' ? (
+              <DamageCases online={online} userId={userId} />
+            ) : view === 'standing-grants' ? (
+              <StandingGrants online={online} />
+            ) : view === 'refused-captures' ? (
+              refusedCaptures ? (
+                <RefusedCapturesScreen {...refusedCaptures} />
+              ) : (
+                <section
+                  className="edge-card"
+                  id="refused-captures"
+                  aria-labelledby="refused-unavailable-heading"
+                >
+                  <h2 id="refused-unavailable-heading">{t('refused.title')}</h2>
+                  <p>{t('refused.needsConnection')}</p>
+                </section>
+              )
+            ) : view === 'maintenance' ? (
+              <div className="card-grid" id="maintenance">
+                {maintenance ? (
+                  <>
+                    <MaintenanceWorklist
+                      syncState={syncState}
+                      workOrders={maintenance.workOrders}
+                      total={maintenance.total}
+                      truncated={maintenance.truncated}
+                      fetchedAt={maintenance.fetchedAt}
+                      selectedWorkOrderId={maintenance.selectedWorkOrderId}
+                      {...(maintenance.onSelectWorkOrder
+                        ? { onSelect: maintenance.onSelectWorkOrder }
+                        : {})}
+                      {...(maintenance.onRefreshWorklist
+                        ? { onRefresh: maintenance.onRefreshWorklist }
+                        : {})}
+                    />
+                    <FaultReportCapture
+                      {...(maintenance.onSubmitFaultReport
+                        ? { onSubmit: maintenance.onSubmitFaultReport }
+                        : {})}
+                    />
+                    <WorkOrderStatusCapture
+                      key={maintenance.selectedWorkOrderId ?? 'none'}
+                      workOrderId={maintenance.selectedWorkOrderId}
+                      currentStatus={
+                        maintenance.workOrders.find(
+                          (row) => row.work_order_id === maintenance.selectedWorkOrderId,
+                        )?.status ?? null
+                      }
+                      {...(maintenance.onSubmitStatusUpdate
+                        ? { onSubmit: maintenance.onSubmitStatusUpdate }
+                        : {})}
+                    />
+                    <MeterReadingCapture
+                      key={maintenance.selectedWorkOrderId ?? 'none'}
+                      meters={maintenance.selectedMeters}
+                      {...(maintenance.onSubmitMeterReading
+                        ? { onSubmit: maintenance.onSubmitMeterReading }
+                        : {})}
+                    />
+                    <SpareIssueCapture
+                      key={maintenance.selectedWorkOrderId ?? 'none'}
+                      reservations={maintenance.selectedReservations}
+                      {...(maintenance.onSubmitSpareIssue
+                        ? { onSubmit: maintenance.onSubmitSpareIssue }
+                        : {})}
+                    />
+                    <WorkOrderClosureCapture
+                      key={maintenance.selectedWorkOrderId ?? 'none'}
+                      workOrderId={maintenance.selectedWorkOrderId}
+                      origin={
+                        maintenance.workOrders.find(
+                          (row) => row.work_order_id === maintenance.selectedWorkOrderId,
+                        )?.origin ?? null
+                      }
+                      catalogue={maintenance.closureCatalogue}
+                      {...(maintenance.onSubmitClosure
+                        ? { onSubmit: maintenance.onSubmitClosure }
+                        : {})}
+                    />
+                  </>
+                ) : (
+                  <section className="edge-card" aria-labelledby="maintenance-unavailable-heading">
+                    <h2 id="maintenance-unavailable-heading">{t('maintenance.title')}</h2>
+                    <p>{t('maintenance.unavailable')}</p>
+                  </section>
+                )}
+              </div>
+            ) : view === 'dashboard' ? (
+              <>
+                <SampleDataNotice />
+                <EnhancedDashboard
+                  role={role}
+                  pendingCount={pendingCount}
+                  failedCount={failedCount}
                 />
               </>
+            ) : view === 'workflows' ? (
+              <>
+                <SampleDataNotice />
+                <WorkflowsView currentUserName={userName} />
+              </>
+            ) : view === 'access-control' ? (
+              <>
+                <SampleDataNotice />
+                <AccessControlView />
+              </>
+            ) : view === 'reports' ? (
+              <>
+                <SampleDataNotice />
+                <ReportsView currentUserName={userName} />
+              </>
             ) : (
-              <section className="edge-card" aria-labelledby="maintenance-unavailable-heading">
-                <h2 id="maintenance-unavailable-heading">{t('maintenance.title')}</h2>
-                <p>{t('maintenance.unavailable')}</p>
-              </section>
+              <div className="card-grid">
+                <section className="edge-card" id="dashboard" aria-labelledby="ready-heading">
+                  <h2 id="ready-heading">{t('bootstrap.readyTitle')}</h2>
+                  <p>{t('sync.offline')}</p>
+                  <dl className="sync-counts">
+                    <div>
+                      <dt>{t('sync.pendingCount')}</dt>
+                      <dd>{pendingCount}</dd>
+                    </div>
+                    <div>
+                      <dt>{t('sync.failedCount')}</dt>
+                      <dd>{failedCount}</dd>
+                    </div>
+                  </dl>
+                </section>
+                <section id="frontline">
+                  <CrossDockCapture
+                    syncState={syncState}
+                    {...(onLoadCrossDockTask ? { onLoad: onLoadCrossDockTask } : {})}
+                    {...(onConfirmCrossDock ? { onConfirm: onConfirmCrossDock } : {})}
+                  />
+                  <IndentCapture
+                    syncState={syncState}
+                    {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
+                  />
+                  <TestCaptureButton {...(onCapture ? { onCapture } : {})} />
+                  <a className="secondary-action" href="/maintenance">
+                    {t('maintenance.nav')}
+                  </a>
+                </section>
+              </div>
             )}
-          </div>
-        ) : view === 'dashboard' ? (
-          <>
-            <SampleDataNotice />
-            <EnhancedDashboard
-              role={role}
-              pendingCount={pendingCount}
-              failedCount={failedCount}
-            />
-          </>
-        ) : view === 'workflows' ? (
-          <>
-            <SampleDataNotice />
-            <WorkflowsView currentUserName={userName} />
-          </>
-        ) : view === 'access-control' ? (
-          <>
-            <SampleDataNotice />
-            <AccessControlView />
-          </>
-        ) : view === 'reports' ? (
-          <>
-            <SampleDataNotice />
-            <ReportsView currentUserName={userName} />
-          </>
-        ) : (
-          <div className="card-grid">
-            <section className="edge-card" id="dashboard" aria-labelledby="ready-heading">
-              <h2 id="ready-heading">{t('bootstrap.readyTitle')}</h2>
-              <p>{t('sync.offline')}</p>
-              <dl className="sync-counts">
-                <div>
-                  <dt>{t('sync.pendingCount')}</dt>
-                  <dd>{pendingCount}</dd>
-                </div>
-                <div>
-                  <dt>{t('sync.failedCount')}</dt>
-                  <dd>{failedCount}</dd>
-                </div>
-              </dl>
-            </section>
-            <section id="frontline">
-              <CrossDockCapture
-                syncState={syncState}
-                {...(onLoadCrossDockTask ? { onLoad: onLoadCrossDockTask } : {})}
-                {...(onConfirmCrossDock ? { onConfirm: onConfirmCrossDock } : {})}
-              />
-              <IndentCapture
-                syncState={syncState}
-                {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
-              />
-              <TestCaptureButton {...(onCapture ? { onCapture } : {})} />
-              <a className="secondary-action" href="/maintenance">
-                {t('maintenance.nav')}
-              </a>
-            </section>
-          </div>
-        )}
             <SyncFailureList
               failures={failures}
               {...(onRetry ? { onRetry } : {})}
