@@ -11,6 +11,7 @@ import { runStandingGrantSweepCycle } from '../../src/notify/standing-grant-swee
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 
 // Story 4.8: standing approvals and self-approval limits. Runs against the production router
 // (createAppRouter) with real auth, RBAC, DOA registry authority, the Story 4.10 per-line routing,
@@ -496,6 +497,42 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
       assert.strictEqual(delegated.status, 200, JSON.stringify(delegated.body));
     });
 
+    it('notifies an active finance delegate once, including when they also hold the finance role', async () => {
+      const delegate = await getPool().query(`SELECT user_id FROM users WHERE external_id = $1`, [
+        `deleg-48-${run}@example.com`,
+      ]);
+      const delegateId = (delegate.rows[0] as Row)['user_id'] as string;
+      const check = async (): Promise<void> => {
+        const created = await assign(saBody(await newSku('DELEGATE-NOTIFY')));
+        assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+        const id = (created.body['grant'] as Row)['grant_id'] as string;
+        await runDispatchCycle(1000);
+        const notices = await getPool().query(
+          `SELECT notification_id FROM notifications
+         WHERE object_id = $1 AND target_user_id = $2 AND status_verb = 'awaiting your approval'`,
+          [id, delegateId],
+        );
+        assert.strictEqual(
+          notices.rows.length,
+          1,
+          'the authorized delegate receives exactly one notice',
+        );
+      };
+      await check();
+      const assignment = await getPool().query(
+        `INSERT INTO user_role_assignments (user_id, role, module, function_scope, location_id)
+       VALUES ($1, $2, 'procurement', 'write', $3) RETURNING assignment_id`,
+        [delegateId, ROLE_FINANCE, siteA],
+      );
+      try {
+        await check();
+      } finally {
+        await getAdminPool().query(`DELETE FROM user_role_assignments WHERE assignment_id = $1`, [
+          (assignment.rows[0] as Row)['assignment_id'],
+        ]);
+      }
+    });
+
     it('finance can reject with a reason; a rejection without one is a 400 and a rejected grant stays inert', async () => {
       const sku = await newSku('REJ');
       const created = await assign(saBody(sku));
@@ -547,6 +584,9 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
         ['unknown sku', saBody(`NOPE-${run}`), 400, 'GRANT_SCOPE_INVALID'],
         ['zero cap', saBody(sku, { monthly_qty_cap: 0 }), 400, 'INVALID_PARAMS'],
         ['past end date', saBody(sku, { end_date: daysAhead(-1) }), 400, 'INVALID_PARAMS'],
+        ['invalid leap day', saBody(sku, { end_date: '2027-02-29' }), 400, 'INVALID_PARAMS'],
+        ['invalid month length', saBody(sku, { end_date: '2027-04-31' }), 400, 'INVALID_PARAMS'],
+        ['year zero', saBody(sku, { end_date: '0000-01-01' }), 400, 'INVALID_PARAMS'],
         [
           'unknown grantee',
           saBody(sku, { grantee_user_id: randomUUID() }),
@@ -558,6 +598,85 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
         const res = await assign(body);
         assert.strictEqual(res.status, status, `${name}: ${JSON.stringify(res.body)}`);
         assert.strictEqual(res.body['error_code'], code, name);
+      }
+    });
+
+    it('accepts a real future leap day without changing its calendar date', async () => {
+      const res = await assign(saBody(await newSku('LEAP'), { end_date: '2028-02-29' }));
+      assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+      assert.strictEqual((res.body['grant'] as Row)['end_date'], '2028-02-29');
+    });
+
+    it('filters finance eligibility before limiting even with over 200 newer ineligible grants', async () => {
+      const reviewerExt = `inbox-fin-48-${run}@example.com`;
+      const reviewerId = await provisionUser(port, reviewerExt, [
+        write(ROLE_FINANCE, 'procurement', siteA),
+      ]);
+      const reviewerHeaders = await authFor(port, reviewerExt);
+      const eligible = await assign(saBody(await newSku('INBOX')));
+      assert.strictEqual(eligible.status, 201, JSON.stringify(eligible.body));
+      const grant = eligible.body['grant'] as Row;
+      const id = grant['grant_id'] as string;
+      const fixtureSource = randomUUID();
+      await getPool().query(
+        `INSERT INTO standing_grant
+       (grant_id, grant_ref, grant_kind, grantee_user_id, assigner_user_id, site_id,
+        scope_sku, source_event_id, created_at)
+       SELECT gen_random_uuid(), 'SA-2026-' || lpad(nextval('standing_grant_ref_seq')::text, 8, '0'),
+              'standing_approval',
+              CASE WHEN n BETWEEN 206 AND 410 THEN $1::uuid ELSE $2::uuid END,
+              CASE WHEN n > 410 THEN $1::uuid ELSE $3::uuid END,
+              CASE WHEN n <= 205 THEN $4::uuid ELSE $5::uuid END,
+              $6, $7, now() + n * interval '1 second'
+       FROM generate_series(1, 615) AS n`,
+        [
+          reviewerId,
+          requesterId,
+          siteHeadId,
+          randomUUID(),
+          siteA,
+          grant['scope_sku'],
+          fixtureSource,
+        ],
+      );
+      try {
+        for (const query of ['', '&limit=1', '&limit=200']) {
+          const inbox = await call(
+            'GET',
+            `/api/v1/standing-grants?pending_finance=me${query}`,
+            undefined,
+            reviewerHeaders,
+          );
+          assert.strictEqual(inbox.status, 200, JSON.stringify(inbox.body));
+          const rows = inbox.body['grants'] as Row[];
+          assert.ok(
+            rows.some((g) => g['grant_id'] === id),
+            query,
+          );
+          assert.ok(rows.every((g) => g['site_id'] === siteA));
+          assert.ok(rows.every((g) => g['assigner_user_id'] !== reviewerId));
+          assert.ok(rows.every((g) => g['grantee_user_id'] !== reviewerId));
+          if (query === '&limit=1') assert.strictEqual(rows.length, 1);
+        }
+        const delegateInbox = await call(
+          'GET',
+          '/api/v1/standing-grants?pending_finance=me&limit=1',
+          undefined,
+          await authFor(port, `deleg-48-${run}@example.com`),
+        );
+        assert.strictEqual(delegateInbox.status, 200, JSON.stringify(delegateInbox.body));
+        assert.strictEqual((delegateInbox.body['grants'] as Row[]).length, 1);
+        const notFinance = await call(
+          'GET',
+          '/api/v1/standing-grants?pending_finance=me&limit=1',
+          undefined,
+          bystanderHeaders,
+        );
+        assert.deepStrictEqual(notFinance.body['grants'], []);
+      } finally {
+        await getAdminPool().query(`DELETE FROM standing_grant WHERE source_event_id = $1`, [
+          fixtureSource,
+        ]);
       }
     });
 
@@ -1395,6 +1514,134 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
       assert.strictEqual(missing.status, 404);
     });
 
+    it('finance and its active delegate revoke only while the original assigner is inactive, with an audit reason', async () => {
+      const extId = `successor-head-48-${run}@example.com`;
+      const assignerId = await provisionUser(port, extId, [
+        write(ROLE_SITE_HEAD, 'procurement', siteA),
+      ]);
+      const assignerHeaders = await authFor(port, extId);
+      const first = await activeGrant(saBody(await newSku('SUCCESSOR')), assignerHeaders);
+      const second = await activeGrant(saBody(await newSku('SUCCESSOR')), assignerHeaders);
+      const firstId = first['grant_id'] as string;
+      const secondId = second['grant_id'] as string;
+      const revoke = (id: string, headers: Record<string, string>) =>
+        call('POST', `/api/v1/standing-grants/${id}/revoke`, {}, headers);
+      assert.strictEqual((await revoke(firstId, financeHeaders)).status, 403);
+      const disabled = await makeRequest(
+        port,
+        'PATCH',
+        `/api/v1/scim/v2/Users/${encodeURIComponent(extId)}`,
+        { active: false },
+        SCIM_HEADERS,
+      );
+      assert.strictEqual(disabled.status, 200, JSON.stringify(disabled.body));
+      assert.strictEqual((await revoke(firstId, requesterHeaders)).status, 403);
+      const foreignFinance = await authFor(port, `otherfin-48-${run}@example.com`);
+      assert.strictEqual((await revoke(firstId, foreignFinance)).status, 403);
+      const revoked = await revoke(firstId, financeHeaders);
+      assert.strictEqual(revoked.status, 200, JSON.stringify(revoked.body));
+      assert.strictEqual((await grantRow(firstId))['revoked_by'], financeId);
+      const audit = await getPool().query(
+        `SELECT details FROM audit_log
+       WHERE error_code = 'standing_grant.revoked' AND details->>'grant_id' = $1`,
+        [firstId],
+      );
+      assert.strictEqual(audit.rows.length, 1);
+      const details = (audit.rows[0] as Row)['details'] as Row;
+      assert.strictEqual(details['revocation_authority'], 'finance_successor');
+      assert.strictEqual(details['revocation_reason'], 'assigner_account_disabled');
+      assert.strictEqual(details['original_assigner_user_id'], assignerId);
+      await makeRequest(
+        port,
+        'PATCH',
+        `/api/v1/scim/v2/Users/${encodeURIComponent(extId)}`,
+        { active: true },
+        SCIM_HEADERS,
+      );
+      const delegateHeaders = await authFor(port, `deleg-48-${run}@example.com`);
+      assert.strictEqual((await revoke(secondId, delegateHeaders)).status, 403);
+      await makeRequest(
+        port,
+        'PATCH',
+        `/api/v1/scim/v2/Users/${encodeURIComponent(extId)}`,
+        { active: false },
+        SCIM_HEADERS,
+      );
+      const delegated = await revoke(secondId, delegateHeaders);
+      assert.strictEqual(delegated.status, 200, JSON.stringify(delegated.body));
+      assert.strictEqual((await grantRow(secondId))['status'], 'revoked');
+    });
+
+    it('serializes an uncommitted assignment with SCIM disable so the new grant is auto-revoked', async () => {
+      const extId = `race-grantee-48-${run}@example.com`;
+      const granteeId = await provisionUser(port, extId, [
+        write('floor_supervisor', 'procurement', siteA),
+      ]);
+      const sku = await newSku('DISABLE-RACE');
+      const grantId = randomUUID();
+      const client = await getPool().connect();
+      let disabling: Promise<HttpResult> | undefined;
+      try {
+        await client.query('BEGIN');
+        const pid = (await client.query(`SELECT pg_backend_pid() AS pid`)).rows[0]['pid'] as number;
+        await persistEvent(
+          {
+            stream_type: 'standing_grant',
+            stream_id: grantId,
+            event_type: 'standing_grant.assigned',
+            payload: {
+              grant_id: grantId,
+              site_id: siteA,
+              ...saBody(sku, { grantee_user_id: granteeId }),
+            },
+            metadata: {
+              correlation_id: randomUUID(),
+              actor: { user_id: siteHeadId, role: ROLE_SITE_HEAD, location_id: siteA },
+              occurred_at: new Date().toISOString(),
+            },
+          },
+          undefined,
+          client,
+        );
+        let finished = false;
+        disabling = makeRequest(
+          port,
+          'PATCH',
+          `/api/v1/scim/v2/Users/${encodeURIComponent(extId)}`,
+          { active: false },
+          SCIM_HEADERS,
+        ).then((res) => {
+          finished = true;
+          return res;
+        });
+        let blocked = false;
+        for (let attempt = 0; attempt < 100 && !finished; attempt += 1) {
+          const waiting = await getAdminPool().query(
+            `SELECT EXISTS (
+             SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))
+           ) AS blocked`,
+            [pid],
+          );
+          blocked = (waiting.rows[0] as { blocked: boolean }).blocked;
+          if (blocked) break;
+          await delay(10);
+        }
+        assert.ok(
+          blocked,
+          'SCIM must wait for the assignment transaction before enumerating grants',
+        );
+      } finally {
+        await client.query('COMMIT');
+        client.release();
+        if (disabling) await disabling;
+      }
+      const disabled = await disabling!;
+      assert.strictEqual(disabled.status, 200, JSON.stringify(disabled.body));
+      const row = await grantRow(grantId);
+      assert.strictEqual(row['status'], 'revoked');
+      assert.strictEqual(row['revoke_reason'], 'account_disabled');
+    });
+
     it('disabling an account revokes every grant the person holds in the same request; grants they assigned stay live', async () => {
       const extId = `gone-48-${run}@example.com`;
       const goneId = await provisionUser(port, extId, [
@@ -1615,6 +1862,68 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
       assert.ok(usedGrantId);
     });
 
+    it('reviews all 51 grants in bounded chunks and flags the unused grant beyond the first 50', async () => {
+      const reviewerId = await provisionUser(port, `prune-many-48-${run}@example.com`, [
+        write(ROLE_SITE_HEAD, 'procurement', siteA),
+      ]);
+      const sku = await newSku('PRUNE-MANY');
+      const fixtureSource = randomUUID();
+      const seeded = await getPool().query(
+        `INSERT INTO standing_grant
+       (grant_id, grant_ref, grant_kind, grantee_user_id, assigner_user_id, site_id,
+        scope_sku, status, finance_approver_user_id, finance_decided_at, source_event_id, created_at)
+       SELECT gen_random_uuid(), 'SA-2026-' || lpad(nextval('standing_grant_ref_seq')::text, 8, '0'),
+              'standing_approval', $1, $2, $3, $4, 'active', $5,
+              CASE WHEN n = 51 THEN $6::timestamptz ELSE $7::timestamptz END,
+              $8, $9::timestamptz + n * interval '1 millisecond'
+       FROM generate_series(1, 51) AS n
+       RETURNING grant_ref, finance_decided_at`,
+        [requesterId, reviewerId, siteA, sku, financeId, at(100), at(220), fixtureSource, at(0)],
+      );
+      const unused = (seeded.rows as Row[]).find(
+        (g) => new Date(g['finance_decided_at'] as string).toISOString() === at(100),
+      )!['grant_ref'] as string;
+      try {
+        const first = await runStandingGrantSweepCycle({ now: at(220) });
+        assert.strictEqual(first.cycleFailed, false);
+        await runDispatchCycle(1000);
+        const lists = await reviewsFor(reviewerId);
+        assert.strictEqual(lists.length, 2);
+        const fullText = lists.map((n) => n['next_step'] as string).join('; ');
+        for (const g of seeded.rows as Row[]) {
+          const ref = g['grant_ref'] as string;
+          assert.strictEqual(fullText.split(ref).length - 1, 1, ref);
+        }
+        assert.ok(
+          lists.every((n) => (n['actor_label'] as string).includes('1 to consider revoking')),
+        );
+        const last = lists.find((n) => (n['next_step'] as string).includes(unused))!;
+        assert.ok((last['next_step'] as string).includes('consider revoking'));
+        assert.ok(lists.some((n) => (n['actor_label'] as string).includes('part 2 of 2')));
+        const setting = await getPool().query(
+          `SELECT last_prune_sent_at FROM standing_grant_prune_setting WHERE assigner_user_id = $1`,
+          [reviewerId],
+        );
+        assert.strictEqual(
+          new Date((setting.rows[0] as Row)['last_prune_sent_at'] as string).toISOString(),
+          at(220),
+        );
+        await runStandingGrantSweepCycle({ now: at(220) });
+        await runStandingGrantSweepCycle({ now: at(249) });
+        await runDispatchCycle(1000);
+        assert.strictEqual((await reviewsFor(reviewerId)).length, 2);
+        await runStandingGrantSweepCycle({ now: at(251) });
+        await runDispatchCycle(1000);
+        assert.strictEqual((await reviewsFor(reviewerId)).length, 4);
+        await runDispatchCycle(1000);
+        assert.strictEqual((await reviewsFor(reviewerId)).length, 4, 'dispatch remains idempotent');
+      } finally {
+        await getAdminPool().query(`DELETE FROM standing_grant WHERE source_event_id = $1`, [
+          fixtureSource,
+        ]);
+      }
+    });
+
     it('moves the list of a disabled assigner to the finance approver', async () => {
       const extId = `head3-48-${run}@example.com`;
       const head3Id = await provisionUser(port, extId, [
@@ -1630,7 +1939,7 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
         SCIM_HEADERS,
       );
       assert.strictEqual((await grantRow(g['grant_id'] as string))['status'], 'active');
-      await runStandingGrantSweepCycle({ now: at(200) });
+      await runStandingGrantSweepCycle({ now: at(300) });
       await runDispatchCycle(200);
       const finance = await reviewsFor(financeId);
       assert.ok(

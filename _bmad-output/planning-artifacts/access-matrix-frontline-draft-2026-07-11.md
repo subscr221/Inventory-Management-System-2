@@ -197,6 +197,8 @@ Legend: **C** = create/execute · **A** = approval hat (resolved via DOA) · **R
 | Resolve unmatched-vehicle exception | — | — | C | — | A |
 | Accept out-of-tolerance load (resolved, see §6 item 4) | — | — | A1 | — | A2 |
 | Post GRN lines (physical receiving, Story 3.4) | — | — | C | C | R |
+| Read open gate entries and weighments (Story 3.13) | R | R | R | — | R |
+| Read an ASN to resolve a challan (Story 3.13) | R | R | R | R | R |
 | Edit tolerance configuration | — | — | — | — | — (system_administrator) |
 
 *A1/A2 = ordered approver set, resolved via DOA (finalized 2026-07-12): `unloading_supervisor` is the primary accountable approver at the dock for breaches within their DOA band (§8); `warehouse_manager` is the escalation approver, engaged only when `unloading_supervisor` is unavailable or the breach exceeds the primary's DOA band. Either role's action is logged as the resolving approver; this is not a co-sign (AND) requirement.*

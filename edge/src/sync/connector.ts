@@ -116,6 +116,8 @@ const PERMANENT_ERROR_CODES = new Set([
   'WEIGHBRIDGE_SITE_MISMATCH',
   'WEIGHBRIDGE_NET_NEGATIVE',
   'WEIGHBRIDGE_PO_LINE_NOT_FOUND',
+  // Story 3.13 (AC 4): a weighbridge out of statutory stamp is a permanent refusal.
+  'WEIGHBRIDGE_OUT_OF_STAMP',
   // Story 3.6: pick-task permanent business rejections
   'PICK_TASK_NOT_FOUND',
   'PICK_LINE_NOT_FOUND',

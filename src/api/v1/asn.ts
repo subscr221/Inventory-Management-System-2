@@ -15,7 +15,14 @@ import { upsertAsnHeader, upsertAsnLine, getAsnByNumber } from '../../read/proje
  */
 
 const ASN_WRITE_ROLES = ['store_assistant', 'svc_supplier_edi'];
-const ASN_READ_ROLES = ['store_assistant', 'unloading_supervisor', 'warehouse_manager'];
+// Story 3.13 (AC 2): the gate officer and weighbridge operator read an ASN to resolve a challan.
+const ASN_READ_ROLES = [
+  'store_assistant',
+  'unloading_supervisor',
+  'warehouse_manager',
+  'gate_officer',
+  'weighbridge_operator',
+];
 
 function assertRoleAllowed(
   req: IncomingMessage,
@@ -26,7 +33,11 @@ function assertRoleAllowed(
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
     (r) =>
-      (r.module === 'receiving' || r.module === '*') &&
+      (r.module === 'receiving' ||
+        r.module === '*' ||
+        // Story 3.13 (AC 2): the read path only admits the gate and weighbridge modules; the
+        // write path stays receiving-only so ASN intake is unchanged.
+        (functionScope === 'read' && (r.module === 'gate' || r.module === 'weighbridge'))) &&
       (functionScope === 'read' || r.functionScope === 'write') &&
       allowedRoles.includes(r.role),
   );
@@ -42,7 +53,18 @@ function assertSiteAccess(req: IncomingMessage, siteId: string, scope: 'read' | 
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   const receivingScope = permittedLocationsForModuleScope(authContext.roles, 'receiving', scope);
-  if (!receivingScope.wildcard && !receivingScope.locations.has(siteId)) {
+  // Story 3.13 (AC 2): a gate officer/weighbridge operator reads the ASN against their gate or
+  // weighbridge location scope, not a receiving one.
+  const gateScope = permittedLocationsForModuleScope(authContext.roles, 'gate', scope);
+  const weighbridgeScope = permittedLocationsForModuleScope(authContext.roles, 'weighbridge', scope);
+  const wildcard =
+    receivingScope.wildcard || gateScope.wildcard || weighbridgeScope.wildcard;
+  if (
+    !wildcard &&
+    !receivingScope.locations.has(siteId) &&
+    !gateScope.locations.has(siteId) &&
+    !weighbridgeScope.locations.has(siteId)
+  ) {
     throw new AppError(
       403,
       'LOCATION_ACCESS_DENIED',
@@ -240,6 +262,7 @@ export const createAsnHandler: RouteHandler = requireRole({
   functionScope: 'write',
 })(createAsnBase);
 export const getAsnHandler: RouteHandler = requireRole({
-  module: 'receiving',
+  // Story 3.13 (AC 2): the gate and weighbridge operators resolve a challan against the ASN read.
+  module: ['receiving', 'gate', 'weighbridge'],
   functionScope: 'read',
 })(getAsnBase);

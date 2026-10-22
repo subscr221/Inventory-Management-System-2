@@ -57,7 +57,11 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isDateString(value: unknown): value is string {
-  return typeof value === 'string' && DATE_REGEX.test(value) && !Number.isNaN(Date.parse(value));
+  if (typeof value !== 'string' || !DATE_REGEX.test(value) || value.startsWith('0000-')) {
+    return false;
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function reject(
@@ -340,7 +344,10 @@ async function applyAssigned(
       403,
     );
   }
-  const grantee = await client.query(`SELECT active FROM users WHERE user_id = $1`, [granteeId]);
+  // Serialize the active check and insertion against SCIM's disable-then-revoke sequence.
+  const grantee = await client.query(`SELECT active FROM users WHERE user_id = $1 FOR SHARE`, [
+    granteeId,
+  ]);
   if (grantee.rows.length === 0 || (grantee.rows[0] as { active: boolean }).active !== true) {
     reject(
       'GRANT_GRANTEE_INVALID',
@@ -420,7 +427,8 @@ async function applyAssigned(
     kind === 'standing_approval'
       ? `standing approval for ${label.grantee_name} (${label.scope_label})`
       : `self-approval limit Rs ${grant.limit_amount} for ${label.grantee_name}`;
-  for (const role of await financeRoles(client)) {
+  const roles = await financeRoles(client);
+  for (const role of roles) {
     await notify(
       envelope,
       client,
@@ -429,6 +437,31 @@ async function applyAssigned(
       'awaiting your approval',
       `Approve or reject ${what}`,
     );
+  }
+  const notifiedDelegates = new Set<string>();
+  for (const role of roles) {
+    const holder = await findRoleHolder(role, client, siteId);
+    if (!holder) continue;
+    const delegation = await findActiveDelegation(holder.user_id, today, client);
+    const delegateId = delegation?.delegate_user_id;
+    if (
+      !delegateId ||
+      delegateId === actorId ||
+      delegateId === granteeId ||
+      notifiedDelegates.has(delegateId) ||
+      (await holdsGoverningRole(STANDING_GRANT_FINANCE_DOA_TYPE, delegateId, siteId, client))
+    ) {
+      continue;
+    }
+    await notify(
+      envelope,
+      client,
+      { role, user_id: delegateId },
+      grant,
+      'awaiting your approval',
+      `Approve or reject ${what}`,
+    );
+    notifiedDelegates.add(delegateId);
   }
 }
 
@@ -558,15 +591,28 @@ async function applyRevoked(
 ): Promise<void> {
   const p = envelope.payload as Record<string, unknown>;
   const grant = await loadForDecision(p, client);
-  const { actorId, now } = ctxOf(envelope);
+  const { actorId, now, today } = ctxOf(envelope);
   const reason = p['revoke_reason'] as 'assigner' | 'account_disabled';
-  // Only the assigner revokes by hand (no second approver, D2); account_disabled is the system's.
   const isSystem = actorId === STANDING_GRANT_SYSTEM_ACTOR_ID;
-  const allowed = reason === 'assigner' ? actorId === grant.assigner_user_id : isSystem;
+  let financeSuccessor = false;
+  if (
+    reason === 'assigner' &&
+    actorId !== grant.assigner_user_id &&
+    actorId !== grant.grantee_user_id
+  ) {
+    const assigner = await client.query(`SELECT active FROM users WHERE user_id = $1 FOR SHARE`, [
+      grant.assigner_user_id,
+    ]);
+    financeSuccessor =
+      (assigner.rows[0] as { active?: boolean } | undefined)?.active === false &&
+      (await isResolvedFinanceApprover(actorId, grant.site_id, today, client));
+  }
+  const allowed =
+    reason === 'assigner' ? actorId === grant.assigner_user_id || financeSuccessor : isSystem;
   if (!allowed) {
     reject(
       'GRANT_ASSIGNER_NOT_AUTHORIZED',
-      'Only the assigner can revoke this grant',
+      'Only the assigner or the finance successor of an inactive assigner can revoke this grant',
       { grant_id: grant.grant_id, acting_user_id: actorId },
       403,
     );
@@ -588,6 +634,13 @@ async function applyRevoked(
   await audit(envelope, client, eventId, 'revoked', grant, {
     revoke_reason: reason,
     previous_status: grant.status,
+    ...(financeSuccessor
+      ? {
+          revocation_authority: 'finance_successor',
+          revocation_reason: 'assigner_account_disabled',
+          original_assigner_user_id: grant.assigner_user_id,
+        }
+      : {}),
   });
   const label = await getGrantLabel(grant, client);
   if (reason === 'account_disabled') {
@@ -606,7 +659,9 @@ async function applyRevoked(
       { role: envelope.metadata.actor.role, user_id: grant.grantee_user_id },
       grant,
       'revoked',
-      `${grant.grant_ref} was revoked by the person who assigned it`,
+      financeSuccessor
+        ? `${grant.grant_ref} was revoked by finance because the assigning account was disabled`
+        : `${grant.grant_ref} was revoked by the person who assigned it`,
     );
   }
 }

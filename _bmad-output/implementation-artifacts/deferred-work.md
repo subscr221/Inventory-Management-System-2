@@ -1329,3 +1329,14 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - The expiry and pruning sweep runs as one transaction per tick and expires at most `STANDING_GRANT_SWEEP_BATCH_SIZE` (500) grants per tick; a larger backlog drains over successive daily ticks.
 - Terminal header handling for a requisition whose approved lines are all issued or closed while another line is pending or rejected (deferred from Story 4.11 review) is still undefined; Story 4.8 does not change header derivation.
 - `findRoleHolder` with a location still returns the oldest of the site's own and every-location holders. Story 4.8 does not depend on it for authority (assign and finance approval are membership tests on the DOA role at the site, so a newer site holder is never locked out; covered by test); it uses it only to pick the active delegate and the finance approver whose list receives a disabled assigner's grants.
+
+## Deferred from: dev of story-3-13 (2026-10-21)
+
+- OCR number-plate pre-fill on the Vehicle step is not built (EXPERIENCE.md:122); the officer types the registration.
+- Webcam capture on desktop is not built; the desktop pupil uploads a challan photo file (Q3).
+- The weighbridge indicator AUTO link protocol is post-pilot (Q5). Every pilot reading is MANUAL and the `Read from weighbridge indicator` button renders disabled with its reason.
+- The offline PO and ASN PowerSync bucket (`erp_open_purchase_orders`) is a follow-up. At pilot the challan resolves ASN then PO online with a typed fallback; a typed challan records `po_ref_ext` `UNKNOWN` (Q1, Q2).
+- The Trucks on site list is fed by the `openTrucks` prop; deriving it on-device from the synced `edge_site_events` bucket joined to unsynced outbox rows is a follow-up once the gate bucket is replicated.
+- Gate challan photos are stored in `pendingPhotoStore` and ride the existing attachment PUT path; there is no dedicated gate-photo document route, so the gate event's `challan_photo_ref` is the attachment id.
+- The gate e2e and axe specs (`edge/test/e2e/gate-entry.spec.ts`, `edge/test/accessibility/gate-accessibility.spec.ts`) are authored but could not be executed in this environment: the existing e2e suite fails identically at bootstrap/session setup (all 5 report-damage specs fail the same way), so the Playwright/axe environment is pre-existing broken here. They must be run in CI or a configured device browser.
+

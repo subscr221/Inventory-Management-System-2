@@ -316,12 +316,23 @@ export async function listLiveGrantsHeldBy(
   return result.rows.map(mapGrant);
 }
 
+/** Candidate sites only: resolve finance authority before fetching the bounded grant list. */
+export async function listPendingFinanceSites(client?: PoolClient): Promise<string[]> {
+  const result = await runner(client).query<{ site_id: string }>(
+    `SELECT DISTINCT site_id FROM standing_grant
+     WHERE status = 'pending-finance' ORDER BY site_id`,
+  );
+  return result.rows.map((row) => row.site_id);
+}
+
 export interface ListGrantsFilter {
   assignedBy?: string;
   heldBy?: string;
   pendingFinance?: boolean;
   /** Restrict a pending-finance view to these sites (the approver's coverage). */
   siteIds?: string[] | null;
+  /** Exclude the assigner and grantee before applying the result limit. */
+  excludePartyUserId?: string;
   status?: GrantStatus;
   limit?: number;
 }
@@ -349,6 +360,10 @@ export async function listGrants(
   if (filter.siteIds) {
     conditions.push(`site_id = ANY($${idx++}::uuid[])`);
     values.push(filter.siteIds);
+  }
+  if (filter.excludePartyUserId) {
+    conditions.push(`assigner_user_id <> $${idx}::uuid AND grantee_user_id <> $${idx++}::uuid`);
+    values.push(filter.excludePartyUserId);
   }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit =

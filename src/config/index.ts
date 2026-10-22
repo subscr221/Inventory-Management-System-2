@@ -350,6 +350,11 @@ export const config = {
   edge: {
     siteName: process.env['EDGE_SITE_NAME'] ?? 'Pilot Gate Site',
   },
+  // Story 3.13 (AC 3, Q4): the single gate identifier at the pilot site. One gate per site, so a
+  // static config value with a default; the edge bootstrap returns it and gate.entered requires it.
+  gate: {
+    id: process.env['GATE_ID'] ?? 'GATE-01',
+  },
   powerSync: {
     url: process.env['POWERSYNC_URL'] ?? '/powersync',
     tokenIssuer: process.env['POWERSYNC_TOKEN_ISSUER'] ?? 'inventory-edge',

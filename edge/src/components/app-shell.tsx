@@ -33,6 +33,7 @@ import { MyRequests } from './my-requests';
 import { StandingGrants } from './standing-grants';
 import { ReportDamage, type ReportDamageProps } from './report-damage';
 import { DamageCases } from './damage-cases';
+import { GateEntry, type GateEntryProps } from './gate-entry/gate-entry';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import { useDeviceClass, type DeviceClass } from '../lib/use-device-class';
@@ -83,6 +84,8 @@ export interface AppShellProps {
   onSubmitIndent?: (input: IndentSubmitInput) => Promise<string>;
   /** Story 8.9: the report-damage capture and its outbox settlement, injected by the edge client. */
   reportDamage?: ReportDamageProps;
+  /** Story 3.13: the gate entry and weighbridge capture, injected by the edge client. */
+  gateCapture?: GateEntryProps;
   /** Story 8.9: the signed-in user, for the damage cases workbench grouping. */
   userId?: string;
   /**
@@ -128,23 +131,26 @@ export interface AppShellProps {
 }
 
 type BaseView =
-  | 'new-requisition'
-  | 'check-stock'
-  | 'my-requests'
-  | 'report-damage'
-  | 'damage-cases'
-  | 'standing-grants';
+| 'new-requisition'
+| 'check-stock'
+| 'my-requests'
+| 'report-damage'
+| 'damage-cases'
+| 'standing-grants'
+| 'gate';
 
 /** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
 const BASE_VIEW_ENTRY: Record<BaseView, string> = {
-  'new-requisition': 'New requisition',
-  'check-stock': 'Check stock',
-  'my-requests': 'My requests',
-  // Story 8.9 (Task 11.1): a deep link without the entry gets the same no-access card.
-  'report-damage': 'Report damage',
-  'damage-cases': 'Damage cases',
-  // Story 4.8: the grants a person holds, assigns and approves.
-  'standing-grants': 'Standing grants',
+'new-requisition': 'New requisition',
+'check-stock': 'Check stock',
+'my-requests': 'My requests',
+// Story 8.9 (Task 11.1): a deep link without the entry gets the same no-access card.
+'report-damage': 'Report damage',
+'damage-cases': 'Damage cases',
+// Story 4.8: the grants a person holds, assigns and approves.
+'standing-grants': 'Standing grants',
+// Story 3.13 (AC 1): gate entry and weighbridge capture.
+'gate': 'Gate entry',
 };
 
 function isBaseView(view: string): view is BaseView {
@@ -194,9 +200,10 @@ export function AppShell({
   onRetry,
   onLoadCrossDockTask,
   onConfirmCrossDock,
-  onSubmitIndent,
-  reportDamage,
-  userId = '',
+onSubmitIndent,
+reportDamage,
+gateCapture,
+userId = '',
   view = 'frontline',
   online = true,
   navigationConfirmed = false,
@@ -369,6 +376,8 @@ export function AppShell({
               <MyRequests online={online} />
             ) : view === 'report-damage' ? (
               <ReportDamage {...(reportDamage ?? {})} />
+            ) : view === 'gate' ? (
+              <GateEntry {...(gateCapture ?? {})} />
             ) : view === 'damage-cases' ? (
               <DamageCases online={online} userId={userId} />
             ) : view === 'standing-grants' ? (

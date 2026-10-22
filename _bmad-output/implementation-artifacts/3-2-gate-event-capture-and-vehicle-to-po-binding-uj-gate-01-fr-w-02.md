@@ -198,6 +198,7 @@ fugu-ultra-20260615
 ### Change Log
 
 - 2026-07-22: Implemented Story 3.2 gate event capture and vehicle-to-PO binding; status moved to review after full validation.
+- 2026-10-21: Story 3.13 annotations. The Dev Notes entry stating `gate_event_id` is rejected and `binding_token` is an unknown field is superseded: `gate_event_id` is accepted in the create body (the server still mints/authoritatively accepts the client id per the review finding above) and `binding_token` is a response field. Task 5.5's `GENERAL_READ_ROLES` comment is stale; the constant now also carries `weighbridge_operator` (Story 3.13 AC 2). No server contract change.
 
 ### Review Findings
 

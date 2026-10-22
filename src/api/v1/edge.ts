@@ -46,6 +46,7 @@ import { REFUSED_CAPTURE_STREAM_TYPE } from '../../compliance/edge-refused-captu
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 import { config } from '../../config/index.js';
+import { getLocationById } from '../../read/projections/location_register.js';
 import type { AuthContext } from '../../middleware/context.js';
 import { getCrossDockTaskById } from '../../read/projections/cross_dock_task.js';
 import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
@@ -362,24 +363,27 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
  * the employee module, so the base hat alone would advertise an always-empty screen.
  */
 const NAVIGATION_CAPABILITIES: ReadonlyArray<{
-  name: string;
-  modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases';
-  functionScope: 'read' | 'write';
+name: string;
+modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases' | 'gate';
+functionScope: 'read' | 'write';
 }> = [
-  { name: 'Dashboard', modules: '*', functionScope: 'read' },
-  { name: 'Frontline', modules: '*', functionScope: 'read' },
-  { name: 'Refused captures', modules: 'refused-captures', functionScope: 'read' },
-  { name: 'New requisition', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'write' },
-  { name: 'Check stock', modules: [EMPLOYEE_MODULE, 'inventory'], functionScope: 'read' },
-  { name: 'My requests', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
-  // Story 8.9 (AC 1, AC 8): every signed-in person reports damage; the workbench shows to the
-  // people who work cases - QC or stores at the site, or a damage DOA authority.
-  { name: 'Report damage', modules: [EMPLOYEE_MODULE], functionScope: 'write' },
-  { name: 'Damage cases', modules: 'damage-cases', functionScope: 'read' },
-  // Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
-  { name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
-  // Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
-  { name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
+{ name: 'Dashboard', modules: '*', functionScope: 'read' },
+{ name: 'Frontline', modules: '*', functionScope: 'read' },
+{ name: 'Refused captures', modules: 'refused-captures', functionScope: 'read' },
+{ name: 'New requisition', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'write' },
+{ name: 'Check stock', modules: [EMPLOYEE_MODULE, 'inventory'], functionScope: 'read' },
+{ name: 'My requests', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
+// Story 8.9 (AC 1, AC 8): every signed-in person reports damage; the workbench shows to the
+// people who work cases - QC or stores at the site, or a damage DOA authority.
+{ name: 'Report damage', modules: [EMPLOYEE_MODULE], functionScope: 'write' },
+{ name: 'Damage cases', modules: 'damage-cases', functionScope: 'read' },
+// Story 3.13 (AC 1): the gate entry and weighbridge capture screen, for the gate officer and
+// weighbridge operator only (a store_assistant holding inventory is not sent it).
+{ name: 'Gate entry', modules: 'gate', functionScope: 'write' },
+// Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
+{ name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
+// Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
+{ name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
 ];
 
 /**
@@ -388,29 +392,45 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
  * visibility rule the list route applies, D11).
  */
 async function hasDamageCaseScope(authContext: AuthContext, siteId: string): Promise<boolean> {
-  const siteHolder = authContext.roles.some(
-    (r) =>
-      (r.module === 'qc' || r.module === 'warehouse' || r.module === '*') &&
-      assignmentCoversLocation(r, siteId),
-  );
-  if (siteHolder) return true;
-  return (await damageAuthorityTypesFor(authContext.userId)).length > 0;
+const siteHolder = authContext.roles.some(
+(r) =>
+(r.module === 'qc' || r.module === 'warehouse' || r.module === '*') &&
+assignmentCoversLocation(r, siteId),
+);
+if (siteHolder) return true;
+return (await damageAuthorityTypesFor(authContext.userId)).length > 0;
+}
+
+/**
+* Story 3.13 (AC 1): the gate entry screen is for the gate officer and weighbridge operator who
+* hold a write assignment covering the operating site. Role-evaluated (not a bare module match) so
+* a store_assistant holding `inventory` is never sent it.
+*/
+function hasGateScope(authContext: AuthContext, siteId: string): boolean {
+return authContext.roles.some(
+(r) =>
+(r.module === 'gate' || r.module === 'weighbridge') &&
+r.functionScope === 'write' &&
+assignmentCoversLocation(r, siteId),
+);
 }
 
 async function navigationFor(authContext: AuthContext, siteId: string): Promise<string[]> {
-  const roles = authContext.roles;
-  const names: string[] = [];
-  for (const { name, modules, functionScope } of NAVIGATION_CAPABILITIES) {
-    let shown: boolean;
-    if (modules === '*') shown = true;
-    else if (modules === 'refused-captures') {
-      shown = hasRefusedCaptureReadScope(
-        roles.filter((r) => r.module !== EMPLOYEE_MODULE),
-        siteId,
-      );
-    } else if (modules === 'damage-cases') {
-      shown = await hasDamageCaseScope(authContext, siteId);
-    } else {
+const roles = authContext.roles;
+const names: string[] = [];
+for (const { name, modules, functionScope } of NAVIGATION_CAPABILITIES) {
+let shown: boolean;
+if (modules === '*') shown = true;
+else if (modules === 'refused-captures') {
+shown = hasRefusedCaptureReadScope(
+roles.filter((r) => r.module !== EMPLOYEE_MODULE),
+siteId,
+);
+} else if (modules === 'damage-cases') {
+shown = await hasDamageCaseScope(authContext, siteId);
+} else if (modules === 'gate') {
+shown = hasGateScope(authContext, siteId);
+} else {
       shown = roles.some(
         (r) =>
           (modules.includes(r.module) || r.module === '*') &&
@@ -449,15 +469,26 @@ const edgeBootstrapBase: RouteHandler = async (req, res) => {
   // Story 1.15 (D7): derived from NAVIGATION_CAPABILITIES against the caller's assignments.
   const navigation = await navigationFor(authContext, assignment.locationId);
 
-  sendJson(res, 200, {
-    user_id: authContext.userId,
-    user_name: authContext.displayName ?? authContext.externalId,
-    site_id: assignment.locationId,
-    site_name: edgeSiteName(),
-    role: assignment.role,
-    navigation,
-    offline_ready: true,
-  });
+// Story 3.13 (AC 3, Q4): gate.entered requires site_code_ext and gate_id. site_code_ext is the
+// operating site's external code (location_register.location_code); gate_id is edge config
+// (default GATE-01; one gate per site at pilot). A wildcard operating assignment resolves no site
+// row, so both fall back to null and the gate screen is simply not advertised.
+const operatingSite =
+  assignment.locationId && assignment.locationId !== '*'
+    ? await getLocationById(assignment.locationId)
+    : null;
+
+sendJson(res, 200, {
+user_id: authContext.userId,
+user_name: authContext.displayName ?? authContext.externalId,
+site_id: assignment.locationId,
+site_name: edgeSiteName(),
+site_code_ext: operatingSite?.location_code ?? null,
+gate_id: config.gate.id,
+role: assignment.role,
+navigation,
+offline_ready: true,
+});
 };
 
 const powerSyncCredentialsBase: RouteHandler = async (req, res) => {

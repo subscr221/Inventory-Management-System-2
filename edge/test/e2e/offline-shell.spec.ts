@@ -12,10 +12,12 @@ async function provision(page: Page) {
           JSON.stringify({
             user_id: '11111111-1111-4111-8111-111111111111',
             user_name: 'Asha Offline Officer',
-            site_id: '55555555-5555-4555-8555-555555555555',
-            site_name: 'North Gate',
-            role: 'gate_officer',
-            navigation: ['Dashboard', 'Frontline'],
+site_id: '55555555-5555-4555-8555-555555555555',
+site_name: 'North Gate',
+site_code_ext: 'site-A',
+gate_id: 'GATE-01',
+role: 'gate_officer',
+navigation: ['Dashboard', 'Frontline'],
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );

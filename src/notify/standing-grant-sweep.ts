@@ -32,8 +32,9 @@ import {
  *
  *   1. grants past their end date are expired through the standing_grant.expired event;
  *   2. every assigner whose pruning interval has run (default 30 days, set per assigner) receives
- *      ONE notification listing their live grants - in_app and web_push (email is a recorded pilot
- *      gap) - each with last-period issued quantity and a "consider revoking" flag when it has not
+ *      notifications listing all their live grants, up to 50 per notification - in_app and web_push
+ *      (email is a recorded pilot gap) - each with last-period issued quantity and a "consider
+ *      revoking" flag when it has not
  *      been used for 90 days. A grant whose assigner's account is disabled moves to the finance
  *      approver's list (D12), so a live grant never loses its reviewer.
  *
@@ -50,14 +51,14 @@ const SYSTEM_ACTOR = {
   location_id: STANDING_GRANT_SYSTEM_ACTOR_ID,
 };
 
-/** Most grants printed in one list; the rest are counted so a very long list stays readable. */
+/** Bound each notification's grant count without omitting any grants from the review. */
 const MAX_LISTED_GRANTS = 50;
 const MS_PER_DAY = 86_400_000;
 
 export interface StandingGrantSweepResult {
   /** Grants flipped to expired in this tick. */
   expired: number;
-  /** Pruning lists sent (one per due recipient). */
+  /** Complete pruning reviews sent (one per due recipient, possibly multiple notifications). */
   listsSent: number;
   /** Items whose work failed and was rolled back to its savepoint (retried next tick). */
   failed: number;
@@ -91,7 +92,7 @@ async function financeRecipientFor(
 }
 
 interface ListedGrant {
-  grant: StandingGrantRow;
+  considerRevoking: boolean;
   text: string;
 }
 
@@ -122,7 +123,7 @@ async function describeGrant(
   if (grant.end_date) parts.push(`ends ${grant.end_date}`);
   if (consider)
     parts.push(`consider revoking (unused ${config.standingGrant.unusedFlagDays}+ days)`);
-  return { grant, text: parts.join(' | ') };
+  return { considerRevoking: consider, text: parts.join(' | ') };
 }
 
 export async function runStandingGrantSweepCycle(
@@ -222,27 +223,34 @@ export async function runStandingGrantSweepCycle(
           setting.last_prune_sent_at ??
           new Date(Date.parse(now) - setting.prune_interval_days * MS_PER_DAY).toISOString();
         const listed: ListedGrant[] = [];
-        for (const grant of grants.slice(0, MAX_LISTED_GRANTS)) {
+        for (const grant of grants) {
           listed.push(await describeGrant(grant, now, today, sinceIso, client));
         }
-        const more = grants.length - listed.length;
-        const flagged = listed.filter((l) => l.text.includes('consider revoking')).length;
+        const flagged = listed.filter((l) => l.considerRevoking).length;
         const header = `${grants.length} live standing approval${grants.length === 1 ? '' : 's'} and limits${flagged > 0 ? `, ${flagged} to consider revoking` : ''}`;
-        await emitNotificationInTransaction(
-          {
-            target: { role: 'standing_grant_assigner', user_id: recipient },
-            event_type: 'standing_grant_review',
-            status_verb: 'review due',
-            object_type: 'standing_grant_list',
-            object_id: recipient,
-            actor_label: header,
-            next_step: `${listed.map((l) => l.text).join('; ')}${more > 0 ? `; and ${more} more` : ''}. Revoke any you no longer need.`,
-            actor: SYSTEM_ACTOR,
-            correlation_id: correlationId,
-            occurred_at: now,
-          },
-          client,
-        );
+        const chunkCount = Math.ceil(listed.length / MAX_LISTED_GRANTS);
+        for (let offset = 0; offset < listed.length; offset += MAX_LISTED_GRANTS) {
+          const chunk = listed.slice(offset, offset + MAX_LISTED_GRANTS);
+          // Each emission gets its own source event, the dispatcher's dedupe identity.
+          await emitNotificationInTransaction(
+            {
+              target: { role: 'standing_grant_assigner', user_id: recipient },
+              event_type: 'standing_grant_review',
+              status_verb: 'review due',
+              object_type: 'standing_grant_list',
+              object_id: recipient,
+              actor_label:
+                chunkCount === 1
+                  ? header
+                  : `${header} (part ${offset / MAX_LISTED_GRANTS + 1} of ${chunkCount})`,
+              next_step: `${chunk.map((l) => l.text).join('; ')}. Revoke any you no longer need.`,
+              actor: SYSTEM_ACTOR,
+              correlation_id: correlationId,
+              occurred_at: now,
+            },
+            client,
+          );
+        }
         await stampPruneSent(recipient, now, client);
         await client.query('RELEASE SAVEPOINT standing_grant_prune');
         result.listsSent += 1;

@@ -3,7 +3,7 @@ baseline_commit: 46579379d781942e06fadf03c7b058849e7bc4cd
 ---
 # Story 4.8: Standing Approvals and Self-Approval Limits
 
-Status: review
+Status: done
 
 Baseline commit: `73d7ea2`
 
@@ -46,7 +46,7 @@ Story 4.9 (no-band fallback) is independent; 4.8 must not change what happens wh
 Table 2 maps each decision to its source.
 
 - **D1 One grant table, two kinds.** A single `standing_grant` read model with `grant_kind IN ('standing_approval','self_approval_limit')`, sharing the `SA-YYYY-NNN` sequence, the assign, finance-approve, revoke and prune lifecycle, and one `standing_grant` event stream (memlog: limits use "the same assign / finance-head approve / review cycle as item grants").
-- **D2 Lifecycle.** Statuses `pending-finance`, `active`, `rejected`, `revoked`, `expired`. Events `standing_grant.assigned`, `standing_grant.finance_approved`, `standing_grant.finance_rejected`, `standing_grant.revoked` (`revoke_reason` in `assigner`, `account_disabled`), `standing_grant.expired`. Only `active` grants take effect. No edit: a change is revoke plus a new grant.
+- **D2 Lifecycle.** Statuses `pending-finance`, `active`, `rejected`, `revoked`, `expired`. Events `standing_grant.assigned`, `standing_grant.finance_approved`, `standing_grant.finance_rejected`, `standing_grant.revoked` (`revoke_reason` in `assigner`, `account_disabled`), `standing_grant.expired`. Only `active` grants take effect. No edit: a change is revoke plus a new grant. User ruling 2026-10-21: while the original assigner is inactive, the site's resolved finance approver or active delegate may revoke as successor, with audit fields `revocation_authority = finance_successor`, `revocation_reason = assigner_account_disabled` and the original assigner's ID. The manual-revocation event category remains `assigner`; the grantee cannot act as successor.
 - **D3 Authority through the DOA registry.** New `transaction_type` values `standing_grant_assign` (seeded for `site_head` from Story 1.16 and `department_head`) and `standing_grant_finance` (seeded for `finance_controller`). Assignment checks `isActiveRoleHolderForEntry` at the grant site; finance approval uses `findRoleHolder` plus `findActiveDelegation` (Story 4.3 pattern). No value bands on these types.
 - **D4 SoD on grants.** Assigner is not the grantee; finance approver is neither assigner nor grantee. A limit is never self-assigned or self-approved.
 - **D5 Scope is SKU or item group.** Exactly one of `scope_sku` or `scope_item_group_id` (FK to Story 2.10's item group). A group grant covers a line when the line's item belongs to that group at raise time. `item_category` is NOT used.
@@ -86,7 +86,7 @@ Table 2: Source of each binding scope decision.
 
 - [x] **Task 2: Events and lifecycle seam (AC 1, 5)**
   - [x] 2.1 `src/events/schema.ts`: five `standing_grant.*` types on a new `standing_grant` stream; optional grant fields on the Story 4.10 line-approval payload.
-  - [x] 2.2 New `src/compliance/standing-grant.ts`: shape checks and appliers inside `persistEvent`; guards D3 and D4; grantee active; end date not past; scope SKU exists or item group active (Story 2.10); only `pending-finance` is finance-decided; only the assigner or the system actor revokes; revoke of a non-live grant is 409 `GRANT_NOT_LIVE`. Transactional notifications via `emitNotificationInTransaction`.
+  - [x] 2.2 New `src/compliance/standing-grant.ts`: shape checks and appliers inside `persistEvent`; guards D3 and D4; grantee active; end date not past; scope SKU exists or item group active (Story 2.10); only `pending-finance` is finance-decided; only the assigner, eligible finance successor under D2, or system actor revokes; revoke of a non-live grant is 409 `GRANT_NOT_LIVE`. Transactional notifications via `emitNotificationInTransaction`.
   - [x] 2.3 Stable error codes: `GRANT_ASSIGNER_NOT_AUTHORIZED`, `GRANT_SELF_ASSIGNMENT`, `GRANT_FINANCE_NOT_RESOLVED`, `GRANT_NOT_PENDING`, `GRANT_NOT_LIVE`, `GRANT_SCOPE_INVALID`, `STANDING_APPROVAL_LAPSED`.
   - [x] 2.4 Seed `standing_grant_assign` (`site_head`, `department_head`) and `standing_grant_finance` (`finance_controller`) in `docs/migration/pilot-mock-extract/world.json` and `deploy/provision/staging-doa-bands.sh`.
 
@@ -120,6 +120,19 @@ Table 2: Source of each binding scope decision.
   - [x] 9.1 New `test/integration/story-4-8.test.ts`, one `describe` per AC (Testing Requirements).
   - [x] 9.2 Rerun `story-4-3`, `story-1-4`, `story-1-15`, `story-8-9`, the 1.16, 2.10, 4.10, 4.11 suites, and `schema-drift`.
   - [x] 9.3 Run `graphify update .`.
+
+### Review Findings
+
+Review date: 2026-10-21. Reviewed `4657937..4f37d32`, grant lifecycle chunk only (21 files). Blind Hunter, Edge Case Hunter and Acceptance Auditor completed. Initial triage: 1 decision-needed, 5 patch, 0 defer, 1 dismissed. User resolved R1 as a patch and approved all six fixes; R1-R6 are implemented and verified. Routing/stores issue and frontend/rehearsal remain separate review chunks; this run does not claim review coverage for them.
+
+Verification: the updated Story 4.8 tests reproduced six failures against the unpatched baseline (33/39 passing), then passed 39/39 with the fixes. The combined Story 4.8, 4.3, 1.4, 1.15, 8.9, 1.16, 2.10, 4.10, 4.11, spine and unit regression run passed 389/389. TypeScript `--noEmit`, scoped ESLint and Prettier checks passed. Tests used a committed snapshot plus the five changed code/test files in disposable containers and an isolated PostgreSQL 18.4 instance; unrelated working-tree changes and the shared test database were excluded. `graphify update .` completed; SQL extraction was unavailable because `tree_sitter_sql` is not installed. The full backend suite and remaining review chunks were not run.
+
+- [x] [Review][Patch] R1 (high): Provide successor revocation authority after the assigner's account is disabled. Implemented the user's ruling: the site's resolved finance approver or active delegate may revoke only while the original assigner is inactive, with an explicit audit reason and original-assigner attribution. The original assigner retains their right while active; the grantee cannot act as successor. Regression covers direct finance, delegation, site denial, reactivation and audit evidence. Original evidence: `src/compliance/standing-grant.ts:563-571`, `src/notify/standing-grant-sweep.ts:204-206` at `4f37d32`.
+- [x] [Review][Patch] R2 (high): Serialize grant assignment with grantee deprovisioning. Assignment now holds a user-row `FOR SHARE` lock from the active check through insertion and commit, so SCIM cannot disable and enumerate before the grant becomes visible. A concurrent PostgreSQL regression proves that disable waits and then revokes the new grant. Original evidence: `src/compliance/standing-grant.ts:343-350`, `src/adapters/iam/scim.ts:197-230` at `4f37d32`.
+- [x] [Review][Patch] R3 (medium): Filter finance authority before limiting the pending inbox. The handler resolves distinct pending sites through the existing authority resolver; SQL applies site and assigner/grantee exclusions before the 100/default or 200/maximum limit. Regression covers 615 newer ineligible grants, site scope, party exclusions, a delegate and an unauthorized caller. Original evidence: `src/api/v1/standing-grants.ts:269-283`, `src/read/projections/standing_grant.ts:353-359` at `4f37d32`.
+- [x] [Review][Patch] R4 (medium): Include all live grants in each pruning review. The sweep evaluates the full population and emits numbered chunks of at most 50 grants within the recipient savepoint before stamping the review sent. Regression covers all 51 grants, the unused 51st grant, cadence, subsequent cycles and dispatch idempotency. Original evidence: `src/notify/standing-grant-sweep.ts:225-246` at `4f37d32`.
+- [x] [Review][Patch] R5 (medium): Notify the authorized finance delegate of a pending grant. Assignment sends deduplicated direct-user notices to eligible delegates who do not already receive finance-role fan-out. Regression covers a delegate without the finance role and avoids duplicate delivery when that delegate also holds it. Original evidence: `src/compliance/standing-grant.ts:191-195`, `src/compliance/standing-grant.ts:423-431`, `src/notify/dispatch.ts:106-121` at `4f37d32`.
+- [x] [Review][Patch] R6 (medium): Reject impossible calendar end dates before persistence. Validation requires an exact UTC calendar-date round trip and rejects year zero. Regression rejects non-leap February 29 and April 31 with `INVALID_PARAMS`, and accepts a real future leap day unchanged. Original evidence: `src/compliance/standing-grant.ts:59-60`, `src/read/projections/standing_grant.ts:105-123` at `4f37d32`.
 
 ## Dev Notes
 
@@ -256,3 +269,4 @@ Changed:
 ### Change Log
 
 - 2026-10-21: Implemented Story 4.8 (grants, per-line routing and issue-time cap check, self-approval within a limit, revoke and auto-revoke, pruning sweep, docs, smoke flow, tests). Status review.
+- 2026-10-21: Completed the grant lifecycle review chunk and applied all six approved fixes, including the finance-successor revocation ruling. Verified 389/389 targeted and prerequisite tests in isolated containers. Marked done and synchronized sprint status per the review workflow; routing/stores issue and frontend/rehearsal remain unreviewed follow-up chunks.

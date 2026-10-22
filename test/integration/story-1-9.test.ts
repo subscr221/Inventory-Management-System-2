@@ -303,6 +303,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/gate-events',
       // Story 3.3: Weighbridge Event Capture and Tolerance Enforcement
       'POST /api/v1/weighbridge-events',
+      // Story 3.13: the weighbridge stamp-status read.
+      'GET /api/v1/weighbridge-events/stamp-status',
       'GET /api/v1/weighbridge-events/:weighbridgeEventId',
       'GET /api/v1/weighbridge-events',
       // Story 3.4: Goods Receiving Against ASN or PO

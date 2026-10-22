@@ -1,6 +1,135 @@
 @import '../src/components/dashboard/dashboard.css';
 @import '../src/components/search/search.css';
 
+/* Gate entry keeps scanner alternatives within the handheld first viewport. */
+#gate-entry .gate-tabs,
+#gate-entry .gate-footer,
+#gate-entry .gate-choice {
+display: flex;
+gap: var(--space-2);
+flex-wrap: wrap;
+}
+
+#gate-entry .gate-stepper,
+#gate-entry .gate-form,
+#gate-entry .gate-step,
+#gate-entry .scan-field {
+display: grid;
+gap: var(--space-2);
+min-width: 0;
+}
+
+#gate-entry .gate-step-list {
+display: flex;
+justify-content: space-between;
+gap: var(--space-2);
+padding: 0;
+margin: var(--space-2) 0;
+list-style: none;
+font-size: var(--caption-size);
+}
+
+#gate-entry .gate-step-list li {
+display: flex;
+flex-direction: column;
+align-items: center;
+gap: var(--space-1);
+}
+
+#gate-entry .gate-step-list [aria-current='step'] {
+color: var(--accent-strong);
+font-weight: var(--label-weight);
+}
+
+#gate-entry .gate-step-number {
+display: inline-grid;
+place-items: center;
+width: 24px;
+height: 24px;
+border: 1px solid var(--border);
+border-radius: var(--rounded-full);
+}
+
+#gate-entry .gate-step {
+margin: 0;
+padding: var(--space-3);
+}
+
+#gate-entry .gate-step legend {
+font-weight: var(--label-weight);
+}
+
+#gate-entry .scan-field-actions {
+display: grid;
+grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+gap: var(--space-2);
+}
+
+#gate-entry .scan-field-actions > :nth-child(3) {
+grid-column: 1 / -1;
+}
+
+#gate-entry .gate-step input:not([type='radio']) {
+width: 100%;
+min-width: 0;
+border: 1px solid var(--border);
+border-radius: var(--rounded);
+padding: var(--space-2) var(--space-3);
+background: var(--surface);
+color: var(--text);
+}
+
+#gate-entry button.primary-action {
+position: static;
+box-shadow: none;
+}
+
+#gate-entry .gate-choice label {
+display: flex;
+align-items: center;
+gap: var(--space-2);
+min-height: var(--control-compact);
+}
+
+#gate-entry button,
+#gate-entry input:not([type='radio']) {
+min-height: var(--control-compact);
+}
+
+#gate-entry .gate-footer p {
+flex-basis: 100%;
+}
+
+@media (min-width: 600px) {
+#gate-entry .gate-stepper {
+grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+align-items: start;
+gap: var(--space-4);
+}
+
+#gate-entry .gate-step-list {
+flex-direction: column;
+gap: var(--space-4);
+font-size: var(--label-size);
+}
+
+#gate-entry .gate-step-list li {
+flex-direction: row;
+}
+}
+
+@media (pointer: coarse) {
+#gate-entry button.primary-action,
+#gate-entry input:not([type='radio']) {
+min-height: var(--touch-primary);
+}
+
+#gate-entry button.secondary-action,
+#gate-entry .gate-choice label {
+min-height: var(--touch-secondary);
+}
+}
+
 /* DESIGN.md (ux-Inventory Management System_2-2026-09-23) default tokens: Zoho-familiar
    structure, dark sidebar, Lato, per-site Ledger Blue accent for CMF-ALIGARH. */
 :root {

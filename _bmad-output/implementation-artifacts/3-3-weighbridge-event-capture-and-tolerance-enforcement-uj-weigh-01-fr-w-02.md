@@ -233,6 +233,7 @@ Modified:
 | Date | Change |
 | --- | --- |
 | 2026-07-22 | Story 3.3 implemented (all 7 tasks). Weighbridge event capture and tolerance enforcement: `weighbridge.recorded` event/projection/seam/API/edge intake; net computed in exact milli-kg, tolerance band enforced in SQL NUMERIC against the Story 2.9 PO line, binding-token/site-mismatch guards, idempotent replay, ERP read-only preserved. Backend 367/367, edge 15/15, spine 6/6; tsc/eslint/build clean. Status -> review. |
+| 2026-10-21 | Story 3.13 annotation. Tolerances are read-only and not editable from the weigh screen. The breach owner resolves through `TOLERANCE_BREACH_OWNER_ROLE` (`unloading_supervisor`) with `warehouse_manager` as escalation; the earlier `receiving_supervisor` wording in the review finding above is the pre-3.13 name. The out-of-tolerance task names the owner by role at the resolved site, never a person. |
 
 ### Review Findings
 

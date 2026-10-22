@@ -23,6 +23,7 @@ import {
   listWeighbridgeEvents,
 } from '../../read/projections/weighbridge_event.js';
 import type { WeighbridgeEvent } from '../../read/projections/weighbridge_event.js';
+import { listExaminations } from '../../read/projections/statutory_examination.js';
 import { TOLERANCE_BREACH_OWNER_ROLE } from '../../compliance/weighbridge.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
@@ -31,6 +32,8 @@ const WEIGHBRIDGE_WRITE_ROLES = ['weighbridge_operator'];
 // Story 3.12: the breach owner reads from the same constant the compliance seam routes to.
 const WEIGHBRIDGE_READ_ROLES = [
   'weighbridge_operator',
+  // Story 3.13 (AC 2): the gate officer reads weighments to show the trucks-on-site state.
+  'gate_officer',
   TOLERANCE_BREACH_OWNER_ROLE,
   'warehouse_manager',
 ];
@@ -81,7 +84,8 @@ function assertRoleAllowed(
         r.module === '*' ||
         r.module === 'gate' ||
         r.module === 'weighbridge') &&
-      r.functionScope === functionScope &&
+      // Story 3.13 (AC 2): a write assignment satisfies a read check (satisfiesFunctionScope).
+      (functionScope === 'read' || r.functionScope === 'write') &&
       allowedRoles.includes(r.role),
   );
   if (!ok)
@@ -335,6 +339,42 @@ const listWeighbridgeEventsBase: RouteHandler = async (req, res) => {
   sendJson(res, 200, { weighbridge_events: rows.map((row) => weighbridgeEventToJson(row)) });
 };
 
+/**
+ * Story 3.13 (AC 4, Q5): the stamp-status read the weigh screen uses to disable the weigh action
+ * when the site weighbridge is out of stamp. Reads the device keys and their stamp state from the
+ * statutory examination register. Registered before the `:weighbridgeEventId` route so
+ * `stamp-status` is never parsed as an event id.
+ */
+const getWeighbridgeStampStatusBase: RouteHandler = async (req, res) => {
+  assertRoleAllowed(req, WEIGHBRIDGE_READ_ROLES, 'read');
+  const url = new URL(req.url ?? '', `http://${req.headers.host ?? 'localhost'}`);
+  const siteCode = url.searchParams.get('site');
+  if (siteCode) {
+    const site = await getLocationByCode(siteCode);
+    if (!site || site.status !== 'active' || site.level !== 'site')
+      throw new AppError(404, 'GATE_SITE_NOT_FOUND', `No active site exists for "${siteCode}"`, {
+        site_code_ext: siteCode,
+      });
+    assertSiteAccess(req, site.location_id, 'read');
+  }
+  const examinations = await listExaminations({
+    examination_type: 'weighbridge_legal_metrology',
+    limit: 500,
+  });
+  sendJson(res, 200, {
+    stamp_status: examinations.map((e) => ({
+      examination_id: e.examination_id,
+      device_key: e.device_key,
+      status: e.status,
+      next_due_date: e.next_due_date,
+    })),
+  });
+};
+
+export const getWeighbridgeStampStatusHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(getWeighbridgeStampStatusBase);
 export const createWeighbridgeEventHandler: RouteHandler = requireRole({
   module: 'inventory',
   functionScope: 'write',

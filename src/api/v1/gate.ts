@@ -30,7 +30,13 @@ const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GATE_WRITE_ROLES = ['gate_officer'];
 const UNMATCHED_READ_ROLES = ['gate_officer', 'unloading_supervisor', 'warehouse_manager'];
-const GENERAL_READ_ROLES = ['gate_officer', 'unloading_supervisor', 'warehouse_manager'];
+// Story 3.13 (AC 2): a weighbridge operator needs to read the open gate entries it weighs out.
+const GENERAL_READ_ROLES = [
+  'gate_officer',
+  'weighbridge_operator',
+  'unloading_supervisor',
+  'warehouse_manager',
+];
 
 interface ActorContext {
   userId: string;
@@ -75,7 +81,9 @@ function assertRoleAllowed(
   const ok = roles.some(
     (r) =>
       (r.module === 'inventory' || r.module === '*' || r.module === 'gate') &&
-      r.functionScope === functionScope &&
+      // Story 3.13 (AC 2): mirror src/middleware/rbac.ts satisfiesFunctionScope - a write
+      // assignment satisfies a read check, so write-only gate roles can list. Write stays exact.
+      (functionScope === 'read' || r.functionScope === 'write') &&
       allowedRoles.includes(r.role),
   );
   if (!ok)
@@ -126,6 +134,8 @@ function gateEventToJson(
     gate_id: row.gate_id,
     gate_officer_id: row.gate_officer_id,
     correlation_id: row.correlation_id,
+    supplier_ref_ext: row.supplier_ref_ext,
+    supplier_name_unlisted: row.supplier_name_unlisted,
     // AD-2 (Review D2): deprecated alias of correlation_id, kept for response-contract stability
     // with edge/PWA consumers. New consumers must read correlation_id; remove via versioned
     // deprecation only.

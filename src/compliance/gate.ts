@@ -87,6 +87,12 @@ export function assertGateEnteredShape(envelope: EventEnvelope): void {
     p['driver_name'] = trimmed(p['driver_name']);
   if (p['challan_number_ext'] !== undefined && p['challan_number_ext'] !== null)
     p['challan_number_ext'] = trimmed(p['challan_number_ext']);
+  // Story 3.13 (AC 3): optional supplier identification. The vendor code, `UNLISTED`, or a typed
+  // name are all accepted; either may be absent. Never fabricate one here.
+  if (p['supplier_ref_ext'] !== undefined && p['supplier_ref_ext'] !== null)
+    p['supplier_ref_ext'] = trimmed(p['supplier_ref_ext']);
+  if (p['supplier_name_unlisted'] !== undefined && p['supplier_name_unlisted'] !== null)
+    p['supplier_name_unlisted'] = trimmed(p['supplier_name_unlisted']);
 }
 
 export function assertGateReversedShape(envelope: EventEnvelope): void {
@@ -137,6 +143,8 @@ export async function applyGateProjection(
         gate_id: p['gate_id'] as string,
         gate_officer_id: p['gate_officer_id'] as string,
         correlation_id: envelope.metadata.correlation_id,
+        supplier_ref_ext: (p['supplier_ref_ext'] as string | null | undefined) ?? null,
+        supplier_name_unlisted: (p['supplier_name_unlisted'] as string | null | undefined) ?? null,
         entered_at: p['entered_at'] as string,
         business_date: localYmd(new Date(p['entered_at'] as string)),
         source_event_id: eventId,

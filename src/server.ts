@@ -121,6 +121,7 @@ import {
 import {
   createWeighbridgeEventHandler,
   getWeighbridgeEventHandler,
+  getWeighbridgeStampStatusHandler,
   listWeighbridgeEventsHandler,
 } from './api/v1/weighbridge.js';
 import { createAsnHandler, getAsnHandler } from './api/v1/asn.js';
@@ -789,6 +790,8 @@ export function createAppRouter(): Router {
 
   // Story 3.3: Weighbridge Event Capture and Tolerance Enforcement
   router.post('/api/v1/weighbridge-events', createWeighbridgeEventHandler);
+  // Story 3.13 (AC 4): must be registered before the :weighbridgeEventId route.
+  router.get('/api/v1/weighbridge-events/stamp-status', getWeighbridgeStampStatusHandler);
   router.get('/api/v1/weighbridge-events/:weighbridgeEventId', getWeighbridgeEventHandler);
   router.get('/api/v1/weighbridge-events', listWeighbridgeEventsHandler);
 

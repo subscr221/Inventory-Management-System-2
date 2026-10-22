@@ -2280,10 +2280,12 @@ CREATE TABLE IF NOT EXISTS gate_event (
   driver_name       TEXT,
   challan_number_ext TEXT,
   challan_photo_ref TEXT NOT NULL,
-  gate_id           TEXT NOT NULL,
-  gate_officer_id   UUID NOT NULL,
-  correlation_id    UUID NOT NULL,
-  entered_at        TIMESTAMPTZ NOT NULL,
+gate_id TEXT NOT NULL,
+gate_officer_id UUID NOT NULL,
+correlation_id UUID NOT NULL,
+supplier_ref_ext TEXT,
+supplier_name_unlisted TEXT,
+entered_at TIMESTAMPTZ NOT NULL,
   business_date     DATE NOT NULL,
   status            TEXT NOT NULL DEFAULT 'open',
   reversal_reason   TEXT,
@@ -2292,9 +2294,12 @@ CREATE TABLE IF NOT EXISTS gate_event (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_gate_event_binding_status CHECK (binding_status IN ('matched', 'unmatched')),
   CONSTRAINT chk_gate_event_status CHECK (status IN ('open', 'reversed')),
-  CONSTRAINT chk_gate_event_vehicle_reg_nonempty CHECK (length(trim(vehicle_reg_ext)) > 0),
-  CONSTRAINT chk_gate_event_challan_photo_nonempty CHECK (length(trim(challan_photo_ref)) > 0)
+CONSTRAINT chk_gate_event_vehicle_reg_nonempty CHECK (length(trim(vehicle_reg_ext)) > 0),
+CONSTRAINT chk_gate_event_challan_photo_nonempty CHECK (length(trim(challan_photo_ref)) > 0)
 );
+
+ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_ref_ext TEXT;
+ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_name_unlisted TEXT;
 
 DO $$
 BEGIN

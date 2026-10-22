@@ -24,6 +24,7 @@ import {
   lastIssueAt,
   lastLimitUseAt,
   listGrants,
+  listPendingFinanceSites,
   monthToDateIssued,
   standingApprovalText,
   upsertPruneInterval,
@@ -268,20 +269,16 @@ export const listGrantsBase: RouteHandler = async (req, res, _params) => {
   } else {
     // Only grants this caller could decide: pending, at a site where they resolve as finance.
     const today = toIstCalendarDate(new Date());
-    const pending = await listGrants({ pendingFinance: true, ...(limit ? { limit } : {}) });
-    grants = [];
-    const bySite = new Map<string, boolean>();
-    for (const g of pending) {
-      if (g.assigner_user_id === authContext.userId || g.grantee_user_id === authContext.userId) {
-        continue;
-      }
-      let ok = bySite.get(g.site_id);
-      if (ok === undefined) {
-        ok = await isResolvedFinanceApprover(authContext.userId, g.site_id, today);
-        bySite.set(g.site_id, ok);
-      }
-      if (ok) grants.push(g);
+    const siteIds: string[] = [];
+    for (const siteId of await listPendingFinanceSites()) {
+      if (await isResolvedFinanceApprover(authContext.userId, siteId, today)) siteIds.push(siteId);
     }
+    grants = await listGrants({
+      pendingFinance: true,
+      siteIds,
+      excludePartyUserId: authContext.userId,
+      ...(limit ? { limit } : {}),
+    });
   }
   sendJson(res, 200, { grants: await Promise.all(grants.map(toView)) });
 };

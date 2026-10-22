@@ -8,6 +8,13 @@ import { assertLotNotHeld } from '../capture/held-lot';
 import { createIndentRaisedEvent } from '../capture/indent';
 import { createDamageCaptureEvents } from '../capture/damage';
 import type { CaptureSettlement, DamageSubmitInput, DamageSubmitResult } from './report-damage';
+import { createGateEnteredEvent, createWeighbridgeRecordedEvent } from '../capture/gate';
+import type {
+  GateSubmitInput,
+  GateSubmitResult,
+  WeighmentSubmitInput,
+  WeighmentSubmitResult,
+} from './gate-entry/gate-entry';
 import { pendingPhotoStore } from '../local-db/pending-photos';
 import { reencodeAsJpeg, uploadPendingPhotos } from '../sync/attachment-uploader';
 import {
@@ -66,12 +73,15 @@ import {
 } from '../session/session';
 
 interface BootstrapResponse {
-  user_id: string;
-  user_name: string;
-  site_id: string;
-  site_name: string;
-  role: string;
-  navigation: string[];
+user_id: string;
+user_name: string;
+site_id: string;
+site_name: string;
+role: string;
+navigation: string[];
+// Story 3.13: the gate capture needs the operating site's external code and the gate id.
+site_code_ext?: string | null;
+gate_id?: string | null;
 }
 
 interface WorklistMeta {
@@ -83,9 +93,12 @@ interface WorklistMeta {
 interface RuntimeState {
   userId: string;
   userName: string;
-  siteId: string;
-  siteName: string;
-  role: string;
+siteId: string;
+siteName: string;
+// Story 3.13: bootstrap-supplied gate context (empty until a live bootstrap confirms it).
+siteCodeExt: string;
+gateId: string;
+role: string;
   navigation: string[];
   pendingCount: number;
   failedCount: number;
@@ -122,9 +135,11 @@ class SiteRefusedError extends Error {}
 const initialState: RuntimeState = {
   userId: '',
   userName: '',
-  siteId: '',
-  siteName: '',
-  role: '',
+siteId: '',
+siteName: '',
+siteCodeExt: '',
+gateId: '',
+role: '',
   navigation: [],
   pendingCount: 0,
   failedCount: 0,
@@ -224,7 +239,8 @@ export function EdgeClient({
     | 'my-requests'
     | 'report-damage'
     | 'damage-cases'
-    | 'standing-grants';
+    | 'standing-grants'
+    | 'gate';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
@@ -485,9 +501,11 @@ export function EdgeClient({
             userId: bootstrap.user_id,
             userName: bootstrap.user_name,
             role: bootstrap.role,
-            siteId: bootstrap.site_id,
-            siteName: bootstrap.site_name,
-            navigation: bootstrap.navigation,
+siteId: bootstrap.site_id,
+siteName: bootstrap.site_name,
+siteCodeExt: bootstrap.site_code_ext ?? '',
+gateId: bootstrap.gate_id ?? '',
+navigation: bootstrap.navigation,
             navigationConfirmed: true,
             firstSyncRequired: false,
             siteRefusal: null,
@@ -778,10 +796,73 @@ export function EdgeClient({
     return db;
   }, [state.siteId, state.userId]);
 
-  const actor = useCallback(
-    () => ({ userId: state.userId, role: state.role, siteId: state.siteId, deviceId: deviceId() }),
-    [state.role, state.siteId, state.userId],
-  );
+const actor = useCallback(
+() => ({ userId: state.userId, role: state.role, siteId: state.siteId, deviceId: deviceId() }),
+[state.role, state.siteId, state.userId],
+);
+
+// --- Story 3.13: gate entry and weighbridge capture -------------------------------------------
+
+const submitGate = useCallback(
+async (input: GateSubmitInput): Promise<GateSubmitResult> => {
+const db = database.current;
+if (!db || !state.userId || !state.siteId) {
+throw new Error(
+'Database or authentication state not available. Ensure the device is synced and logged in.',
+);
+}
+if (signingOut.current) throw new Error('Signing out: capture is closed');
+const occurredAt = new Date().toISOString();
+const photoAttachmentId = crypto.randomUUID();
+await pendingPhotoStore.put({
+attachmentId: photoAttachmentId,
+blob: input.photo,
+contentType: input.photo.type,
+ownerUserId: state.userId,
+createdAt: occurredAt,
+});
+const event = createGateEnteredEvent({
+challanNumberExt: input.challanNumberExt,
+poRefExt: input.poRefExt,
+vehicleRegExt: input.vehicleRegExt,
+driverName: input.driverName,
+supplierRefExt: input.supplierRefExt,
+supplierNameUnlisted: input.supplierNameUnlisted,
+challanPhotoRef: photoAttachmentId,
+siteCodeExt: state.siteCodeExt,
+gateId: state.gateId || 'GATE-01',
+userId: state.userId,
+role: state.role,
+siteId: state.siteId,
+deviceId: deviceId(),
+occurredAt,
+});
+await insertCaptureEvent(db, event);
+await refreshLocalState(db);
+return { eventId: event.event_id, correlationId: event.metadata.correlation_id };
+},
+[refreshLocalState, state.gateId, state.role, state.siteCodeExt, state.siteId, state.userId],
+);
+
+const submitWeighment = useCallback(
+async (input: WeighmentSubmitInput): Promise<WeighmentSubmitResult | { errorCode: string }> => {
+const db = requireReady();
+const event = createWeighbridgeRecordedEvent({
+...input,
+siteCodeExt: state.siteCodeExt,
+deviceId: deviceId(),
+userId: state.userId,
+role: state.role,
+siteId: state.siteId,
+});
+if ('errorCode' in event) return { errorCode: event.errorCode };
+await insertCaptureEvent(db, event);
+await refreshLocalState(db);
+return { eventId: event.event_id };
+},
+[refreshLocalState, requireReady, state.role, state.siteCodeExt, state.siteId, state.userId],
+);
+
 
   const selectWorkOrder = useCallback(async (workOrderId: string) => {
     const db = database.current;
@@ -919,11 +1000,17 @@ export function EdgeClient({
       onLoadCrossDockTask={loadCrossDockTask}
       onConfirmCrossDock={confirmCrossDock}
       onSubmitIndent={submitIndent}
-      reportDamage={{
-        onSubmit: submitDamage,
-        settlementOf: damageSettlement,
-        outboxVersion: `${state.pendingCount}:${state.failedCount}`,
-      }}
+reportDamage={{
+onSubmit: submitDamage,
+settlementOf: damageSettlement,
+outboxVersion: `${state.pendingCount}:${state.failedCount}`,
+}}
+gateCapture={{
+siteCodeExt: state.siteCodeExt,
+gateId: state.gateId,
+onSubmitGate: submitGate,
+onSubmitWeighment: submitWeighment,
+}}
       userId={state.userId}
       onRetry={() => {
         const db = database.current;
