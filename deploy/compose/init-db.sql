@@ -2285,6 +2285,7 @@ gate_officer_id UUID NOT NULL,
 correlation_id UUID NOT NULL,
 supplier_ref_ext TEXT,
 supplier_name_unlisted TEXT,
+supplier_unlisted BOOLEAN NOT NULL DEFAULT false,
 entered_at TIMESTAMPTZ NOT NULL,
   business_date     DATE NOT NULL,
   status            TEXT NOT NULL DEFAULT 'open',
@@ -2298,8 +2299,8 @@ CONSTRAINT chk_gate_event_vehicle_reg_nonempty CHECK (length(trim(vehicle_reg_ex
 CONSTRAINT chk_gate_event_challan_photo_nonempty CHECK (length(trim(challan_photo_ref)) > 0)
 );
 
-ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_ref_ext TEXT;
-ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_name_unlisted TEXT;
+-- Story 3.13 (D3): explicit unlisted-supplier flag; supplier_ref_ext stays null when set.
+ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_unlisted BOOLEAN NOT NULL DEFAULT false;
 
 DO $$
 BEGIN

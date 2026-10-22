@@ -12,6 +12,8 @@ import { createGateEnteredEvent, createWeighbridgeRecordedEvent } from '../captu
 import type {
   GateSubmitInput,
   GateSubmitResult,
+  OpenTruck,
+  StampState,
   WeighmentSubmitInput,
   WeighmentSubmitResult,
 } from './gate-entry/gate-entry';
@@ -73,15 +75,15 @@ import {
 } from '../session/session';
 
 interface BootstrapResponse {
-user_id: string;
-user_name: string;
-site_id: string;
-site_name: string;
-role: string;
-navigation: string[];
-// Story 3.13: the gate capture needs the operating site's external code and the gate id.
-site_code_ext?: string | null;
-gate_id?: string | null;
+  user_id: string;
+  user_name: string;
+  site_id: string;
+  site_name: string;
+  role: string;
+  navigation: string[];
+  // Story 3.13: the gate capture needs the operating site's external code and the gate id.
+  site_code_ext?: string | null;
+  gate_id?: string | null;
 }
 
 interface WorklistMeta {
@@ -93,12 +95,12 @@ interface WorklistMeta {
 interface RuntimeState {
   userId: string;
   userName: string;
-siteId: string;
-siteName: string;
-// Story 3.13: bootstrap-supplied gate context (empty until a live bootstrap confirms it).
-siteCodeExt: string;
-gateId: string;
-role: string;
+  siteId: string;
+  siteName: string;
+  // Story 3.13: bootstrap-supplied gate context (empty until a live bootstrap confirms it).
+  siteCodeExt: string | null;
+  gateId: string | null;
+  role: string;
   navigation: string[];
   pendingCount: number;
   failedCount: number;
@@ -135,11 +137,11 @@ class SiteRefusedError extends Error {}
 const initialState: RuntimeState = {
   userId: '',
   userName: '',
-siteId: '',
-siteName: '',
-siteCodeExt: '',
-gateId: '',
-role: '',
+  siteId: '',
+  siteName: '',
+  siteCodeExt: null,
+  gateId: null,
+  role: '',
   navigation: [],
   pendingCount: 0,
   failedCount: 0,
@@ -501,11 +503,14 @@ export function EdgeClient({
             userId: bootstrap.user_id,
             userName: bootstrap.user_name,
             role: bootstrap.role,
-siteId: bootstrap.site_id,
-siteName: bootstrap.site_name,
-siteCodeExt: bootstrap.site_code_ext ?? '',
-gateId: bootstrap.gate_id ?? '',
-navigation: bootstrap.navigation,
+            siteId: bootstrap.site_id,
+            siteName: bootstrap.site_name,
+            siteCodeExt: bootstrap.site_code_ext?.trim() || null,
+            gateId: bootstrap.gate_id?.trim() || null,
+            // No site on the bootstrap: gate capture is closed, so hide its nav row.
+            navigation: bootstrap.site_code_ext?.trim()
+              ? bootstrap.navigation
+              : bootstrap.navigation.filter((name) => name !== 'Gate entry'),
             navigationConfirmed: true,
             firstSyncRequired: false,
             siteRefusal: null,
@@ -796,73 +801,162 @@ navigation: bootstrap.navigation,
     return db;
   }, [state.siteId, state.userId]);
 
-const actor = useCallback(
-() => ({ userId: state.userId, role: state.role, siteId: state.siteId, deviceId: deviceId() }),
-[state.role, state.siteId, state.userId],
-);
+  const actor = useCallback(
+    () => ({ userId: state.userId, role: state.role, siteId: state.siteId, deviceId: deviceId() }),
+    [state.role, state.siteId, state.userId],
+  );
 
-// --- Story 3.13: gate entry and weighbridge capture -------------------------------------------
+  // --- Story 3.13: gate entry and weighbridge capture -------------------------------------------
 
-const submitGate = useCallback(
-async (input: GateSubmitInput): Promise<GateSubmitResult> => {
-const db = database.current;
-if (!db || !state.userId || !state.siteId) {
-throw new Error(
-'Database or authentication state not available. Ensure the device is synced and logged in.',
-);
-}
-if (signingOut.current) throw new Error('Signing out: capture is closed');
-const occurredAt = new Date().toISOString();
-const photoAttachmentId = crypto.randomUUID();
-await pendingPhotoStore.put({
-attachmentId: photoAttachmentId,
-blob: input.photo,
-contentType: input.photo.type,
-ownerUserId: state.userId,
-createdAt: occurredAt,
-});
-const event = createGateEnteredEvent({
-challanNumberExt: input.challanNumberExt,
-poRefExt: input.poRefExt,
-vehicleRegExt: input.vehicleRegExt,
-driverName: input.driverName,
-supplierRefExt: input.supplierRefExt,
-supplierNameUnlisted: input.supplierNameUnlisted,
-challanPhotoRef: photoAttachmentId,
-siteCodeExt: state.siteCodeExt,
-gateId: state.gateId || 'GATE-01',
-userId: state.userId,
-role: state.role,
-siteId: state.siteId,
-deviceId: deviceId(),
-occurredAt,
-});
-await insertCaptureEvent(db, event);
-await refreshLocalState(db);
-return { eventId: event.event_id, correlationId: event.metadata.correlation_id };
-},
-[refreshLocalState, state.gateId, state.role, state.siteCodeExt, state.siteId, state.userId],
-);
+  // Trucks on site and weighbridge stamp state. Fail soft: offline or any fetch failure leaves the
+  // stamp unknown ("not verified, server will confirm") and the operator types the truck. Only an
+  // explicit server `overdue` blocks weighing (AC 9).
+  const [gateLookups, setGateLookups] = useState<{
+    openTrucks: OpenTruck[];
+    stamp: StampState | null;
+    stampUnverified: boolean;
+  }>({ openTrucks: [], stamp: null, stampUnverified: false });
+  useEffect(() => {
+    const site = state.siteCodeExt;
+    if (!site || !state.online) {
+      setGateLookups({ openTrucks: [], stamp: null, stampUnverified: Boolean(site) });
+      return;
+    }
+    let cancelled = false;
+    const query = `site=${encodeURIComponent(site)}`;
+    void (async () => {
+      let openTrucks: OpenTruck[] = [];
+      let stamp: StampState | null = null;
+      let stampUnverified = false;
+      try {
+        const res = await authorizedFetch(`/api/v1/gate-events?${query}&status=open`, {
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const body = (await res.json()) as { gate_events?: Array<Record<string, unknown>> };
+          openTrucks = (body.gate_events ?? []).flatMap((row) => {
+            const correlationId =
+              typeof row['correlation_id'] === 'string' ? row['correlation_id'] : '';
+            const poRef = typeof row['po_ref_ext'] === 'string' ? row['po_ref_ext'] : '';
+            if (!correlationId) return [];
+            return [
+              {
+                correlationId,
+                vehicleRegExt:
+                  typeof row['vehicle_reg_ext'] === 'string' ? row['vehicle_reg_ext'] : '',
+                poRefExt: poRef === 'UNKNOWN' ? '' : poRef,
+                lineNo: 1,
+                status: typeof row['binding_status'] === 'string' ? row['binding_status'] : '',
+              },
+            ];
+          });
+        }
+      } catch {
+        /* fail soft: the operator types the truck */
+      }
+      try {
+        const res = await authorizedFetch(`/api/v1/weighbridge-events/stamp-status?${query}`, {
+          credentials: 'include',
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const body = (await res.json()) as {
+          stamp_status?: Array<{ device_key?: string; status?: string; next_due_date?: string }>;
+        };
+        const rows = (body.stamp_status ?? []).filter(
+          (r) => r.status === 'overdue' || r.status === 'compliant',
+        );
+        const pick = rows.find((r) => r.status === 'overdue') ?? rows[0];
+        if (pick) {
+          stamp = {
+            deviceKey: pick.device_key ?? '',
+            status: pick.status as 'compliant' | 'overdue',
+            nextDueDate: pick.next_due_date ?? '',
+          };
+        } else {
+          stampUnverified = true;
+        }
+      } catch {
+        stampUnverified = true;
+      }
+      if (!cancelled) setGateLookups({ openTrucks, stamp, stampUnverified });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // pendingCount: refresh the truck list after the outbox changes (a gate entry or weighment).
+  }, [state.siteCodeExt, state.online, state.pendingCount]);
 
-const submitWeighment = useCallback(
-async (input: WeighmentSubmitInput): Promise<WeighmentSubmitResult | { errorCode: string }> => {
-const db = requireReady();
-const event = createWeighbridgeRecordedEvent({
-...input,
-siteCodeExt: state.siteCodeExt,
-deviceId: deviceId(),
-userId: state.userId,
-role: state.role,
-siteId: state.siteId,
-});
-if ('errorCode' in event) return { errorCode: event.errorCode };
-await insertCaptureEvent(db, event);
-await refreshLocalState(db);
-return { eventId: event.event_id };
-},
-[refreshLocalState, requireReady, state.role, state.siteCodeExt, state.siteId, state.userId],
-);
+  const submitGate = useCallback(
+    async (input: GateSubmitInput): Promise<GateSubmitResult> => {
+      const db = database.current;
+      if (!db || !state.userId || !state.siteId) {
+        throw new Error(
+          'Database or authentication state not available. Ensure the device is synced and logged in.',
+        );
+      }
+      if (signingOut.current) throw new Error('Signing out: capture is closed');
+      if (!state.siteCodeExt || !state.gateId) {
+        throw new Error('No site or gate is assigned to this device; gate capture is closed.');
+      }
+      const occurredAt = new Date().toISOString();
+      const photoAttachmentId = crypto.randomUUID();
+      await pendingPhotoStore.put({
+        attachmentId: photoAttachmentId,
+        blob: input.photo,
+        contentType: input.photo.type,
+        ownerUserId: state.userId,
+        createdAt: occurredAt,
+      });
+      const event = createGateEnteredEvent({
+        challanNumberExt: input.challanNumberExt,
+        poRefExt: input.poRefExt,
+        vehicleRegExt: input.vehicleRegExt,
+        driverName: input.driverName,
+        supplierRefExt: input.supplierRefExt,
+        supplierUnlisted: input.supplierUnlisted,
+        supplierNameUnlisted: input.supplierNameUnlisted,
+        challanPhotoRef: photoAttachmentId,
+        siteCodeExt: state.siteCodeExt,
+        gateId: state.gateId,
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+        deviceId: deviceId(),
+        occurredAt,
+      });
+      try {
+        await insertCaptureEvent(db, event);
+      } catch (error) {
+        // No event row will reference the blob, so drop it rather than leave an orphan.
+        await pendingPhotoStore.remove(photoAttachmentId).catch(() => undefined);
+        throw error;
+      }
+      await refreshLocalState(db);
+      return { eventId: event.event_id, correlationId: event.metadata.correlation_id };
+    },
+    [refreshLocalState, state.gateId, state.role, state.siteCodeExt, state.siteId, state.userId],
+  );
 
+  const submitWeighment = useCallback(
+    async (input: WeighmentSubmitInput): Promise<WeighmentSubmitResult | { errorCode: string }> => {
+      const db = requireReady();
+      if (!state.siteCodeExt)
+        throw new Error('No site is assigned to this device; weighing is closed.');
+      const event = createWeighbridgeRecordedEvent({
+        ...input,
+        siteCodeExt: state.siteCodeExt,
+        deviceId: deviceId(),
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+      });
+      if ('errorCode' in event) return { errorCode: event.errorCode };
+      await insertCaptureEvent(db, event);
+      await refreshLocalState(db);
+      return { eventId: event.event_id };
+    },
+    [refreshLocalState, requireReady, state.role, state.siteCodeExt, state.siteId, state.userId],
+  );
 
   const selectWorkOrder = useCallback(async (workOrderId: string) => {
     const db = database.current;
@@ -1000,17 +1094,20 @@ return { eventId: event.event_id };
       onLoadCrossDockTask={loadCrossDockTask}
       onConfirmCrossDock={confirmCrossDock}
       onSubmitIndent={submitIndent}
-reportDamage={{
-onSubmit: submitDamage,
-settlementOf: damageSettlement,
-outboxVersion: `${state.pendingCount}:${state.failedCount}`,
-}}
-gateCapture={{
-siteCodeExt: state.siteCodeExt,
-gateId: state.gateId,
-onSubmitGate: submitGate,
-onSubmitWeighment: submitWeighment,
-}}
+      reportDamage={{
+        onSubmit: submitDamage,
+        settlementOf: damageSettlement,
+        outboxVersion: `${state.pendingCount}:${state.failedCount}`,
+      }}
+      gateCapture={{
+        siteCodeExt: state.siteCodeExt,
+        gateId: state.gateId,
+        openTrucks: gateLookups.openTrucks,
+        stamp: gateLookups.stamp,
+        stampUnverified: gateLookups.stampUnverified,
+        onSubmitGate: submitGate,
+        onSubmitWeighment: submitWeighment,
+      }}
       userId={state.userId}
       onRetry={() => {
         const db = database.current;

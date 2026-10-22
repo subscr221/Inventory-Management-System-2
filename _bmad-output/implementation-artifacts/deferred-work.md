@@ -1340,3 +1340,8 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - Gate challan photos are stored in `pendingPhotoStore` and ride the existing attachment PUT path; there is no dedicated gate-photo document route, so the gate event's `challan_photo_ref` is the attachment id.
 - The gate e2e and axe specs (`edge/test/e2e/gate-entry.spec.ts`, `edge/test/accessibility/gate-accessibility.spec.ts`) are authored but could not be executed in this environment: the existing e2e suite fails identically at bootstrap/session setup (all 5 report-damage specs fail the same way), so the Playwright/axe environment is pre-existing broken here. They must be run in CI or a configured device browser.
 
+
+## Deferred from: code review of story-3.13 (2026-10-22)
+
+- Typed or rejected challans bind `po_ref_ext` `UNKNOWN` and the weigh tab cannot rebind them later. Resolves with the offline PO and ASN bucket (Q1, Q2).
+- `test/integration/story-3-13.test.ts` teardown truncates a long table list with CASCADE on shared state. Matches the existing integration convention; revisit if suites move to parallel databases.

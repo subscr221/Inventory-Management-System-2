@@ -43,6 +43,9 @@ export function ScanField({
   const [announcement, setAnnouncement] = useState('');
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState('');
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const cancelRef = useRef(false);
   const canUseCamera =
     cameraAvailable === undefined
       ? typeof window !== 'undefined' &&
@@ -64,27 +67,59 @@ export function ScanField({
     [onChange, onScan],
   );
 
+  const stopCamera = useCallback(() => {
+    cancelRef.current = true;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
+  // Release the camera when the field unmounts mid-scan.
+  useEffect(() => stopCamera, [stopCamera]);
+
   async function scanWithCamera(): Promise<void> {
     setCameraError('');
-    const detectorCtor = (window as unknown as { BarcodeDetector?: new (o?: unknown) => { detect: (source: ImageBitmapSource) => Promise<Array<{ rawValue: string }>> } })
-      .BarcodeDetector;
-    if (!detectorCtor) {
+    const detectorCtor = (
+      window as unknown as {
+        BarcodeDetector?: new (o?: unknown) => {
+          detect: (source: ImageBitmapSource) => Promise<Array<{ rawValue: string }>>;
+        };
+      }
+    ).BarcodeDetector;
+    if (!detectorCtor || !navigator.mediaDevices?.getUserMedia) {
       setCameraError(t('gate.cameraUnavailable'));
       return;
     }
+    cancelRef.current = false;
+    setCameraOpen(true);
     try {
-      setCameraOpen(true);
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      const video = document.createElement('video');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+      });
+      if (cancelRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      streamRef.current = stream;
+      const video = videoRef.current;
+      if (!video) throw new Error('no viewfinder');
       video.srcObject = stream;
       await video.play();
       const detector = new detectorCtor();
-      const results = await detector.detect(video);
-      stream.getTracks().forEach((track) => track.stop());
-      setCameraOpen(false);
-      const first = results[0];
-      if (first) accept(first.rawValue);
+      // Poll frames until a code is found, the officer cancels, or the field unmounts.
+      while (!cancelRef.current) {
+        const results = await detector.detect(video);
+        const first = results[0];
+        if (first && normalizeScanValue(first.rawValue)) {
+          stopCamera();
+          setCameraOpen(false);
+          accept(first.rawValue);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
     } catch {
+      stopCamera();
       setCameraOpen(false);
       setCameraError(t('gate.cameraUnavailable'));
     }
@@ -100,7 +135,6 @@ export function ScanField({
         name={id}
         autoComplete="off"
         autoCapitalize="characters"
-        maxLength={64}
         value={value}
         placeholder={placeholder}
         disabled={disabled}
@@ -138,13 +172,28 @@ export function ScanField({
           <button
             type="button"
             className="secondary-action"
-            disabled={disabled || cameraOpen}
-            onClick={() => void scanWithCamera()}
+            disabled={disabled}
+            onClick={() => {
+              if (cameraOpen) {
+                stopCamera();
+                setCameraOpen(false);
+              } else {
+                void scanWithCamera();
+              }
+            }}
           >
-            {t('gate.scanWithCamera')}
+            {cameraOpen ? t('gate.stopCamera') : t('gate.scanWithCamera')}
           </button>
         ) : null}
       </div>
+      <video
+        ref={videoRef}
+        className="scan-viewfinder"
+        muted
+        playsInline
+        hidden={!cameraOpen}
+        aria-label={t('gate.viewfinder')}
+      />
       {cameraError ? (
         <p className="base-hint" role="status">
           {cameraError}

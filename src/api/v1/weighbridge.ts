@@ -28,6 +28,8 @@ import { TOLERANCE_BREACH_OWNER_ROLE } from '../../compliance/weighbridge.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const STAMP_STATUS_LIMIT = 500;
+const WEIGHBRIDGE_MODULES = ['inventory', 'gate', 'weighbridge'];
 const WEIGHBRIDGE_WRITE_ROLES = ['weighbridge_operator'];
 // Story 3.12: the breach owner reads from the same constant the compliance seam routes to.
 const WEIGHBRIDGE_READ_ROLES = [
@@ -356,12 +358,37 @@ const getWeighbridgeStampStatusBase: RouteHandler = async (req, res) => {
         site_code_ext: siteCode,
       });
     assertSiteAccess(req, site.location_id, 'read');
+  } else {
+    // No ?site=: the caller must still hold a read grant on at least one site. The statutory
+    // register is keyed by asset/device, not by site, so rows cannot be narrowed further.
+    const authContext = getAuthContext(req);
+    if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+    const scopes = ['inventory', 'gate', 'weighbridge'].map((m) =>
+      permittedLocationsForModule(authContext.roles, m),
+    );
+    if (!scopes.some((s) => s.wildcard || s.locations.size > 0))
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        'No read assignment grants access to any site',
+      );
   }
   const examinations = await listExaminations({
     examination_type: 'weighbridge_legal_metrology',
-    limit: 500,
+    limit: STAMP_STATUS_LIMIT,
   });
+  // listExaminations caps a page at 500, so probe the next row to tell a full page from a cut one.
+  const truncated =
+    examinations.length === STAMP_STATUS_LIMIT &&
+    (
+      await listExaminations({
+        examination_type: 'weighbridge_legal_metrology',
+        limit: 1,
+        offset: STAMP_STATUS_LIMIT,
+      })
+    ).length > 0;
   sendJson(res, 200, {
+    truncated,
     stamp_status: examinations.map((e) => ({
       examination_id: e.examination_id,
       device_key: e.device_key,
@@ -372,18 +399,18 @@ const getWeighbridgeStampStatusBase: RouteHandler = async (req, res) => {
 };
 
 export const getWeighbridgeStampStatusHandler: RouteHandler = requireRole({
-  module: 'inventory',
+  module: WEIGHBRIDGE_MODULES,
   functionScope: 'read',
 })(getWeighbridgeStampStatusBase);
 export const createWeighbridgeEventHandler: RouteHandler = requireRole({
-  module: 'inventory',
+  module: WEIGHBRIDGE_MODULES,
   functionScope: 'write',
 })(createWeighbridgeEventBase);
 export const getWeighbridgeEventHandler: RouteHandler = requireRole({
-  module: 'inventory',
+  module: WEIGHBRIDGE_MODULES,
   functionScope: 'read',
 })(getWeighbridgeEventBase);
 export const listWeighbridgeEventsHandler: RouteHandler = requireRole({
-  module: 'inventory',
+  module: WEIGHBRIDGE_MODULES,
   functionScope: 'read',
 })(listWeighbridgeEventsBase);

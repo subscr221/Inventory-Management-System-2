@@ -3,7 +3,7 @@ baseline_commit: 4f37d32
 ---
 # Story 3.13: Gate Entry and Weighbridge Capture Screen
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -80,6 +80,33 @@ so that a PO-backed truck gets a binding token and an accepted weighment from th
 - [x] 7.4 Access matrix (`access-matrix-frontline-draft-2026-07-11.md:195-196`): record the gate read for `gate_officer` and `weighbridge_operator` introduced by Task 1. The receiving arrivals read row belongs to Story 3.14.
 - [x] 7.5 Log deferred items in `_bmad-output/implementation-artifacts/deferred-work.md`: OCR plate pre-fill, webcam capture on desktop, indicator link protocol, offline PO and ASN bucket (Q1 if the owner keeps it deferred).
 
+### Review Findings
+
+Code review 2026-10-22 (Blind Hunter, Edge Case Hunter, Acceptance Auditor), scoped to the 30 File List files. Static read only; e2e and axe not executed.
+
+- [x] [Review][Patch] Trucks on site list and stamp state never reach the weigh tab (resolved D1, option 1): wire `GET /gate-events` and `GET /weighbridge-events/stamp-status` into `gateCapture` using the bootstrap `site_code_ext` as site key; fail-soft "not verified" state on offline or fetch failure, only an explicit server overdue blocks; land the stamp-status site filter and `operatingSite` level patches first; keep AC 7 and AC 9 as written [edge/src/components/edge-client.tsx:1008]
+- [x] [Review][Patch] Pilot role model versus module-gated reads (resolved D2, option 3): gate and weighbridge reads (`hasGateScope`, ASN GET, nav row, stamp-status) accept module `inventory` OR `gate`/`weighbridge`; also seed dedicated `gate`/`weighbridge` modules onto pilot roles (migration plus staging account update) so inventory-only is no longer the only path. Prerequisite for the D1 wiring [src/api/v1/edge.ts, src/api/v1/weighbridge.ts]
+- [x] [Review][Patch] `supplier_ref_ext` for unlisted suppliers (resolved D3, option 1): send null plus a boolean flag (`supplier_unlisted: true`) instead of the `UNLISTED` sentinel; add the flag to the `gate.entered` envelope, `assertGateEnteredShape` in `src/compliance/gate.ts`, and the client; align client unit tests [edge/src/components/gate-entry/gate-entry.tsx]
+- [x] [Review][Patch] Weighbridge-only operators and `POST /gate-events` (resolved D4, option 2): widen the server write role so the weighbridge operator role may also POST `gate-events`; keep the gate stepper visible; update RBAC tests and the role matrix; note the segregation-of-duties change (gate entry no longer gate_officer only) in the story Dev Notes for owner awareness [src/api/v1/edge.ts, src/events/store.ts]
+- [x] [Review][Patch] Tolerance breach banner and `unloading_supervisor` routing absent from the weigh tab (resolved D5, option 1): call `isToleranceBreach` (BigInt milli-kg) in `WeighbridgeTab`, show the breach banner, route to `unloading_supervisor` per AC 8; add component and e2e tests [edge/src/components/gate-entry/]
+- [x] [Review][Patch] Empty or null `siteCodeExt` and invented `GATE-01` fallback let the device emit events the server rejects permanently after the photo is stored; guard, disable submit, hide nav row when bootstrap `site_code_ext` is null [edge/src/components/edge-client.tsx:1008]
+- [x] [Review][Patch] `operatingSite` takes `location_code` from any location level; require `level === 'site'` [src/api/v1/edge.ts]
+- [x] [Review][Patch] Stamp-status ignores `?site=` for filtering and skips `assertSiteAccess` when absent; 500-row cap is silent [src/api/v1/weighbridge.ts:348]
+- [x] [Review][Patch] ASN `assertSiteAccess` unions receiving, gate and weighbridge scopes across assignments, allowing cross-site reads; evaluate per assignment and add a negative test [src/api/v1/asn.ts]
+- [x] [Review][Patch] `WeighbridgeTab` lacks in-flight guard, catch on `void submit()`, reset after `done`, `signingOut` check, and validation for `lineNo` (0, NaN, negative), empty `poRef`, zero gross or tare; every failure shows `gate.weighInvalid` [edge/src/components/gate-entry/gate-entry.tsx]
+- [x] [Review][Patch] "Read from weighbridge indicator" button is enabled but inert; disable with a visible reason (AC 8) [edge/src/components/gate-entry/gate-entry.tsx]
+- [x] [Review][Patch] Weight bounds: unbounded digits overflow NUMERIC; `isToleranceBreach` uses float math and unvalidated tolerance, use BigInt milli-kg [edge/src/capture/gate.ts]
+- [x] [Review][Patch] `changeChallan` leaves `supplierMode` and `supplierName` stale; `scanChallan` can apply a stale response or set state after unmount; PO compare is case-sensitive; "Look up code" clears PO state [edge/src/components/gate-entry/gate-entry.tsx]
+- [x] [Review][Patch] `ScanField`: camera stream leaks on failure and unmount, single `detect()` frame with no viewfinder, `maxLength={64}` truncates scans silently, `matchMedia` and `addEventListener` unguarded [edge/src/components/scan-field.tsx]
+- [x] [Review][Patch] Photo checks accept 0-byte files and empty MIME type, no size cap; orphan blob when event insert fails; confirm gate photos drain via the attachment PUT path (AC 6) [edge/src/components/edge-client.tsx]
+- [x] [Review][Patch] `assertGateEnteredShape` accepts empty or whitespace `supplier_ref_ext`, both-or-neither of ref and name, and has no length cap [src/compliance/gate.ts]
+- [x] [Review][Patch] e2e stub does not intercept `/api/v1/asn/*` or PO lookup so `Matched CH-2026-01` cannot appear; `getByLabel('PO reference')` targets a non-input; a11y keyboard test Tab order reaches "Scan again" before "Accept" [edge/test/fixtures/gate-stub.ts, edge/test/e2e/gate-entry.spec.ts, edge/test/accessibility/gate-accessibility.spec.ts]
+- [x] [Review][Patch] Missing tests: overdue stamp (423 `WEIGHBRIDGE_OUT_OF_STAMP`), stamp-status absent `site` and cross-site, weighbridge operator and `store_assistant` nav, `gate_officer` read of weighment events; "ignores obsolete responses" unit test passes for the wrong reason [test/integration/story-3-13.test.ts, edge/test/unit/gate-capture.test.ts]
+- [x] [Review][Patch] Indentation lost in `edge.ts`, `edge-client.tsx`, `app-shell.tsx`, `gate-entry.tsx`, `gate.ts`, `init-db.sql`, `globals.css` and tests; run prettier on touched files
+- [x] [Review][Patch] Incomplete ARIA tab pattern (no tabpanel, aria-controls, arrow keys); dead code `isKilogram`, i18n key `gate.supplierRefLabel`, unused CSS classes; supplier columns declared in both CREATE TABLE and ALTER [edge/src/components/gate-entry/gate-entry.tsx, deploy/compose/init-db.sql, src/read/projections/gate_event.sql]
+- [x] [Review][Defer] Typed or rejected challans bind `po_ref_ext` `UNKNOWN` with no later rebinding [edge/src/capture/gate.ts] - deferred, documented Q1 and Q2 follow-up (offline PO and ASN bucket)
+- [x] [Review][Defer] Integration teardown truncates a long table list with CASCADE on shared state [test/integration/story-3-13.test.ts] - deferred, matches existing integration convention
+
 ## Dev Notes
 
 ### Binding scope decisions (from sprint-change-proposal-2026-10-21, defaults in force)
@@ -90,6 +117,10 @@ so that a PO-backed truck gets a binding token and an accepted weighment from th
 - Q4 (`site_code_ext` and `gate_id`): bootstrap returns `site_code_ext` from `location_register` and `gate_id` from edge config (default `GATE-01`). One gate per site at pilot.
 - Q5 (indicator AUTO link): post-pilot. Every pilot reading is `MANUAL`; the button is disabled with the reason.
 - The story is XL. If it must be split, cut along the server contract seam (3.13a: Tasks 1 and the server half of 2) and the screen (3.13b: Tasks 2 to 6). Do not cut gate versus weighbridge.
+
+### Segregation of duties change (review decision D4)
+
+- Gate entry is no longer gate_officer only: the weighbridge operator role may also POST `gate-events`, so a weighbridge-only site can record arrivals. Reverse stays gate_officer only. Owner awareness item for the role matrix.
 
 ### Role gate precedent (AC 2)
 

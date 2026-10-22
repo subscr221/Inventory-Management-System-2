@@ -560,6 +560,8 @@ describe('Story 1.15 Employee Base Role', () => {
       'My requests',
       // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
       'Report damage',
+      // Story 3.13: the gate officer's operating role opens the gate entry screen.
+      'Gate entry',
       // Story 4.8: every signed-in person can open the grants they hold.
       'Standing grants',
     ]);

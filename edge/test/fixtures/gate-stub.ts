@@ -11,19 +11,31 @@ export const GATE_USER_ID = '66666666-6666-4666-8666-666666666666';
 export const GATE_ROLE = 'gate_officer';
 export const GATE_NAVIGATION = ['Dashboard', 'Frontline', 'Gate entry'];
 
+export const OPEN_TRUCK_TOKEN = '88888888-8888-4888-8888-888888888888';
+
 export interface GateStubOptions {
   navigation?: string[];
   role?: string;
-  siteCodeExt?: string;
+  /** Pass null for a device whose bootstrap carries no site code. */
+  siteCodeExt?: string | null;
   gateId?: string;
+  /** Stamp-status answer: compliant (default), overdue, or fail (the request throws). */
+  stamp?: 'compliant' | 'overdue' | 'fail';
+  /** The PO line ordered quantity served by the PO lookup (kg). */
+  orderedQty?: number;
+  /** Serve one open truck from GET /gate-events so the weigh form prefills. */
+  openTruck?: boolean;
 }
 
 export async function provisionGate(page: Page, options: GateStubOptions = {}) {
   const config = {
     navigation: options.navigation ?? GATE_NAVIGATION,
     role: options.role ?? GATE_ROLE,
-    siteCodeExt: options.siteCodeExt ?? 'site-A',
+    siteCodeExt: options.siteCodeExt === undefined ? 'site-A' : options.siteCodeExt,
     gateId: options.gateId ?? 'GATE-01',
+    stamp: options.stamp ?? 'compliant',
+    orderedQty: options.orderedQty ?? 1000,
+    openTruck: options.openTruck ?? false,
   };
   await page.addInitScript((cfg) => {
     const json = (body: unknown, status = 200) =>
@@ -52,6 +64,49 @@ export async function provisionGate(page: Page, options: GateStubOptions = {}) {
         return json({ endpoint: 'http://127.0.0.1:1', token: 'test-token' });
       }
       if (path.pathname === '/api/v1/edge/events') throw new TypeError('offline');
+      // The ASN door answers 404 so the challan code falls through to the PO lookup.
+      if (path.pathname.startsWith('/api/v1/asn/')) return json({ error: 'not_found' }, 404);
+      if (path.pathname.startsWith('/api/v1/erp/purchase-orders/')) {
+        const po = decodeURIComponent(path.pathname.split('/').pop() ?? '');
+        return json({
+          po_number_ext: po,
+          supplier_ref_ext: 'SUP-1',
+          lines: [
+            {
+              line_no: 1,
+              ordered_qty: String(cfg.orderedQty),
+              over_receipt_tolerance_pct: '5',
+              under_receipt_tolerance_pct: '5',
+            },
+          ],
+        });
+      }
+      if (path.pathname === '/api/v1/gate-events') {
+        return json({
+          gate_events: cfg.openTruck
+            ? [
+                {
+                  correlation_id: '88888888-8888-4888-8888-888888888888',
+                  po_ref_ext: 'PO-2026-01',
+                  vehicle_reg_ext: 'KA01AB1234',
+                  binding_status: 'open',
+                },
+              ]
+            : [],
+        });
+      }
+      if (path.pathname === '/api/v1/weighbridge-events/stamp-status') {
+        if (cfg.stamp === 'fail') throw new TypeError('offline');
+        return json({
+          stamp_status: [
+            {
+              device_key: 'WB-01',
+              status: cfg.stamp,
+              next_due_date: cfg.stamp === 'overdue' ? '2026-01-01' : '2027-01-01',
+            },
+          ],
+        });
+      }
       if (path.pathname === '/api/v1/indents') {
         if (!navigator.onLine) throw new TypeError('offline');
         return json({ indents: [] });
@@ -65,5 +120,7 @@ export async function provisionGate(page: Page, options: GateStubOptions = {}) {
 export const PHOTO_FILE = {
   name: 'challan.jpg',
   mimeType: 'image/jpeg',
-  buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0xff, 0xd9]),
+  buffer: Buffer.from([
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0xff, 0xd9,
+  ]),
 };

@@ -16,6 +16,7 @@ export interface GateEvent {
   correlation_id: string;
   supplier_ref_ext: string | null;
   supplier_name_unlisted: string | null;
+  supplier_unlisted: boolean;
   entered_at: string;
   business_date: string;
   status: 'open' | 'reversed';
@@ -40,6 +41,7 @@ export interface UpsertGateEventInput {
   correlation_id: string;
   supplier_ref_ext?: string | null;
   supplier_name_unlisted?: string | null;
+  supplier_unlisted?: boolean;
   entered_at: string;
   business_date: string;
   source_event_id: string;
@@ -75,7 +77,7 @@ export function numOrNull(value: unknown): number | null {
 
 const GATE_EVENT_COLUMNS = `gate_event_id, site_id, site_code_ext, po_ref_ext, binding_status,
        vehicle_reg_ext, driver_name, challan_number_ext, challan_photo_ref, gate_id,
-       gate_officer_id, correlation_id, supplier_ref_ext, supplier_name_unlisted,
+       gate_officer_id, correlation_id, supplier_ref_ext, supplier_name_unlisted, supplier_unlisted,
        entered_at, to_char(business_date, 'YYYY-MM-DD') AS business_date,
        status, reversal_reason, source_event_id, created_at, updated_at`;
 
@@ -95,6 +97,7 @@ function mapRow(row: Record<string, unknown>): GateEvent {
     correlation_id: row['correlation_id'] as string,
     supplier_ref_ext: (row['supplier_ref_ext'] as string | null) ?? null,
     supplier_name_unlisted: (row['supplier_name_unlisted'] as string | null) ?? null,
+    supplier_unlisted: row['supplier_unlisted'] === true,
     entered_at: ts(row['entered_at']),
     business_date: row['business_date'] as string,
     status: row['status'] as GateEvent['status'],
@@ -164,8 +167,8 @@ export async function upsertGateEvent(
     `INSERT INTO gate_event
        (gate_event_id, site_id, site_code_ext, po_ref_ext, binding_status, vehicle_reg_ext,
         driver_name, challan_number_ext, challan_photo_ref, gate_id, gate_officer_id,
-        correlation_id, supplier_ref_ext, supplier_name_unlisted, entered_at, business_date, status, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'open', $17)
+        correlation_id, supplier_ref_ext, supplier_name_unlisted, supplier_unlisted, entered_at, business_date, status, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'open', $18)
      ON CONFLICT (gate_event_id) DO UPDATE SET
        site_id = EXCLUDED.site_id,
        site_code_ext = EXCLUDED.site_code_ext,
@@ -180,6 +183,7 @@ export async function upsertGateEvent(
        correlation_id = EXCLUDED.correlation_id,
        supplier_ref_ext = EXCLUDED.supplier_ref_ext,
        supplier_name_unlisted = EXCLUDED.supplier_name_unlisted,
+       supplier_unlisted = EXCLUDED.supplier_unlisted,
        entered_at = EXCLUDED.entered_at,
        business_date = EXCLUDED.business_date,
        source_event_id = EXCLUDED.source_event_id,
@@ -199,6 +203,7 @@ export async function upsertGateEvent(
       input.correlation_id,
       input.supplier_ref_ext ?? null,
       input.supplier_name_unlisted ?? null,
+      input.supplier_unlisted ?? false,
       input.entered_at,
       input.business_date,
       input.source_event_id,

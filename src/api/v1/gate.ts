@@ -28,7 +28,12 @@ import { logAuditEntry } from '../../read/projections/audit_log.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const GATE_WRITE_ROLES = ['gate_officer'];
+// Story 3.13 (D4): the weighbridge operator is the one at the gate on a weigh-in lane, so it may
+// also post a gate entry. Reversal stays with the gate officer.
+const GATE_WRITE_ROLES = ['gate_officer', 'weighbridge_operator'];
+const GATE_REVERSE_ROLES = ['gate_officer'];
+// Story 3.13 (D2): dedicated gate and weighbridge modules authorize alongside inventory.
+const GATE_MODULES = ['inventory', 'gate', 'weighbridge'];
 const UNMATCHED_READ_ROLES = ['gate_officer', 'unloading_supervisor', 'warehouse_manager'];
 // Story 3.13 (AC 2): a weighbridge operator needs to read the open gate entries it weighs out.
 const GENERAL_READ_ROLES = [
@@ -80,7 +85,7 @@ function assertRoleAllowed(
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
     (r) =>
-      (r.module === 'inventory' || r.module === '*' || r.module === 'gate') &&
+      (r.module === '*' || GATE_MODULES.includes(r.module)) &&
       // Story 3.13 (AC 2): mirror src/middleware/rbac.ts satisfiesFunctionScope - a write
       // assignment satisfies a read check, so write-only gate roles can list. Write stays exact.
       (functionScope === 'read' || r.functionScope === 'write') &&
@@ -103,11 +108,18 @@ function assertSiteAccess(req: IncomingMessage, siteId: string, scope: 'read' | 
     scope,
   );
   const gateScope = permittedLocationsForModuleScope(authContext.roles, 'gate', scope);
+  const weighbridgeScope = permittedLocationsForModuleScope(
+    authContext.roles,
+    'weighbridge',
+    scope,
+  );
   if (
     !wildcard &&
     !gateScope.wildcard &&
+    !weighbridgeScope.wildcard &&
     !locations.has(siteId) &&
-    !gateScope.locations.has(siteId)
+    !gateScope.locations.has(siteId) &&
+    !weighbridgeScope.locations.has(siteId)
   ) {
     throw new AppError(
       403,
@@ -136,6 +148,7 @@ function gateEventToJson(
     correlation_id: row.correlation_id,
     supplier_ref_ext: row.supplier_ref_ext,
     supplier_name_unlisted: row.supplier_name_unlisted,
+    supplier_unlisted: row.supplier_unlisted,
     // AD-2 (Review D2): deprecated alias of correlation_id, kept for response-contract stability
     // with edge/PWA consumers. New consumers must read correlation_id; remove via versioned
     // deprecation only.
@@ -314,7 +327,7 @@ const createGateEventBase: RouteHandler = async (req, res) => {
 };
 
 const reverseGateEventBase: RouteHandler = async (req, res, params) => {
-  assertRoleAllowed(req, GATE_WRITE_ROLES, 'write');
+  assertRoleAllowed(req, GATE_REVERSE_ROLES, 'write');
   const gateEventId = params['gateEventId']?.toLowerCase();
   if (!gateEventId || !UUID_REGEX.test(gateEventId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'gateEventId path parameter must be a UUID');
@@ -411,8 +424,13 @@ const listGateEventsBase: RouteHandler = async (req, res) => {
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   const inventoryScope = permittedLocationsForModule(authContext.roles, 'inventory');
   const gateScope = permittedLocationsForModule(authContext.roles, 'gate');
-  const wildcard = inventoryScope.wildcard || gateScope.wildcard;
-  const locations = new Set([...inventoryScope.locations, ...gateScope.locations]);
+  const weighbridgeScope = permittedLocationsForModule(authContext.roles, 'weighbridge');
+  const wildcard = inventoryScope.wildcard || gateScope.wildcard || weighbridgeScope.wildcard;
+  const locations = new Set([
+    ...inventoryScope.locations,
+    ...gateScope.locations,
+    ...weighbridgeScope.locations,
+  ]);
   let siteId: string | null = null;
   let siteAny: string[] | null = null;
   if (siteCode) {
@@ -447,18 +465,18 @@ const listGateEventsBase: RouteHandler = async (req, res) => {
 };
 
 export const createGateEventHandler: RouteHandler = requireRole({
-  module: 'inventory',
+  module: GATE_MODULES,
   functionScope: 'write',
 })(createGateEventBase);
 export const reverseGateEventHandler: RouteHandler = requireRole({
-  module: 'inventory',
+  module: GATE_MODULES,
   functionScope: 'write',
 })(reverseGateEventBase);
 export const getGateEventHandler: RouteHandler = requireRole({
-  module: 'inventory',
+  module: GATE_MODULES,
   functionScope: 'read',
 })(getGateEventBase);
 export const listGateEventsHandler: RouteHandler = requireRole({
-  module: 'inventory',
+  module: GATE_MODULES,
   functionScope: 'read',
 })(listGateEventsBase);

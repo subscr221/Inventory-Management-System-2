@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS gate_event (
   -- record the matched PO vendor's code, or mark a truck as an unlisted supplier with a typed name.
   supplier_ref_ext        TEXT,
   supplier_name_unlisted  TEXT,
+  supplier_unlisted       BOOLEAN NOT NULL DEFAULT false,
   entered_at        TIMESTAMPTZ NOT NULL,
   business_date     DATE NOT NULL,
   status            TEXT NOT NULL DEFAULT 'open',
@@ -29,8 +30,8 @@ CREATE TABLE IF NOT EXISTS gate_event (
 );
 
 -- Story 3.13 (AC 3): add the optional supplier columns to a gate_event table created before them.
-ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_ref_ext TEXT;
-ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_name_unlisted TEXT;
+-- Story 3.13 (D3): explicit unlisted-supplier flag; supplier_ref_ext stays null when set.
+ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_unlisted BOOLEAN NOT NULL DEFAULT false;
 
 DO $$
 BEGIN

@@ -339,6 +339,37 @@ function selectOperatingAssignment(authContext: AuthContext): OperatingAssignmen
   return { role: assignment.role, locationId };
 }
 
+const GATE_STREAM_MODULES = ['gate', 'weighbridge', 'inventory'];
+
+/**
+ * Story 3.13 (D2/D4): the module list above is any-of, so the role is judged here, across all of the
+ * caller's assignments. gate.entered is the gate officer's or the weighbridge operator's;
+ * gate.reversed stays the gate officer's; weighbridge events are the weighbridge operator's.
+ */
+function assertEdgeGateRoleAllowed(
+  authContext: AuthContext,
+  body: { stream_type: string; event_type: string },
+): void {
+  const allowed =
+    body.stream_type === 'weighbridge'
+      ? ['weighbridge_operator']
+      : body.event_type === 'gate.reversed'
+        ? ['gate_officer']
+        : ['gate_officer', 'weighbridge_operator'];
+  const ok = authContext.roles.some(
+    (r) =>
+      (GATE_STREAM_MODULES.includes(r.module) || r.module === '*') &&
+      r.functionScope === 'write' &&
+      allowed.includes(r.role),
+  );
+  if (!ok)
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'This operation is restricted to roles: ' + allowed.join(', '),
+    );
+}
+
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string | string[] {
   if (typeof body === 'object' && body !== null) {
     const streamType = (body as Record<string, unknown>)['stream_type'];
@@ -351,6 +382,9 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
     // base hat as well and meets its explicit CENTRAL_ONLY_OPERATION refusal in the handler rather
     // than a module denial that would say nothing about why.
     if (streamType === 'damage') return [EMPLOYEE_MODULE, streamType];
+    // Story 3.13 (D2): the gate and weighbridge streams accept the dedicated module OR inventory;
+    // the role allowlist below (assertEdgeGateRoleAllowed) keeps a store_assistant out.
+    if (streamType === 'gate' || streamType === 'weighbridge') return GATE_STREAM_MODULES;
     if (typeof streamType === 'string') return streamType;
   }
   return '';
@@ -363,27 +397,27 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
  * the employee module, so the base hat alone would advertise an always-empty screen.
  */
 const NAVIGATION_CAPABILITIES: ReadonlyArray<{
-name: string;
-modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases' | 'gate';
-functionScope: 'read' | 'write';
+  name: string;
+  modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases' | 'gate';
+  functionScope: 'read' | 'write';
 }> = [
-{ name: 'Dashboard', modules: '*', functionScope: 'read' },
-{ name: 'Frontline', modules: '*', functionScope: 'read' },
-{ name: 'Refused captures', modules: 'refused-captures', functionScope: 'read' },
-{ name: 'New requisition', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'write' },
-{ name: 'Check stock', modules: [EMPLOYEE_MODULE, 'inventory'], functionScope: 'read' },
-{ name: 'My requests', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
-// Story 8.9 (AC 1, AC 8): every signed-in person reports damage; the workbench shows to the
-// people who work cases - QC or stores at the site, or a damage DOA authority.
-{ name: 'Report damage', modules: [EMPLOYEE_MODULE], functionScope: 'write' },
-{ name: 'Damage cases', modules: 'damage-cases', functionScope: 'read' },
-// Story 3.13 (AC 1): the gate entry and weighbridge capture screen, for the gate officer and
-// weighbridge operator only (a store_assistant holding inventory is not sent it).
-{ name: 'Gate entry', modules: 'gate', functionScope: 'write' },
-// Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
-{ name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
-// Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
-{ name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
+  { name: 'Dashboard', modules: '*', functionScope: 'read' },
+  { name: 'Frontline', modules: '*', functionScope: 'read' },
+  { name: 'Refused captures', modules: 'refused-captures', functionScope: 'read' },
+  { name: 'New requisition', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'write' },
+  { name: 'Check stock', modules: [EMPLOYEE_MODULE, 'inventory'], functionScope: 'read' },
+  { name: 'My requests', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
+  // Story 8.9 (AC 1, AC 8): every signed-in person reports damage; the workbench shows to the
+  // people who work cases - QC or stores at the site, or a damage DOA authority.
+  { name: 'Report damage', modules: [EMPLOYEE_MODULE], functionScope: 'write' },
+  { name: 'Damage cases', modules: 'damage-cases', functionScope: 'read' },
+  // Story 3.13 (AC 1): the gate entry and weighbridge capture screen, for the gate officer and
+  // weighbridge operator only (a store_assistant holding inventory is not sent it).
+  { name: 'Gate entry', modules: 'gate', functionScope: 'write' },
+  // Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
+  { name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
+  // Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
+  { name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
 ];
 
 /**
@@ -392,45 +426,46 @@ functionScope: 'read' | 'write';
  * visibility rule the list route applies, D11).
  */
 async function hasDamageCaseScope(authContext: AuthContext, siteId: string): Promise<boolean> {
-const siteHolder = authContext.roles.some(
-(r) =>
-(r.module === 'qc' || r.module === 'warehouse' || r.module === '*') &&
-assignmentCoversLocation(r, siteId),
-);
-if (siteHolder) return true;
-return (await damageAuthorityTypesFor(authContext.userId)).length > 0;
+  const siteHolder = authContext.roles.some(
+    (r) =>
+      (r.module === 'qc' || r.module === 'warehouse' || r.module === '*') &&
+      assignmentCoversLocation(r, siteId),
+  );
+  if (siteHolder) return true;
+  return (await damageAuthorityTypesFor(authContext.userId)).length > 0;
 }
 
 /**
-* Story 3.13 (AC 1): the gate entry screen is for the gate officer and weighbridge operator who
-* hold a write assignment covering the operating site. Role-evaluated (not a bare module match) so
-* a store_assistant holding `inventory` is never sent it.
-*/
+ * Story 3.13 (AC 1): the gate entry screen is for the gate officer and weighbridge operator who
+ * hold a write assignment covering the operating site. Role-evaluated (not a bare module match) so
+ * a store_assistant holding `inventory` is never sent it.
+ */
 function hasGateScope(authContext: AuthContext, siteId: string): boolean {
-return authContext.roles.some(
-(r) =>
-(r.module === 'gate' || r.module === 'weighbridge') &&
-r.functionScope === 'write' &&
-assignmentCoversLocation(r, siteId),
-);
+  return authContext.roles.some(
+    (r) =>
+      (r.module === 'gate' || r.module === 'weighbridge' || r.module === 'inventory') &&
+      (r.role === 'gate_officer' || r.role === 'weighbridge_operator') &&
+      r.functionScope === 'write' &&
+      assignmentCoversLocation(r, siteId),
+  );
 }
 
 async function navigationFor(authContext: AuthContext, siteId: string): Promise<string[]> {
-const roles = authContext.roles;
-const names: string[] = [];
-for (const { name, modules, functionScope } of NAVIGATION_CAPABILITIES) {
-let shown: boolean;
-if (modules === '*') shown = true;
-else if (modules === 'refused-captures') {
-shown = hasRefusedCaptureReadScope(
-roles.filter((r) => r.module !== EMPLOYEE_MODULE),
-siteId,
-);
-} else if (modules === 'damage-cases') {
-shown = await hasDamageCaseScope(authContext, siteId);
-} else if (modules === 'gate') {
-shown = hasGateScope(authContext, siteId);
-} else {
+  const roles = authContext.roles;
+  const names: string[] = [];
+  for (const { name, modules, functionScope } of NAVIGATION_CAPABILITIES) {
+    let shown: boolean;
+    if (modules === '*') shown = true;
+    else if (modules === 'refused-captures') {
+      shown = hasRefusedCaptureReadScope(
+        roles.filter((r) => r.module !== EMPLOYEE_MODULE),
+        siteId,
+      );
+    } else if (modules === 'damage-cases') {
+      shown = await hasDamageCaseScope(authContext, siteId);
+    } else if (modules === 'gate') {
+      shown = hasGateScope(authContext, siteId);
+    } else {
       shown = roles.some(
         (r) =>
           (modules.includes(r.module) || r.module === '*') &&
@@ -469,26 +504,28 @@ const edgeBootstrapBase: RouteHandler = async (req, res) => {
   // Story 1.15 (D7): derived from NAVIGATION_CAPABILITIES against the caller's assignments.
   const navigation = await navigationFor(authContext, assignment.locationId);
 
-// Story 3.13 (AC 3, Q4): gate.entered requires site_code_ext and gate_id. site_code_ext is the
-// operating site's external code (location_register.location_code); gate_id is edge config
-// (default GATE-01; one gate per site at pilot). A wildcard operating assignment resolves no site
-// row, so both fall back to null and the gate screen is simply not advertised.
-const operatingSite =
-  assignment.locationId && assignment.locationId !== '*'
-    ? await getLocationById(assignment.locationId)
-    : null;
+  // Story 3.13 (AC 3, Q4): gate.entered requires site_code_ext and gate_id. site_code_ext is the
+  // operating site's external code (location_register.location_code); gate_id is edge config
+  // (default GATE-01; one gate per site at pilot). A wildcard operating assignment resolves no site
+  // row, so both fall back to null and the gate screen is simply not advertised.
+  const operatingSite =
+    assignment.locationId && assignment.locationId !== '*'
+      ? await getLocationById(assignment.locationId)
+      : null;
+  // Only a site row is a gate: an assignment at a zone or bin must not advertise a site code.
+  const gateSite = operatingSite?.level === 'site' ? operatingSite : null;
 
-sendJson(res, 200, {
-user_id: authContext.userId,
-user_name: authContext.displayName ?? authContext.externalId,
-site_id: assignment.locationId,
-site_name: edgeSiteName(),
-site_code_ext: operatingSite?.location_code ?? null,
-gate_id: config.gate.id,
-role: assignment.role,
-navigation,
-offline_ready: true,
-});
+  sendJson(res, 200, {
+    user_id: authContext.userId,
+    user_name: authContext.displayName ?? authContext.externalId,
+    site_id: assignment.locationId,
+    site_name: edgeSiteName(),
+    site_code_ext: gateSite?.location_code ?? null,
+    gate_id: config.gate.id,
+    role: assignment.role,
+    navigation,
+    offline_ready: true,
+  });
 };
 
 const powerSyncCredentialsBase: RouteHandler = async (req, res) => {
@@ -686,6 +723,9 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     auditRole = covering.role;
     auditLocationId = task.site_id;
     authoritativeSiteId = task.site_id;
+  }
+  if (body.stream_type === 'gate' || body.stream_type === 'weighbridge') {
+    assertEdgeGateRoleAllowed(authContext, body);
   }
   if (body.stream_type === 'gate' && body.event_type === 'gate.entered') {
     body.payload['gate_officer_id'] = authContext.userId;

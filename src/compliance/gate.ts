@@ -87,12 +87,75 @@ export function assertGateEnteredShape(envelope: EventEnvelope): void {
     p['driver_name'] = trimmed(p['driver_name']);
   if (p['challan_number_ext'] !== undefined && p['challan_number_ext'] !== null)
     p['challan_number_ext'] = trimmed(p['challan_number_ext']);
-  // Story 3.13 (AC 3): optional supplier identification. The vendor code, `UNLISTED`, or a typed
-  // name are all accepted; either may be absent. Never fabricate one here.
-  if (p['supplier_ref_ext'] !== undefined && p['supplier_ref_ext'] !== null)
-    p['supplier_ref_ext'] = trimmed(p['supplier_ref_ext']);
-  if (p['supplier_name_unlisted'] !== undefined && p['supplier_name_unlisted'] !== null)
-    p['supplier_name_unlisted'] = trimmed(p['supplier_name_unlisted']);
+  assertFieldLengths(p);
+  assertSupplierShape(p);
+}
+
+const SUPPLIER_REF_MAX = 64;
+const SUPPLIER_NAME_MAX = 200;
+const GATE_FIELD_MAX = {
+  driver_name: 120,
+  challan_number_ext: 64,
+  vehicle_reg_ext: 32,
+  po_ref_ext: 64,
+  gate_id: 64,
+  site_code_ext: 64,
+  challan_photo_ref: 512,
+} as const;
+
+function assertFieldLengths(p: Record<string, unknown>): void {
+  for (const [key, max] of Object.entries(GATE_FIELD_MAX)) {
+    const v = p[key];
+    if (typeof v === 'string' && v.length > max)
+      throw new AppError(400, 'INVALID_PARAMS', `${key} must be at most ${max} characters`);
+  }
+}
+
+/**
+ * Story 3.13 (AC 3, D3): optional supplier identification. Either a vendor code (`supplier_ref_ext`,
+ * `supplier_unlisted` false) or an unlisted supplier (`supplier_unlisted: true`, ref null, typed
+ * name required). A present value is never empty, and a name never rides along with a vendor code.
+ */
+function assertSupplierShape(p: Record<string, unknown>): void {
+  const flag = p['supplier_unlisted'];
+  if (flag !== undefined && flag !== null && typeof flag !== 'boolean')
+    throw new AppError(400, 'INVALID_PARAMS', 'supplier_unlisted must be a boolean when supplied');
+  const unlisted = flag === true;
+  p['supplier_unlisted'] = unlisted;
+  const read = (key: string, max: number): string | null => {
+    const raw = p[key];
+    if (raw === undefined || raw === null) return null;
+    const value = trimmed(raw);
+    if (!value)
+      throw new AppError(400, 'INVALID_PARAMS', `${key} must be a non-empty string when supplied`);
+    if (value.length > max)
+      throw new AppError(400, 'INVALID_PARAMS', `${key} must be at most ${max} characters`);
+    return value;
+  };
+  const ref = read('supplier_ref_ext', SUPPLIER_REF_MAX);
+  const name = read('supplier_name_unlisted', SUPPLIER_NAME_MAX);
+  if (unlisted) {
+    if (ref !== null)
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'supplier_ref_ext must be null when supplier_unlisted',
+      );
+    if (name === null)
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'supplier_name_unlisted is required when supplier_unlisted',
+      );
+  } else if (name !== null) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'supplier_name_unlisted requires supplier_unlisted true',
+    );
+  }
+  p['supplier_ref_ext'] = ref;
+  p['supplier_name_unlisted'] = name;
 }
 
 export function assertGateReversedShape(envelope: EventEnvelope): void {
@@ -145,6 +208,7 @@ export async function applyGateProjection(
         correlation_id: envelope.metadata.correlation_id,
         supplier_ref_ext: (p['supplier_ref_ext'] as string | null | undefined) ?? null,
         supplier_name_unlisted: (p['supplier_name_unlisted'] as string | null | undefined) ?? null,
+        supplier_unlisted: p['supplier_unlisted'] === true,
         entered_at: p['entered_at'] as string,
         business_date: localYmd(new Date(p['entered_at'] as string)),
         source_event_id: eventId,

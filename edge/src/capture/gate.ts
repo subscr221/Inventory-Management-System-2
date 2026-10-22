@@ -12,64 +12,83 @@ export const GATE_STEPS = ['challan', 'photo', 'vehicle', 'supplier'] as const;
 export type GateStep = (typeof GATE_STEPS)[number];
 
 export interface GateChallanMatch {
-kind: 'match';
-poRefExt: string;
-supplierRefExt: string;
+  kind: 'match';
+  poRefExt: string;
+  supplierRefExt: string;
 }
 
 export type GateLookupResult = GateChallanMatch | { kind: 'not-found' | 'unavailable' };
 
 /** Each edit/new lookup invalidates responses from all earlier requests. */
 export function createGateLookup(fetcher: typeof fetch) {
-let revision = 0;
-return {
-invalidate() { revision++; },
-async resolve(raw: string): Promise<GateLookupResult | null> {
-const current = ++revision;
-const code = raw.trim();
-if (!code) return { kind: 'not-found' };
-try {
-const asn = await fetcher(`/api/v1/asn/${encodeURIComponent(code)}`, { credentials: 'include' });
-if (current !== revision) return null;
-let poRef = code;
-if (asn.ok) {
-const body = await asn.json() as { po_ref_ext?: unknown } | null;
-if (current !== revision) return null;
-if (typeof body?.po_ref_ext !== 'string' || !body.po_ref_ext.trim()) return { kind: 'unavailable' };
-poRef = body.po_ref_ext.trim();
-} else if (asn.status !== 404) {
-return { kind: 'unavailable' };
-}
-const po = await fetcher(`/api/v1/erp/purchase-orders/${encodeURIComponent(poRef)}`, { credentials: 'include' });
-if (current !== revision) return null;
-if (!po.ok) return { kind: po.status === 404 ? 'not-found' : 'unavailable' };
-const body = await po.json() as { po_number_ext?: unknown; supplier_ref_ext?: unknown } | null;
-if (current !== revision) return null;
-if (typeof body?.po_number_ext !== 'string' || body.po_number_ext.trim() !== poRef) return { kind: 'unavailable' };
-return { kind: 'match', poRefExt: poRef, supplierRefExt: typeof body.supplier_ref_ext === 'string' ? body.supplier_ref_ext.trim() : '' };
-} catch {
-return current === revision ? { kind: 'unavailable' } : null;
-}
-},
-};
+  let revision = 0;
+  return {
+    invalidate() {
+      revision++;
+    },
+    async resolve(raw: string): Promise<GateLookupResult | null> {
+      const current = ++revision;
+      const code = raw.trim();
+      if (!code) return { kind: 'not-found' };
+      try {
+        const asn = await fetcher(`/api/v1/asn/${encodeURIComponent(code)}`, {
+          credentials: 'include',
+        });
+        if (current !== revision) return null;
+        let poRef = code;
+        if (asn.ok) {
+          const body = (await asn.json()) as { po_ref_ext?: unknown } | null;
+          if (current !== revision) return null;
+          if (typeof body?.po_ref_ext !== 'string' || !body.po_ref_ext.trim())
+            return { kind: 'unavailable' };
+          poRef = body.po_ref_ext.trim();
+        } else if (asn.status !== 404) {
+          return { kind: 'unavailable' };
+        }
+        const po = await fetcher(`/api/v1/erp/purchase-orders/${encodeURIComponent(poRef)}`, {
+          credentials: 'include',
+        });
+        if (current !== revision) return null;
+        if (!po.ok) return { kind: po.status === 404 ? 'not-found' : 'unavailable' };
+        const body = (await po.json()) as {
+          po_number_ext?: unknown;
+          supplier_ref_ext?: unknown;
+        } | null;
+        if (current !== revision) return null;
+        if (
+          typeof body?.po_number_ext !== 'string' ||
+          body.po_number_ext.trim().toLowerCase() !== poRef.toLowerCase()
+        )
+          return { kind: 'unavailable' };
+        return {
+          kind: 'match',
+          poRefExt: body.po_number_ext.trim(),
+          supplierRefExt:
+            typeof body.supplier_ref_ext === 'string' ? body.supplier_ref_ext.trim() : '',
+        };
+      } catch {
+        return current === revision ? { kind: 'unavailable' } : null;
+      }
+    },
+  };
 }
 
 export function gateChallanBinding(resolution: GateChallanMatch | 'typed' | 'rejected') {
-return typeof resolution === 'string'
-? { poRefExt: 'UNKNOWN', supplierRefExt: '' }
-: { poRefExt: resolution.poRefExt, supplierRefExt: resolution.supplierRefExt };
+  return typeof resolution === 'string'
+    ? { poRefExt: 'UNKNOWN', supplierRefExt: '' }
+    : { poRefExt: resolution.poRefExt, supplierRefExt: resolution.supplierRefExt };
 }
 
-export function isGateSupplierReady(mode: 'matched' | 'unlisted', reference: string, name: string): boolean {
-return (mode === 'matched' ? reference : name).trim().length > 0;
+export function isGateSupplierReady(
+  mode: 'matched' | 'unlisted',
+  reference: string,
+  name: string,
+): boolean {
+  return (mode === 'matched' ? reference : name).trim().length > 0;
 }
 
-const WEIGHT_REGEX = /^\d+(\.\d{1,3})?$/;
-
-/** A kilogram reading is a NUMERIC(_,3): digits with at most three decimals, non-negative. */
-export function isKilogram(value: string): boolean {
-  return WEIGHT_REGEX.test(value.trim());
-}
+/** NUMERIC(_,3) reading: at most nine integer digits so an unbounded paste cannot overflow the column. */
+const WEIGHT_REGEX = /^\d{1,9}(\.\d{1,3})?$/;
 
 /** Exact integer milli-kilograms, so net is never subtracted as a JS float. */
 export function parseKgToMilli(value: string): bigint | null {
@@ -109,20 +128,118 @@ export function computeWeighment(grossKg: string, tareKg: string): WeighmentResu
   };
 }
 
+export type WeighFormProblem =
+  'token' | 'po' | 'line' | 'gross' | 'tare' | 'gross-format' | 'tare-format' | 'net-negative';
+
+export type WeighFormResult =
+  { ok: true; lineNo: number; weighment: Weighment } | { ok: false; problem: WeighFormProblem };
+
+const MAX_LINE_NO = 2147483647;
+
+/** Field-by-field weigh form validation, so the operator is told which entry is wrong. */
+export function validateWeighForm(form: {
+  correlationId: string;
+  poRef: string;
+  lineNo: string;
+  gross: string;
+  tare: string;
+}): WeighFormResult {
+  if (!form.correlationId.trim()) return { ok: false, problem: 'token' };
+  if (!form.poRef.trim()) return { ok: false, problem: 'po' };
+  const line = form.lineNo.trim();
+  if (!/^\d{1,10}$/.test(line) || Number(line) < 1 || Number(line) > MAX_LINE_NO) {
+    return { ok: false, problem: 'line' };
+  }
+  const gross = parseKgToMilli(form.gross);
+  if (gross === null) return { ok: false, problem: form.gross.trim() ? 'gross-format' : 'gross' };
+  const tare = parseKgToMilli(form.tare);
+  if (tare === null) return { ok: false, problem: form.tare.trim() ? 'tare-format' : 'tare' };
+  if (gross === 0n) return { ok: false, problem: 'gross' };
+  if (tare === 0n) return { ok: false, problem: 'tare' };
+  const computed = computeWeighment(form.gross, form.tare);
+  if (!computed.ok) return { ok: false, problem: 'net-negative' };
+  return { ok: true, lineNo: Number(line), weighment: computed.weighment };
+}
+
+/** Decimal string (no exponent) scaled by 10^scale as a BigInt, or null when malformed. */
+function decimalToScaled(value: string | number, scale: number): bigint | null {
+  const s = String(value).trim();
+  const m = /^(\d{1,12})(?:\.(\d+))?$/.exec(s);
+  if (!m) return null;
+  const frac = m[2] ?? '';
+  if (frac.length > scale && /[1-9]/.test(frac.slice(scale))) return null;
+  return (
+    BigInt(m[1]!) * 10n ** BigInt(scale) + BigInt((frac + '0'.repeat(scale)).slice(0, scale) || '0')
+  );
+}
+
 /**
- * AC 8: the provisional on-device tolerance verdict. The server recomputes it in SQL NUMERIC and
- * its verdict replaces the banner on sync; this is only the immediate hint before submit.
+ * AC 8: the provisional on-device tolerance verdict, in exact BigInt arithmetic (milli-kg for
+ * quantities, 1e-4 percent for tolerances). The server recomputes it in SQL NUMERIC and its verdict
+ * replaces the banner on sync. Returns null when any input is malformed or out of range, so the
+ * caller can show nothing rather than a wrong verdict.
  */
 export function isToleranceBreach(input: {
   netKg: string;
-  orderedQty: number;
-  overReceiptTolerancePct: number;
-  underReceiptTolerancePct: number;
-}): boolean {
-  const net = Number(input.netKg);
-  const lower = input.orderedQty * (1 - input.underReceiptTolerancePct / 100);
-  const upper = input.orderedQty * (1 + input.overReceiptTolerancePct / 100);
-  return net < lower || net > upper;
+  orderedQty: number | string;
+  overReceiptTolerancePct: number | string;
+  underReceiptTolerancePct: number | string;
+}): boolean | null {
+  const net = decimalToScaled(input.netKg, 3);
+  const ordered = decimalToScaled(input.orderedQty, 3);
+  const over = decimalToScaled(input.overReceiptTolerancePct, 4);
+  const under = decimalToScaled(input.underReceiptTolerancePct, 4);
+  if (net === null || ordered === null || over === null || under === null) return null;
+  const hundred = 100n * 10000n;
+  if (under > hundred || over > 1000n * 10000n) return null;
+  return net * hundred < ordered * (hundred - under) || net * hundred > ordered * (hundred + over);
+}
+
+/** Largest gate/weighbridge photo the capture screen accepts; the uploader re-encodes above its own cap. */
+export const MAX_GATE_PHOTO_BYTES = 25 * 1024 * 1024;
+
+export type PhotoProblem = 'empty' | 'type' | 'size';
+
+/** Why a chosen photo file cannot be queued, or null when it can. */
+export function photoProblem(
+  file: { size: number; type: string },
+  accepted: readonly string[],
+): PhotoProblem | null {
+  if (file.size === 0) return 'empty';
+  if (!file.type || !accepted.includes(file.type)) return 'type';
+  if (file.size > MAX_GATE_PHOTO_BYTES) return 'size';
+  return null;
+}
+
+export interface PoLineBand {
+  orderedQty: string;
+  overReceiptTolerancePct: string;
+  underReceiptTolerancePct: string;
+}
+
+/** Reads the PO line's ordered quantity and tolerances; null on any failure (fail soft). */
+export async function fetchPoLineBand(
+  fetcher: typeof fetch,
+  poRef: string,
+  lineNo: number,
+): Promise<PoLineBand | null> {
+  try {
+    const res = await fetcher(`/api/v1/erp/purchase-orders/${encodeURIComponent(poRef)}`, {
+      credentials: 'include',
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { lines?: Array<Record<string, unknown>> } | null;
+    const line = body?.lines?.find((l) => Number(l['line_no']) === lineNo);
+    if (!line) return null;
+    const band: PoLineBand = {
+      orderedQty: String(line['ordered_qty']),
+      overReceiptTolerancePct: String(line['over_receipt_tolerance_pct'] ?? '0'),
+      underReceiptTolerancePct: String(line['under_receipt_tolerance_pct'] ?? '0'),
+    };
+    return isToleranceBreach({ netKg: '0', ...band }) === null ? null : band;
+  } catch {
+    return null;
+  }
 }
 
 export interface GateCaptureInput {
@@ -133,6 +250,8 @@ export interface GateCaptureInput {
   driverName: string | null;
   supplierRefExt: string | null;
   supplierNameUnlisted: string | null;
+  /** True when the officer typed a supplier name instead of using the PO vendor. */
+  supplierUnlisted?: boolean;
   siteCodeExt: string;
   gateId: string;
   userId: string;
@@ -178,6 +297,7 @@ export function createGateEnteredEvent(input: GateCaptureInput): EdgeEventRecord
       entered_at: occurredAt,
       supplier_ref_ext: trimmedOrNull(input.supplierRefExt),
       supplier_name_unlisted: trimmedOrNull(input.supplierNameUnlisted),
+      supplier_unlisted: input.supplierUnlisted === true,
     },
     userId: input.userId,
     role: input.role,
@@ -262,17 +382,17 @@ export interface GateFormSnapshot {
 /** AC 6: Next stays disabled until the challan is accepted/rejected/typed and each step is filled. */
 export function missingGateParts(form: GateFormSnapshot): GateMissingPart[] {
   const missing: GateMissingPart[] = [];
-if (!form.challanResolved) missing.push('challan');
+  if (!form.challanResolved) missing.push('challan');
   if (!form.hasPhoto) missing.push('photo');
   if (!form.vehicleReg.trim()) missing.push('vehicle');
-if (!form.supplierResolved) missing.push('supplier');
+  if (!form.supplierResolved) missing.push('supplier');
   return missing;
 }
 
 export function isGateReady(form: GateFormSnapshot): boolean {
-return missingGateParts(form).length === 0;
+  return missingGateParts(form).length === 0;
 }
 
 export function isGateStepReady(step: GateStep, form: GateFormSnapshot): boolean {
-return !missingGateParts(form).includes(step);
+  return !missingGateParts(form).includes(step);
 }

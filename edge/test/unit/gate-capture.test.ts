@@ -5,7 +5,6 @@ import {
   createGateEnteredEvent,
   createWeighbridgeRecordedEvent,
   isGateReady,
-  isKilogram,
   isToleranceBreach,
   milliToKg,
   missingGateParts,
@@ -59,13 +58,19 @@ describe('Story 3.13 gate capture', () => {
     assert.equal(payload['driver_name'], 'Ravi');
     assert.equal(payload['supplier_ref_ext'], 'SUP-1');
     assert.equal(payload['supplier_name_unlisted'], null);
+    assert.equal(payload['supplier_unlisted'], false);
   });
 
   it('records the unlisted supplier name and leaves the code null when typing a name', () => {
     const event = createGateEnteredEvent(
-      base({ supplierRefExt: null, supplierNameUnlisted: ' Acme Traders ' }),
+      base({
+        supplierRefExt: null,
+        supplierUnlisted: true,
+        supplierNameUnlisted: ' Acme Traders ',
+      }),
     );
     assert.equal(event.payload['supplier_ref_ext'], null);
+    assert.equal(event.payload['supplier_unlisted'], true);
     assert.equal(event.payload['supplier_name_unlisted'], 'Acme Traders');
     assert.equal(event.payload['po_ref_ext'], 'PO-1');
   });
@@ -98,135 +103,199 @@ describe('Story 3.13 gate capture', () => {
     assert.equal(isGateReady(ready), true);
   });
 
-it('does not confuse an edited or unaccepted scanned code with a typed resolution', () => {
+  it('does not confuse an edited or unaccepted scanned code with a typed resolution', () => {
     const form: GateFormSnapshot = {
       challanResolved: false,
-challanNumber: 'CH-9',
-hasPhoto: true,
-vehicleReg: 'KA01AB1234',
-supplierResolved: true,
+      challanNumber: 'CH-9',
+      hasPhoto: true,
+      vehicleReg: 'KA01AB1234',
+      supplierResolved: true,
       supplierNameUnlisted: 'Acme',
     };
-assert.deepEqual(missingGateParts(form), ['challan']);
-});
+    assert.deepEqual(missingGateParts(form), ['challan']);
+  });
 });
 
 describe('Story 3.13 challan resolution and step gating', () => {
-it('resolves an ASN first, then fetches its PO vendor rather than trusting the ASN vendor', async () => {
-const calls: string[] = [];
-const lookup = gate.createGateLookup(async (url) => {
-calls.push(String(url));
-return Response.json(calls.length === 1
-? { po_ref_ext: 'PO-9', supplier_ref_ext: 'WRONG' }
-: { po_number_ext: 'PO-9', supplier_ref_ext: 'SUP-9' });
-});
-assert.deepEqual(await lookup.resolve(' ASN/9 '), {
-kind: 'match', poRefExt: 'PO-9', supplierRefExt: 'SUP-9',
-});
-assert.deepEqual(calls, ['/api/v1/asn/ASN%2F9', '/api/v1/erp/purchase-orders/PO-9']);
-});
+  it('resolves an ASN first, then fetches its PO vendor rather than trusting the ASN vendor', async () => {
+    const calls: string[] = [];
+    const lookup = gate.createGateLookup(async (url) => {
+      calls.push(String(url));
+      return Response.json(
+        calls.length === 1
+          ? { po_ref_ext: 'PO-9', supplier_ref_ext: 'WRONG' }
+          : { po_number_ext: 'PO-9', supplier_ref_ext: 'SUP-9' },
+      );
+    });
+    assert.deepEqual(await lookup.resolve(' ASN/9 '), {
+      kind: 'match',
+      poRefExt: 'PO-9',
+      supplierRefExt: 'SUP-9',
+    });
+    assert.deepEqual(calls, ['/api/v1/asn/ASN%2F9', '/api/v1/erp/purchase-orders/PO-9']);
+  });
 
-it('tries the scanned code as a PO only when the ASN is not found', async () => {
-const calls: string[] = [];
-const lookup = gate.createGateLookup(async (url) => {
-calls.push(String(url));
-return calls.length === 1 ? new Response(null, { status: 404 })
-: Response.json({ po_number_ext: 'PO-1', supplier_ref_ext: 'SUP-1' });
-});
-assert.equal((await lookup.resolve('PO-1'))?.kind, 'match');
-assert.deepEqual(calls, ['/api/v1/asn/PO-1', '/api/v1/erp/purchase-orders/PO-1']);
-});
+  it('tries the scanned code as a PO only when the ASN is not found', async () => {
+    const calls: string[] = [];
+    const lookup = gate.createGateLookup(async (url) => {
+      calls.push(String(url));
+      return calls.length === 1
+        ? new Response(null, { status: 404 })
+        : Response.json({ po_number_ext: 'PO-1', supplier_ref_ext: 'SUP-1' });
+    });
+    assert.equal((await lookup.resolve('PO-1'))?.kind, 'match');
+    assert.deepEqual(calls, ['/api/v1/asn/PO-1', '/api/v1/erp/purchase-orders/PO-1']);
+  });
 
-it('reports missing, offline, denied and malformed responses without fabricating a match', async () => {
-for (const response of [new Response(null, { status: 403 }), Response.json({}), new Response(null, { status: 500 })]) {
-let calls = 0;
-const lookup = gate.createGateLookup(async () => { calls++; return response; });
-assert.deepEqual(await lookup.resolve('X'), { kind: 'unavailable' });
-assert.equal(calls, 1);
-}
-assert.deepEqual(await gate.createGateLookup(async () => new Response(null, { status: 404 })).resolve('X'), { kind: 'not-found' });
-assert.deepEqual(await gate.createGateLookup(async () => { throw new TypeError('offline'); }).resolve('X'), { kind: 'unavailable' });
-});
+  it('reports missing, offline, denied and malformed responses without fabricating a match', async () => {
+    for (const response of [
+      new Response(null, { status: 403 }),
+      Response.json({}),
+      new Response(null, { status: 500 }),
+    ]) {
+      let calls = 0;
+      const lookup = gate.createGateLookup(async () => {
+        calls++;
+        return response;
+      });
+      assert.deepEqual(await lookup.resolve('X'), { kind: 'unavailable' });
+      assert.equal(calls, 1);
+    }
+    assert.deepEqual(
+      await gate.createGateLookup(async () => new Response(null, { status: 404 })).resolve('X'),
+      { kind: 'not-found' },
+    );
+    assert.deepEqual(
+      await gate
+        .createGateLookup(async () => {
+          throw new TypeError('offline');
+        })
+        .resolve('X'),
+      { kind: 'unavailable' },
+    );
+  });
 
-it('ignores obsolete responses after editing a code or starting another scan', async () => {
-let finish!: (value: Response) => void;
-let calls = 0;
-const lookup = gate.createGateLookup(async () => {
-calls++;
-if (calls === 1) return new Promise<Response>((resolve) => { finish = resolve; });
-return Response.json({ po_number_ext: 'NEW', supplier_ref_ext: 'SUP-NEW' });
-});
-const old = lookup.resolve('OLD');
-lookup.invalidate();
-finish(Response.json({ po_ref_ext: 'OLD-PO' }));
-assert.equal(await old, null);
-assert.equal(calls, 1);
-const newer = await lookup.resolve('NEW');
-assert.deepEqual(newer, { kind: 'unavailable' });
-});
+  it('ignores obsolete responses after editing a code or starting another scan', async () => {
+    let finish!: (value: Response) => void;
+    let started!: () => void;
+    const wasStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const lookup = gate.createGateLookup(async (url) => {
+      const path = String(url);
+      if (path.includes('/asn/')) return new Response(null, { status: 404 });
+      if (path.endsWith('/OLD')) {
+        started();
+        return new Promise<Response>((resolve) => {
+          finish = resolve;
+        });
+      }
+      return Response.json({ po_number_ext: 'new', supplier_ref_ext: 'SUP-NEW' });
+    });
+    const old = lookup.resolve('OLD');
+    await wasStarted;
+    lookup.invalidate();
+    finish(Response.json({ po_number_ext: 'OLD', supplier_ref_ext: 'SUP-OLD' }));
+    assert.equal(await old, null);
+    // case-insensitive PO compare: server echoes lower case, operator typed upper case
+    assert.deepEqual(await lookup.resolve('NEW'), {
+      kind: 'match',
+      poRefExt: 'new',
+      supplierRefExt: 'SUP-NEW',
+    });
+  });
 
-it('explicit typed/rejected fallback never binds a PO or a supplier', () => {
-for (const kind of ['typed', 'rejected'] as const) {
-assert.deepEqual(gate.gateChallanBinding(kind), { poRefExt: 'UNKNOWN', supplierRefExt: '' });
-}
-assert.deepEqual(gate.gateChallanBinding({ kind: 'match', poRefExt: 'PO-9', supplierRefExt: 'SUP-9' }), { poRefExt: 'PO-9', supplierRefExt: 'SUP-9' });
-});
+  it('explicit typed/rejected fallback never binds a PO or a supplier', () => {
+    for (const kind of ['typed', 'rejected'] as const) {
+      assert.deepEqual(gate.gateChallanBinding(kind), { poRefExt: 'UNKNOWN', supplierRefExt: '' });
+    }
+    assert.deepEqual(
+      gate.gateChallanBinding({ kind: 'match', poRefExt: 'PO-9', supplierRefExt: 'SUP-9' }),
+      { poRefExt: 'PO-9', supplierRefExt: 'SUP-9' },
+    );
+  });
 
-it('lets a newer scan finish without an older PO response overwriting it', async () => {
-let finishOld!: (value: Response) => void;
-let oldRequested!: () => void;
-const oldStarted = new Promise<void>((resolve) => { oldRequested = resolve; });
-const lookup = gate.createGateLookup(async (url) => {
-const path = String(url);
-if (path.includes('/asn/')) return new Response(null, { status: 404 });
-if (path.endsWith('/OLD')) {
-oldRequested();
-return new Promise<Response>((resolve) => { finishOld = resolve; });
-}
-return Response.json({ po_number_ext: 'NEW', supplier_ref_ext: 'SUP-NEW' });
-});
-const old = lookup.resolve('OLD');
-await oldStarted;
-assert.deepEqual(await lookup.resolve('NEW'), { kind: 'match', poRefExt: 'NEW', supplierRefExt: 'SUP-NEW' });
-finishOld(Response.json({ po_number_ext: 'OLD', supplier_ref_ext: 'SUP-OLD' }));
-assert.equal(await old, null);
-});
+  it('lets a newer scan finish without an older PO response overwriting it', async () => {
+    let finishOld!: (value: Response) => void;
+    let oldRequested!: () => void;
+    const oldStarted = new Promise<void>((resolve) => {
+      oldRequested = resolve;
+    });
+    const lookup = gate.createGateLookup(async (url) => {
+      const path = String(url);
+      if (path.includes('/asn/')) return new Response(null, { status: 404 });
+      if (path.endsWith('/OLD')) {
+        oldRequested();
+        return new Promise<Response>((resolve) => {
+          finishOld = resolve;
+        });
+      }
+      return Response.json({ po_number_ext: 'NEW', supplier_ref_ext: 'SUP-NEW' });
+    });
+    const old = lookup.resolve('OLD');
+    await oldStarted;
+    assert.deepEqual(await lookup.resolve('NEW'), {
+      kind: 'match',
+      poRefExt: 'NEW',
+      supplierRefExt: 'SUP-NEW',
+    });
+    finishOld(Response.json({ po_number_ext: 'OLD', supplier_ref_ext: 'SUP-OLD' }));
+    assert.equal(await old, null);
+  });
 
-it('does not turn a PO without a supplier into a ready matched supplier', async () => {
-let calls = 0;
-const lookup = gate.createGateLookup(async () => ++calls === 1
-? new Response(null, { status: 404 })
-: Response.json({ po_number_ext: 'PO-1', supplier_ref_ext: ' ' }));
-const result = await lookup.resolve('PO-1');
-assert.equal(result?.kind, 'match');
-if (result?.kind === 'match') assert.equal(gate.isGateSupplierReady('matched', result.supplierRefExt, 'Old unlisted name'), false);
-const form: GateFormSnapshot = { challanResolved: true, challanNumber: 'PO-1', hasPhoto: true, vehicleReg: 'KA01', supplierResolved: false, supplierNameUnlisted: 'Old unlisted name' };
-assert.deepEqual(missingGateParts(form), ['supplier']);
-});
+  it('does not turn a PO without a supplier into a ready matched supplier', async () => {
+    let calls = 0;
+    const lookup = gate.createGateLookup(async () =>
+      ++calls === 1
+        ? new Response(null, { status: 404 })
+        : Response.json({ po_number_ext: 'PO-1', supplier_ref_ext: ' ' }),
+    );
+    const result = await lookup.resolve('PO-1');
+    assert.equal(result?.kind, 'match');
+    if (result?.kind === 'match')
+      assert.equal(
+        gate.isGateSupplierReady('matched', result.supplierRefExt, 'Old unlisted name'),
+        false,
+      );
+    const form: GateFormSnapshot = {
+      challanResolved: true,
+      challanNumber: 'PO-1',
+      hasPhoto: true,
+      vehicleReg: 'KA01',
+      supplierResolved: false,
+      supplierNameUnlisted: 'Old unlisted name',
+    };
+    assert.deepEqual(missingGateParts(form), ['supplier']);
+  });
 
-it('requires a nonempty matched vendor or a named unlisted supplier and gates each step independently', () => {
-assert.equal(gate.isGateSupplierReady('matched', ' ', 'Ignored'), false);
-assert.equal(gate.isGateSupplierReady('matched', 'SUP-9', ''), true);
-assert.equal(gate.isGateSupplierReady('unlisted', 'SUP-9', ' '), false);
-assert.equal(gate.isGateSupplierReady('unlisted', '', ' Acme '), true);
-const form: GateFormSnapshot = { challanResolved: false, challanNumber: 'X', hasPhoto: false, vehicleReg: '', supplierResolved: false, supplierNameUnlisted: '' };
-assert.equal(gate.isGateStepReady('challan', form), false);
-assert.equal(gate.isGateStepReady('photo', form), false);
-assert.equal(gate.isGateStepReady('vehicle', form), false);
-assert.equal(gate.isGateStepReady('supplier', form), false);
-assert.equal(gate.isGateStepReady('challan', { ...form, challanResolved: true }), true);
-assert.equal(gate.isGateStepReady('photo', { ...form, hasPhoto: true }), true);
-assert.equal(gate.isGateStepReady('vehicle', { ...form, vehicleReg: 'KA01' }), true);
-assert.equal(gate.isGateStepReady('supplier', { ...form, supplierResolved: true }), true);
-});
+  it('requires a nonempty matched vendor or a named unlisted supplier and gates each step independently', () => {
+    assert.equal(gate.isGateSupplierReady('matched', ' ', 'Ignored'), false);
+    assert.equal(gate.isGateSupplierReady('matched', 'SUP-9', ''), true);
+    assert.equal(gate.isGateSupplierReady('unlisted', 'SUP-9', ' '), false);
+    assert.equal(gate.isGateSupplierReady('unlisted', '', ' Acme '), true);
+    const form: GateFormSnapshot = {
+      challanResolved: false,
+      challanNumber: 'X',
+      hasPhoto: false,
+      vehicleReg: '',
+      supplierResolved: false,
+      supplierNameUnlisted: '',
+    };
+    assert.equal(gate.isGateStepReady('challan', form), false);
+    assert.equal(gate.isGateStepReady('photo', form), false);
+    assert.equal(gate.isGateStepReady('vehicle', form), false);
+    assert.equal(gate.isGateStepReady('supplier', form), false);
+    assert.equal(gate.isGateStepReady('challan', { ...form, challanResolved: true }), true);
+    assert.equal(gate.isGateStepReady('photo', { ...form, hasPhoto: true }), true);
+    assert.equal(gate.isGateStepReady('vehicle', { ...form, vehicleReg: 'KA01' }), true);
+    assert.equal(gate.isGateStepReady('supplier', { ...form, supplierResolved: true }), true);
+  });
 });
 
 describe('Story 3.13 weighbridge capture', () => {
   it('parses and renders kilogram values exactly', () => {
-    assert.equal(isKilogram('3500'), true);
-    assert.equal(isKilogram('3500.5'), true);
-    assert.equal(isKilogram('3500.1234'), false);
-    assert.equal(isKilogram('-1'), false);
+    assert.equal(parseKgToMilli('3500.1234'), null);
+    assert.equal(parseKgToMilli('-1'), null);
     assert.equal(parseKgToMilli('3500.5'), 3_500_500n);
     assert.equal(milliToKg(3_500_500n), '3500.500');
   });
@@ -254,6 +323,80 @@ describe('Story 3.13 weighbridge capture', () => {
     assert.equal(isToleranceBreach({ netKg: '100', ...band }), false);
     assert.equal(isToleranceBreach({ netKg: '106', ...band }), true);
     assert.equal(isToleranceBreach({ netKg: '94', ...band }), true);
+  });
+
+  it('checks tolerance bounds exactly and reports malformed input as null', () => {
+    const band = { orderedQty: 100, overReceiptTolerancePct: 5, underReceiptTolerancePct: 5 };
+    assert.equal(isToleranceBreach({ netKg: '105', ...band }), false);
+    assert.equal(isToleranceBreach({ netKg: '95', ...band }), false);
+    assert.equal(isToleranceBreach({ netKg: '105.001', ...band }), true);
+    assert.equal(isToleranceBreach({ netKg: '94.999', ...band }), true);
+    assert.equal(isToleranceBreach({ netKg: 'abc', ...band }), null);
+    assert.equal(isToleranceBreach({ netKg: '1', ...band, orderedQty: '1e3' }), null);
+  });
+
+  it('validates the weigh form field by field', () => {
+    const ok = { correlationId: 'c', poRef: 'PO-1', lineNo: '1', gross: '3500', tare: '1500' };
+    assert.equal(gate.validateWeighForm(ok).ok, true);
+    const problem = (o: Partial<typeof ok>) => {
+      const r = gate.validateWeighForm({ ...ok, ...o });
+      return r.ok ? null : r.problem;
+    };
+    assert.equal(problem({ correlationId: ' ' }), 'token');
+    assert.equal(problem({ poRef: '' }), 'po');
+    assert.equal(problem({ lineNo: '0' }), 'line');
+    assert.equal(problem({ lineNo: '99999999999' }), 'line');
+    assert.equal(problem({ gross: '' }), 'gross');
+    assert.equal(problem({ gross: 'x' }), 'gross-format');
+    assert.equal(problem({ tare: '' }), 'tare');
+    assert.equal(problem({ tare: '1.2345' }), 'tare-format');
+    assert.equal(problem({ gross: '100', tare: '200' }), 'net-negative');
+  });
+
+  it('rejects empty, untyped and oversize photos', () => {
+    const accepted = ['image/jpeg'];
+    assert.equal(gate.photoProblem({ size: 0, type: 'image/jpeg' }, accepted), 'empty');
+    assert.equal(gate.photoProblem({ size: 5, type: '' }, accepted), 'type');
+    assert.equal(gate.photoProblem({ size: 5, type: 'image/gif' }, accepted), 'type');
+    assert.equal(
+      gate.photoProblem({ size: gate.MAX_GATE_PHOTO_BYTES + 1, type: 'image/jpeg' }, accepted),
+      'size',
+    );
+    assert.equal(gate.photoProblem({ size: 5, type: 'image/jpeg' }, accepted), null);
+  });
+
+  it('reads the PO line band and fails soft', async () => {
+    const po = {
+      lines: [
+        {
+          line_no: 1,
+          ordered_qty: '100',
+          over_receipt_tolerance_pct: '5',
+          under_receipt_tolerance_pct: null,
+        },
+      ],
+    };
+    const band = await gate.fetchPoLineBand(async () => Response.json(po), 'PO-1', 1);
+    assert.deepEqual(band, {
+      orderedQty: '100',
+      overReceiptTolerancePct: '5',
+      underReceiptTolerancePct: '0',
+    });
+    assert.equal(await gate.fetchPoLineBand(async () => Response.json(po), 'PO-1', 2), null);
+    assert.equal(
+      await gate.fetchPoLineBand(async () => new Response(null, { status: 500 }), 'PO-1', 1),
+      null,
+    );
+    assert.equal(
+      await gate.fetchPoLineBand(
+        async () => {
+          throw new TypeError('offline');
+        },
+        'PO-1',
+        1,
+      ),
+      null,
+    );
   });
 
   it('builds one weighbridge.recorded envelope carrying the gate binding token', () => {

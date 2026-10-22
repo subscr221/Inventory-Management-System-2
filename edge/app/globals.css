@@ -5,163 +5,171 @@
 #gate-entry .gate-tabs,
 #gate-entry .gate-footer,
 #gate-entry .gate-choice {
-display: flex;
-gap: var(--space-2);
-flex-wrap: wrap;
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 #gate-entry .gate-stepper,
 #gate-entry .gate-form,
 #gate-entry .gate-step,
 #gate-entry .scan-field {
-display: grid;
-gap: var(--space-2);
-min-width: 0;
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 #gate-entry .gate-step-list {
-display: flex;
-justify-content: space-between;
-gap: var(--space-2);
-padding: 0;
-margin: var(--space-2) 0;
-list-style: none;
-font-size: var(--caption-size);
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0;
+  margin: var(--space-2) 0;
+  list-style: none;
+  font-size: var(--caption-size);
 }
 
 #gate-entry .gate-step-list li {
-display: flex;
-flex-direction: column;
-align-items: center;
-gap: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 #gate-entry .gate-step-list [aria-current='step'] {
-color: var(--accent-strong);
-font-weight: var(--label-weight);
+  color: var(--accent-strong);
+  font-weight: var(--label-weight);
 }
 
 #gate-entry .gate-step-number {
-display: inline-grid;
-place-items: center;
-width: 24px;
-height: 24px;
-border: 1px solid var(--border);
-border-radius: var(--rounded-full);
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-full);
 }
 
 #gate-entry .gate-step {
-margin: 0;
-padding: var(--space-3);
+  margin: 0;
+  padding: var(--space-3);
 }
 
 #gate-entry .gate-step legend {
-font-weight: var(--label-weight);
+  font-weight: var(--label-weight);
 }
 
 #gate-entry .scan-field-actions {
-display: grid;
-grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-gap: var(--space-2);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
 }
 
 #gate-entry .scan-field-actions > :nth-child(3) {
-grid-column: 1 / -1;
+  grid-column: 1 / -1;
+}
+
+#gate-entry .scan-viewfinder {
+  width: 100%;
+  max-height: 40vh;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
 }
 
 #gate-entry .gate-step input:not([type='radio']) {
-width: 100%;
-min-width: 0;
-border: 1px solid var(--border);
-border-radius: var(--rounded);
-padding: var(--space-2) var(--space-3);
-background: var(--surface);
-color: var(--text);
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  color: var(--text);
 }
 
 #gate-entry button.primary-action {
-position: static;
-box-shadow: none;
+  position: static;
+  box-shadow: none;
 }
 
 #gate-entry .gate-choice label {
-display: flex;
-align-items: center;
-gap: var(--space-2);
-min-height: var(--control-compact);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-compact);
 }
 
 #gate-entry button,
 #gate-entry input:not([type='radio']) {
-min-height: var(--control-compact);
+  min-height: var(--control-compact);
 }
 
 #gate-entry .gate-footer p {
-flex-basis: 100%;
+  flex-basis: 100%;
 }
 
 @media (min-width: 600px) {
-#gate-entry .gate-stepper {
-grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
-align-items: start;
-gap: var(--space-4);
-}
+  #gate-entry .gate-stepper {
+    grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-4);
+  }
 
-#gate-entry .gate-step-list {
-flex-direction: column;
-gap: var(--space-4);
-font-size: var(--label-size);
-}
+  #gate-entry .gate-step-list {
+    flex-direction: column;
+    gap: var(--space-4);
+    font-size: var(--label-size);
+  }
 
-#gate-entry .gate-step-list li {
-flex-direction: row;
-}
+  #gate-entry .gate-step-list li {
+    flex-direction: row;
+  }
 }
 
 @media (pointer: coarse) {
-#gate-entry button.primary-action,
-#gate-entry input:not([type='radio']) {
-min-height: var(--touch-primary);
-}
+  #gate-entry button.primary-action,
+  #gate-entry input:not([type='radio']) {
+    min-height: var(--touch-primary);
+  }
 
-#gate-entry button.secondary-action,
-#gate-entry .gate-choice label {
-min-height: var(--touch-secondary);
-}
+  #gate-entry button.secondary-action,
+  #gate-entry .gate-choice label {
+    min-height: var(--touch-secondary);
+  }
 }
 
 /* DESIGN.md (ux-Inventory Management System_2-2026-09-23) default tokens: Zoho-familiar
    structure, dark sidebar, Lato, per-site Ledger Blue accent for CMF-ALIGARH. */
 :root {
   /* Per-site accent family (Ledger Blue default) */
-  --accent: #1E6BC6;
-  --accent-strong: #1656A3;
-  --accent-soft: #E8F1FC;
-  --on-accent: #FFFFFF;
-  --accent-on-dark: #5AA2F0;
+  --accent: #1e6bc6;
+  --accent-strong: #1656a3;
+  --accent-soft: #e8f1fc;
+  --on-accent: #ffffff;
+  --accent-on-dark: #5aa2f0;
 
   /* Shell and neutrals */
-  --side: #1B2230;
-  --side-hover: #252E3F;
-  --side-text: #C9D1DD;
-  --side-muted: #8C97A8;
-  --bg: #F4F6F9;
-  --surface: #FFFFFF;
-  --border: #DDE2E9;
-  --text: #1C2430;
+  --side: #1b2230;
+  --side-hover: #252e3f;
+  --side-text: #c9d1dd;
+  --side-muted: #8c97a8;
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --border: #dde2e9;
+  --text: #1c2430;
   --text-muted: #566173;
 
   /* Status pairs (fixed across sites) */
-  --ok: #1E7A3C;
-  --ok-bg: #E6F4EA;
-  --warn: #8A5300;
-  --warn-bg: #FFF3DC;
-  --err: #B3261E;
-  --err-bg: #FCE8E6;
-  --info: #1F5FAD;
-  --info-bg: #E7F0FB;
-  --off: #4A5568;
-  --off-bg: #ECEFF3;
+  --ok: #1e7a3c;
+  --ok-bg: #e6f4ea;
+  --warn: #8a5300;
+  --warn-bg: #fff3dc;
+  --err: #b3261e;
+  --err-bg: #fce8e6;
+  --info: #1f5fad;
+  --info-bg: #e7f0fb;
+  --off: #4a5568;
+  --off-bg: #eceff3;
 
   /* Back-compat aliases used by older component classes */
   --primary: var(--accent);

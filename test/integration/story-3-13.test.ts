@@ -107,6 +107,8 @@ describe('Story 3.13 Gate Entry and Weighbridge Capture', () => {
   let server: Server;
   let port: number;
   let siteAId: string;
+  let siteBId: string;
+  let siteBGateHeaders: Record<string, string>;
   let gateOfficerHeaders: Record<string, string>;
   let weighOperatorHeaders: Record<string, string>;
   let storeHeaders: Record<string, string>;
@@ -114,6 +116,7 @@ describe('Story 3.13 Gate Entry and Weighbridge Capture', () => {
 
   const ASN_NUMBER = 'ASN-3-13-1';
   const PO_REF = 'PO-3-13-1';
+  const OVERDUE_DEVICE_KEY = 'WB-OVERDUE-3-13';
   const DEVICE_KEY = 'WB-3-13';
 
   before(async () => {
@@ -156,6 +159,12 @@ describe('Story 3.13 Gate Entry and Weighbridge Capture', () => {
        VALUES ($1, 'site-A', 'site', NULL, $1, 'general', 'ambient', false, 'active')`,
       [siteAId],
     );
+    siteBId = randomUUID();
+    await getPool().query(
+      `INSERT INTO location_register (location_id, location_code, level, parent_location_id, site_id, zone_type, temperature_class, quarantine, status)
+       VALUES ($1, 'site-B', 'site', NULL, $1, 'general', 'ambient', false, 'active')`,
+      [siteBId],
+    );
     await getPool().query(
       `INSERT INTO item_master (sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required, bis_licence_required, valuation_method, business_stream, status)
        VALUES ('SKU-3-13', 'EA', false, false, false, false, false, 'weighted_average', 'production', 'active')`,
@@ -175,6 +184,11 @@ describe('Story 3.13 Gate Entry and Weighbridge Capture', () => {
       `INSERT INTO statutory_examination (examination_id, asset_id, examination_type, interval_months, next_due_date, status, device_key)
        VALUES ($1, $2, 'weighbridge_legal_metrology', 12, '2027-01-01', 'compliant', $3)`,
       [randomUUID(), randomUUID(), DEVICE_KEY],
+    );
+    await getPool().query(
+      `INSERT INTO statutory_examination (examination_id, asset_id, examination_type, interval_months, next_due_date, status, device_key)
+       VALUES ($1, $2, 'weighbridge_legal_metrology', 12, '2026-01-01', 'overdue', $3)`,
+      [randomUUID(), randomUUID(), OVERDUE_DEVICE_KEY],
     );
 
     server = createAppServer(createAppRouter());
@@ -215,6 +229,11 @@ describe('Story 3.13 Gate Entry and Weighbridge Capture', () => {
     ]);
     storeHeaders = await authFor(port, 'store-assistant-3-13@example.com');
 
+    await provisionUser(port, 'gate-officer-b-3-13@example.com', [
+      { role: 'gate_officer', module: 'gate', functionScope: 'write', locationId: siteBId },
+    ]);
+    siteBGateHeaders = await authFor(port, 'gate-officer-b-3-13@example.com');
+
     await provisionUser(port, 'stock-viewer-3-13@example.com', [
       { role: 'stock_viewer', module: 'inventory', functionScope: 'read', locationId: siteAId },
     ]);
@@ -243,7 +262,13 @@ describe('Story 3.13 Gate Entry and Weighbridge Capture', () => {
   });
 
   it('AC2: a write-only gate officer lists gate events with 200', async () => {
-    const res = await makeRequest(port, 'GET', '/api/v1/gate-events', undefined, gateOfficerHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events',
+      undefined,
+      gateOfficerHeaders,
+    );
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
   });
 
@@ -334,12 +359,14 @@ describe('Story 3.13 Gate Entry and Weighbridge Capture', () => {
       challan_photo_ref: 'photo-ref-1',
       gate_id: 'GATE-01',
       entered_at: new Date().toISOString(),
-      supplier_ref_ext: 'UNLISTED',
+      supplier_ref_ext: null,
+      supplier_unlisted: true,
       supplier_name_unlisted: 'Acme Traders',
     };
     const res = await makeRequest(port, 'POST', '/api/v1/gate-events', body, gateOfficerHeaders);
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    assert.strictEqual(res.body['supplier_ref_ext'], 'UNLISTED');
+    assert.strictEqual(res.body['supplier_ref_ext'], null);
+    assert.strictEqual(res.body['supplier_unlisted'], true);
     assert.strictEqual(res.body['supplier_name_unlisted'], 'Acme Traders');
     assert.strictEqual(res.body['binding_status'], 'unmatched');
     assert.strictEqual(res.body['vehicle_reg_ext'], 'KA01AB1234');
@@ -352,7 +379,193 @@ describe('Story 3.13 Gate Entry and Weighbridge Capture', () => {
       gateOfficerHeaders,
     );
     assert.strictEqual(readBack.status, 200, JSON.stringify(readBack.body));
-    assert.strictEqual(readBack.body['supplier_ref_ext'], 'UNLISTED');
+    assert.strictEqual(readBack.body['supplier_ref_ext'], null);
+    assert.strictEqual(readBack.body['supplier_unlisted'], true);
     assert.strictEqual(readBack.body['supplier_name_unlisted'], 'Acme Traders');
+  });
+
+  function gateBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      site_code_ext: 'site-A',
+      po_ref_ext: 'UNKNOWN',
+      vehicle_reg_ext: 'KA01AB9999',
+      driver_name: 'Ravi',
+      challan_photo_ref: 'photo-ref-2',
+      gate_id: 'GATE-01',
+      entered_at: new Date().toISOString(),
+      ...overrides,
+    };
+  }
+
+  it('D3: a listed vendor code persists with supplier_unlisted false', async () => {
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ supplier_ref_ext: 'SUP-3-13' }),
+      gateOfficerHeaders,
+    );
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body['supplier_ref_ext'], 'SUP-3-13');
+    assert.strictEqual(res.body['supplier_unlisted'], false);
+  });
+
+  it('D3: supplier shape violations are refused 400 INVALID_PARAMS', async () => {
+    const cases: Array<Record<string, unknown>> = [
+      { supplier_ref_ext: '   ' },
+      { supplier_ref_ext: 'UNLISTED', supplier_unlisted: true, supplier_name_unlisted: 'Acme' },
+      { supplier_unlisted: true },
+      { supplier_unlisted: true, supplier_ref_ext: null, supplier_name_unlisted: '  ' },
+      { supplier_ref_ext: 'SUP-3-13', supplier_name_unlisted: 'Acme' },
+      { supplier_unlisted: 'yes', supplier_name_unlisted: 'Acme' },
+      { supplier_ref_ext: 'S'.repeat(65) },
+      { supplier_unlisted: true, supplier_name_unlisted: 'N'.repeat(201) },
+      { driver_name: 'D'.repeat(121) },
+    ];
+    for (const extra of cases) {
+      const res = await makeRequest(
+        port,
+        'POST',
+        '/api/v1/gate-events',
+        gateBody(extra),
+        gateOfficerHeaders,
+      );
+      assert.strictEqual(
+        res.status,
+        400,
+        `${JSON.stringify(extra)} -> ${JSON.stringify(res.body)}`,
+      );
+      assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS', JSON.stringify(extra));
+    }
+  });
+
+  it('D4: a weighbridge operator may post a gate entry but not reverse one', async () => {
+    const created = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ vehicle_reg_ext: 'KA01AB7777' }),
+      weighOperatorHeaders,
+    );
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    const reversed = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/gate-events/${created.body['gate_event_id'] as string}/reverse`,
+      { reason: 'wrong lane' },
+      weighOperatorHeaders,
+    );
+    assert.strictEqual(reversed.status, 403, JSON.stringify(reversed.body));
+  });
+
+  it('D2: a store_assistant (receiving module only) is refused the gate and weighbridge reads and gate post', async () => {
+    for (const path of ['/api/v1/gate-events', '/api/v1/weighbridge-events']) {
+      const res = await makeRequest(port, 'GET', path, undefined, storeHeaders);
+      assert.strictEqual(res.status, 403, `${path}: ${JSON.stringify(res.body)}`);
+    }
+    const post = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody(), storeHeaders);
+    assert.strictEqual(post.status, 403, JSON.stringify(post.body));
+  });
+
+  it('D2: a gate-module-only officer at site B cannot post a gate entry for site A', async () => {
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody(),
+      siteBGateHeaders,
+    );
+    assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+  });
+
+  it('stamp-status: an overdue weighbridge is reported overdue and the page is not truncated', async () => {
+    const res = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/weighbridge-events/stamp-status?site=site-A',
+      undefined,
+      weighOperatorHeaders,
+    );
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    const rows = res.body['stamp_status'] as Array<Record<string, unknown>>;
+    assert.strictEqual(
+      rows.find((r) => r['device_key'] === OVERDUE_DEVICE_KEY)?.['status'],
+      'overdue',
+    );
+    assert.strictEqual(res.body['truncated'], false);
+  });
+
+  it('stamp-status: absent site answers 200 to a caller with a readable site', async () => {
+    const res = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/weighbridge-events/stamp-status',
+      undefined,
+      weighOperatorHeaders,
+    );
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+  });
+
+  it('stamp-status: absent site is refused for a caller with no gate-family read grant', async () => {
+    const res = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/weighbridge-events/stamp-status',
+      undefined,
+      storeHeaders,
+    );
+    assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+  });
+
+  it('stamp-status: a cross-site ?site= is refused LOCATION_ACCESS_DENIED', async () => {
+    const res = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/weighbridge-events/stamp-status?site=site-A',
+      undefined,
+      siteBGateHeaders,
+    );
+    assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'LOCATION_ACCESS_DENIED');
+  });
+
+  it('ASN: a site-B gate officer is refused an ASN that belongs to site A', async () => {
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/asn/${ASN_NUMBER}`,
+      undefined,
+      siteBGateHeaders,
+    );
+    assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+  });
+
+  it('a weighment on an overdue-stamped device is blocked 423 WEIGHBRIDGE_OUT_OF_STAMP', async () => {
+    const gate = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ supplier_ref_ext: 'SUP-3-13' }),
+      gateOfficerHeaders,
+    );
+    assert.strictEqual(gate.status, 201, JSON.stringify(gate.body));
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/weighbridge-events',
+      {
+        weighbridge_event_id: randomUUID(),
+        correlation_id: gate.body['correlation_id'],
+        tare_kg: 12000,
+        gross_kg: 15500,
+        po_ref_ext: PO_REF,
+        line_no: 1,
+        device_id: OVERDUE_DEVICE_KEY,
+        capture_method: 'MANUAL',
+      },
+      weighOperatorHeaders,
+    );
+    assert.strictEqual(res.status, 423, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'WEIGHBRIDGE_OUT_OF_STAMP');
   });
 });
