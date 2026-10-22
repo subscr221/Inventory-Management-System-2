@@ -57,8 +57,8 @@ export function StoresInbox({
   pendingReceipts = [],
 }: StoresInboxProps) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
-  const [scanValue, setScanValue] = useState('');
-  const [announcement, setAnnouncement] = useState('');
+  const [scanValue, setScanValue] = useState<string>('');
+  const [announcement, setAnnouncement] = useState<string>('');
   const [doneHighlight, setDoneHighlight] = useState<string | null>(null);
   const [lotSheet, setLotSheet] = useState<string | null>(null);
   const mounted = useRef(true);
