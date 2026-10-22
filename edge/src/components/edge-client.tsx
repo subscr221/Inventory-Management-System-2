@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PowerSyncDatabase } from '@powersync/web';
 import { createTestCaptureEvent } from '../capture/test-capture';
 import { createCrossDockCompletionEvent } from '../capture/cross-dock';
-import { assertLotNotHeld } from '../capture/held-lot';
+import { assertLotNotHeld, getHeldLot } from '../capture/held-lot';
 import { createIndentRaisedEvent } from '../capture/indent';
 import { createDamageCaptureEvents } from '../capture/damage';
 import type { CaptureSettlement, DamageSubmitInput, DamageSubmitResult } from './report-damage';
@@ -12,6 +12,7 @@ import { createGateEnteredEvent, createWeighbridgeRecordedEvent } from '../captu
 import type { ReceiptRow, ReceiptSubmission } from '../capture/receiving';
 import type { DoneRow } from './stores-inbox-model';
 import type { ReceiptSubmitResult } from './stores-accept';
+import { confirmPayload, type PickLineConfirmInput } from './pick-line-model';
 import type {
   GateSubmitInput,
   GateSubmitResult,
@@ -47,6 +48,7 @@ import {
   hasAuthRequired,
   insertCaptureEvent,
   readCachedContext,
+  readCaptureRefusalCode,
   readCaptureSettlement,
   readFailures,
   readOutboxCounts,
@@ -258,7 +260,8 @@ export function EdgeClient({
     | 'stores-accept'
     | 'stores-issue'
     | 'putaway-task'
-    | 'grn-read';
+    | 'grn-read'
+    | 'floor-tasks';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
@@ -1055,6 +1058,75 @@ export function EdgeClient({
     [state.userId],
   );
 
+  // Story 3.16: the pre-capture held-lot guard for the pick lot scan. Reads the synced held_lot
+  // table; fail soft so the authoritative LOT_ON_HOLD refusal still catches a held lot on replay.
+  const checkHeldLot = useCallback(async (lotNumber: string): Promise<string | null> => {
+    const db = database.current;
+    if (!db) return null;
+    try {
+      const held = await getHeldLot(db, lotNumber);
+      return held ? held.lot_number : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Story 3.16 (AC 5): confirm a pick line by writing one `pick_line.confirmed` event (stream
+  // warehouse) to the edge outbox. capture_method is always PWA; the server stamps confirmed_by.
+  const confirmPickLine = useCallback(
+    async (input: PickLineConfirmInput): Promise<string> => {
+      const db = requireReady();
+      if (input.directedLotNumber) {
+        try {
+          await assertLotNotHeld(db, input.directedLotNumber);
+        } catch {
+          throw new Error('LOT_ON_HOLD');
+        }
+      }
+      const event = createOutboxEvent({
+        eventId: crypto.randomUUID(),
+        streamType: 'warehouse',
+        streamId: input.pickTaskId,
+        eventType: 'pick_line.confirmed',
+        payload: confirmPayload({
+          pickTaskId: input.pickTaskId,
+          pickLineId: input.pickLineId,
+          confirmedLotId: input.confirmedLotId,
+          confirmedQuantity: input.confirmedQuantity,
+        }),
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+        correlationId: crypto.randomUUID(),
+        deviceId: deviceId(),
+        idempotencyKey: input.idempotencyKey,
+        occurredAt: new Date().toISOString(),
+        captureMethod: 'AUTO',
+      });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [refreshLocalState, requireReady, state.role, state.siteId, state.userId],
+  );
+
+  // Story 3.16: where a just-confirmed pick line stands after upload.
+  const pickSettlement = useCallback(
+    async (eventId: string): Promise<'pending' | 'synced' | 'refused'> => {
+      const db = database.current;
+      if (!db) return 'pending';
+      return readCaptureSettlement(db, eventId);
+    },
+    [],
+  );
+
+  // Story 3.16: the server error code behind a refused pick line, for the pick screen copy.
+  const pickRefusalCode = useCallback(async (eventId: string): Promise<string | null> => {
+    const db = database.current;
+    if (!db) return null;
+    return readCaptureRefusalCode(db, eventId).catch(() => null);
+  }, []);
+
   const selectWorkOrder = useCallback(async (workOrderId: string) => {
     const db = database.current;
     const reservations = db ? await readCachedReservations(db, workOrderId) : [];
@@ -1218,6 +1290,16 @@ export function EdgeClient({
         inspectionBayCode: state.inspectionBayCode,
         onSubmitReceipt: submitReceipt,
         storePhoto: storeReceiptPhoto,
+      }}
+      floorTasks={{
+        online: state.online,
+        ready: state.navigationConfirmed,
+        siteId: state.siteId,
+        userId: state.userId,
+        checkHeldLot,
+        onConfirmPickLine: confirmPickLine,
+        settlementOf: pickSettlement,
+        refusalCodeOf: pickRefusalCode,
       }}
       userId={state.userId}
       onRetry={() => {

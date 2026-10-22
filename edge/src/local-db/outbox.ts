@@ -417,6 +417,27 @@ export async function readCaptureSettlement(
   return status === 'needs_attention' ? 'refused' : 'pending';
 }
 
+/**
+ * Story 3.16: the server error code behind a refused capture, so the pick screen can say why a
+ * `pick_line.confirmed` was rejected. Prefers the retained refusal copy, then an unsalvaged
+ * needs_attention row still in the upload queue; null when the row carries no code.
+ */
+export async function readCaptureRefusalCode(
+  db: QueryExecutor,
+  eventId: string,
+): Promise<string | null> {
+  const retained = await db.getAll<{ server_error_code: string | null }>(
+    `SELECT server_error_code FROM edge_outbox_retained WHERE id = ? AND retained_reason = ?`,
+    [eventId, 'refused'],
+  );
+  if (retained[0]) return retained[0].server_error_code;
+  const queued = await db.getAll<{ server_error_code: string | null }>(
+    `SELECT server_error_code FROM edge_outbox WHERE id = ? AND local_status = ? AND ${NOT_RETAINED}`,
+    [eventId, 'needs_attention'],
+  );
+  return queued[0]?.server_error_code ?? null;
+}
+
 export async function readFailures(db: QueryExecutor): Promise<FailureRow[]> {
   // Retained refusals, plus any needs_attention row not yet salvaged (see readOutboxCounts).
   return db.getAll<FailureRow>(

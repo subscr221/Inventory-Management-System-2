@@ -1352,3 +1352,9 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - Alternative-rack list on the putaway detail: the screen offers the suggested bin and scan-or-type; ranked alternatives are deferred.
 - Stock-by-location read for the putaway card: the card shows the task quantity and source bay, not live bin occupancy.
 - Server-side label print queue: labels are device-local IndexedDB only; there is no cross-device restore or print server.
+
+## Deferred from: code review of story-3.16 (2026-10-23)
+
+- Integration coverage for AC 6 exercises the direct confirm route (POST /api/v1/pick-tasks/:id/lines/:lineId/confirm) rather than the edge outbox replay path the PWA actually uses (pick_line.confirmed through src/api/v1/edge.ts ingest and inline finalize). The outbox ingest plus finalize-after-last-line path is unit-tested for payload shape only; an end-to-end outbox replay test would close the gap.
+- Offline inbox refresh after completion relies on the next sync pass: eload() cannot fetch while offline, so the two-pane list reconciles only after connectivity returns.
+

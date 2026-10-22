@@ -35,6 +35,8 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^putaway\./,
   /^labels\./,
   /^grn\./,
+  // Story 3.16: the floor task inbox and pick execution screen.
+  /^floor\./,
   // Story 4.8: the standing grants page.
   /^standingGrants\./,
   /^standing-grants-/,

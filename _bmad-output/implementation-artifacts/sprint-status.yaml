@@ -949,7 +949,7 @@ development_status:
   3-13-gate-entry-and-weighbridge-capture-screen: done   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G01, G02; XL); story file created 2026-10-21 (baseline 4f37d32); existing implementation continuation, reopened acceptance gaps 2026-10-21; code review done 2026-10-22, 20 patches applied, D1 to D5 resolved
   3-14-stores-inbox-scan-anything-bar-and-acceptance-into-inspection-bay: review   # dev-story 2026-10-22 from baseline a07e22f; story file created from epics.md (no prior file); 7 integration + 12 edge unit tests, full suite 26 pre-existing ECONNRESET failures identical at baseline. PRE-PILOT BLOCKING (sprint-change 2026-10-21; G03, G04, G11, G21; L)
   3-15-directed-putaway-task-screen-label-queue-and-grn-read-card: done   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G05, G04 label queue; M) # code review 2026-10-23: 15 patches applied, AC6 two-event scope confirmed
-  3-16-floor-task-inbox-and-pick-execution-screen: ready-for-dev   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G08 picker; L) # story file created 2026-10-23
+  3-16-floor-task-inbox-and-pick-execution-screen: done   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G08 picker; L) # dev-auto 2026-10-23: implemented, review pass applied 12 patches, follow-up review recommended
   3-17-short-pick-exception-seam-and-tiles: backlog   # PILOT (sprint-change 2026-10-21; G08 short pick; M)
   3-18-pack-station-and-dispatch-screen: backlog   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G08 pack and dispatch; L)
   3-19-unloading-exception-commands-server: backlog   # PILOT (sprint-change 2026-10-21; G08 unloading server; L)

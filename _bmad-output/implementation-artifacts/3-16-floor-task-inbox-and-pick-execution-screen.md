@@ -1,5 +1,32 @@
+﻿---
+status: done
+baseline_revision: 6b1326a8cd24974062c7bce4f6eeaaacb6a57efe
+followup_review_recommended: true
+context:
+  - _bmad-output/planning-artifacts/epics.md
+  - _bmad-output/planning-artifacts/ux-designs/ux-Inventory Management System_2-2026-09-23/EXPERIENCE.md
+  - _bmad-output/planning-artifacts/ux-designs/ux-Inventory Management System_2-2026-09-23/mockups/key-floor.html
+  - _bmad-output/implementation-artifacts/3-15-directed-putaway-task-screen-label-queue-and-grn-read-card.md
+  - edge/src/components/putaway-task.tsx
+  - edge/src/components/app-shell.tsx
+  - edge/src/components/scan-field.tsx
+  - edge/src/components/edge-client.tsx
+  - src/api/v1/edge.ts
+  - src/api/v1/pick-tasks.ts
+  - src/read/projections/pick_task.ts
+  - src/read/projections/pick_line.ts
+  - src/compliance/pick.ts
+  - edge/src/local-db/outbox.ts
+  - edge/src/sync/connector.ts
+  - edge/src/capture/held-lot.ts
+  - edge/src/local-db/schema.ts
+  - edge/src/messages/en.json
+  - edge/test/unit/i18n-literals.test.ts
+  - docs/migration/pilot-mock-extract/roles.json
+---
+
 # Story 3.16: Floor Task Inbox and Pick Execution Screen
-Status: ready-for-dev
+Status: in-progress
 
 ## Story
 
@@ -53,42 +80,42 @@ then Handheld shows one page at a time with the primary pinned at 56 px, Tablet 
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Server nav row, deep-link gate and read contract extensions (AC 1, AC 3)
-  - [ ] 1.1 Add the bootstrap nav row `{ name: 'Floor tasks', modules: ['warehouse'], functionScope: 'write' }` and NAV_ENTRIES `{ name: 'Floor tasks', href: '/floor/tasks', label: 'nav.floorTasks' }` (`src/api/v1/edge.ts:420-422`, precedent `Stores issue` at `:422`); add `nav.floorTasks` to `edge/src/messages/en.json` beside `nav.storesIssue`; verify picker and store_assistant hold warehouse write (`roles.json:401-413`, `:332-335`).
-  - [ ] 1.2 Add `floor-tasks` to BaseView and BASE_VIEW_ENTRY (precedent `putaway-task`/`grn-read` from 3.15) so a deep link without the entry renders the no-access card with no fetch; wire the view into the AppShell render chain (`edge/src/components/app-shell.tsx`).
-  - [ ] 1.3 Extend `GET /api/v1/pick-tasks` list rows with `so_number_ext`, `confirmed_line_count`, `line_count` (`src/read/projections/pick_task.ts:272-274`, FILTER predicates per `src/compliance/pick.ts:828-832`), with integration tests.
-  - [ ] 1.4 Extend `GET /api/v1/pick-tasks/:pickTaskId` lines with `location_code`, `directed_lot_number`, `uom` joined from `location_register`, `lot_master`, `item_master` (`src/read/projections/pick_line.ts:62-66`), with integration tests.
+- [x] Task 1: Server nav row, deep-link gate and read contract extensions (AC 1, AC 3)
+  - [x] 1.1 Add the bootstrap nav row `{ name: 'Floor tasks', modules: ['warehouse'], functionScope: 'write' }` and NAV_ENTRIES `{ name: 'Floor tasks', href: '/floor/tasks', label: 'nav.floorTasks' }` (`src/api/v1/edge.ts:420-422`, precedent `Stores issue` at `:422`); add `nav.floorTasks` to `edge/src/messages/en.json` beside `nav.storesIssue`; verify picker and store_assistant hold warehouse write (`roles.json:401-413`, `:332-335`).
+  - [x] 1.2 Add `floor-tasks` to BaseView and BASE_VIEW_ENTRY (precedent `putaway-task`/`grn-read` from 3.15) so a deep link without the entry renders the no-access card with no fetch; wire the view into the AppShell render chain (`edge/src/components/app-shell.tsx`).
+  - [x] 1.3 Extend `GET /api/v1/pick-tasks` list rows with `so_number_ext`, `confirmed_line_count`, `line_count` (`src/read/projections/pick_task.ts:272-274`, FILTER predicates per `src/compliance/pick.ts:828-832`), with integration tests.
+  - [x] 1.4 Extend `GET /api/v1/pick-tasks/:pickTaskId` lines with `location_code`, `directed_lot_number`, `uom` joined from `location_register`, `lot_master`, `item_master` (`src/read/projections/pick_line.ts:62-66`), with integration tests.
 
-- [ ] Task 2: Floor task inbox screen (AC 2)
-  - [ ] 2.1 `floor-tasks` view loads `GET /api/v1/pick-tasks?site=<site>&status=pending` and `?status=in_progress` (one status per request) merged client-side.
-  - [ ] 2.2 Render one group `Pick lists - sales orders`: tasks with `assigned_to` equal to the bootstrap `user_id` first, then `assigned_to` null; hide others; card shows task id, `so_number_ext`, `n of m picked` (from `confirmed_line_count`/`line_count`), text pill `In progress`/`Pending`; empty state `All caught up`; offline shows last fetched list with `Showing the list from <time>`.
-  - [ ] 2.3 Card opens the line screen via `/floor/tasks?task=<id>`; Handheld one page at a time with Back, Tablet/Desktop side by side (EXPERIENCE.md:113, mock L450-454).
+- [x] Task 2: Floor task inbox screen (AC 2)
+  - [x] 2.1 `floor-tasks` view loads `GET /api/v1/pick-tasks?site=<site>&status=pending` and `?status=in_progress` (one status per request) merged client-side.
+  - [x] 2.2 Render one group `Pick lists - sales orders`: tasks with `assigned_to` equal to the bootstrap `user_id` first, then `assigned_to` null; hide others; card shows task id, `so_number_ext`, `n of m picked` (from `confirmed_line_count`/`line_count`), text pill `In progress`/`Pending`; empty state `All caught up`; offline shows last fetched list with `Showing the list from <time>`.
+  - [x] 2.3 Card opens the line screen via `/floor/tasks?task=<id>`; Handheld one page at a time with Back, Tablet/Desktop side by side (EXPERIENCE.md:113, mock L450-454).
 
-- [ ] Task 3: Pick line screen steps 1 and 2 (AC 4)
-  - [ ] 3.1 Three-step indicator `1 Scan bin - 2 Scan lot - 3 Confirm qty` with `aria-current="step"` on the active step (mock L678); reuse `ScanField` (`edge/src/components/scan-field.tsx`).
-  - [ ] 3.2 Step 1 bin scan: wrong bin shows `Wrong bin - <code>`, stays on step 1; matching bin advances.
-  - [ ] 3.3 Step 2 lot scan: directed lot advances with quantity prefilled; held lot (`held_lot` table with `quality_hold_status` held, `getHeldLot`/`assertLotNotHeld`, `edge/src/capture/held-lot.ts:22`, `:35`) shows `On hold - awaiting QC` and does not advance, online or offline; different unheld lot shows `Wrong lot - not picked` naming the directed lot, stays on step 2 (substitution belongs to 3.17).
+- [x] Task 3: Pick line screen steps 1 and 2 (AC 4)
+  - [x] 3.1 Three-step indicator `1 Scan bin - 2 Scan lot - 3 Confirm qty` with `aria-current="step"` on the active step (mock L678); reuse `ScanField` (`edge/src/components/scan-field.tsx`).
+  - [x] 3.2 Step 1 bin scan: wrong bin shows `Wrong bin - <code>`, stays on step 1; matching bin advances.
+  - [x] 3.3 Step 2 lot scan: directed lot advances with quantity prefilled; held lot (`held_lot` table with `quality_hold_status` held, `getHeldLot`/`assertLotNotHeld`, `edge/src/capture/held-lot.ts:22`, `:35`) shows `On hold - awaiting QC` and does not advance, online or offline; different unheld lot shows `Wrong lot - not picked` naming the directed lot, stays on step 2 (substitution belongs to 3.17).
 
-- [ ] Task 4: Confirm quantity and outbox event (AC 5)
-  - [ ] 4.1 Step 3 quantity read-only at directed; Confirm disabled unless equal; `Short pick` secondary renders disabled with the reason `Short pick comes in a later release - leave the line open and tell your supervisor` (no short-pick control, no photo capture).
-  - [ ] 4.2 Confirm writes one `pick_line.confirmed` event (stream warehouse, payload `{ pick_task_id, pick_line_id, confirmed_lot_id, confirmed_quantity, capture_method: 'PWA' }`) via `insertCaptureEvent` (`edge/src/local-db/outbox.ts:42`); line then reads Synced or `Captured - pending sync`.
-  - [ ] 4.3 Map `PICK_*`, `LOT_ON_HOLD`, `INSUFFICIENT_STOCK_FOR_PICK` refusals (`edge/src/sync/connector.ts:119-129`, `:141`) to `errors.*` text via `errorMessage` (`en.json:86`, `:179-189`) and show in Refused captures.
+- [x] Task 4: Confirm quantity and outbox event (AC 5)
+  - [x] 4.1 Step 3 quantity read-only at directed; Confirm disabled unless equal; `Short pick` secondary renders disabled with the reason `Short pick comes in a later release - leave the line open and tell your supervisor` (no short-pick control, no photo capture).
+  - [x] 4.2 Confirm writes one `pick_line.confirmed` event (stream warehouse, payload `{ pick_task_id, pick_line_id, confirmed_lot_id, confirmed_quantity, capture_method: 'PWA' }`) via `insertCaptureEvent` (`edge/src/local-db/outbox.ts:42`); line then reads Synced or `Captured - pending sync`.
+  - [x] 4.3 Map `PICK_*`, `LOT_ON_HOLD`, `INSUFFICIENT_STOCK_FOR_PICK` refusals (`edge/src/sync/connector.ts:119-129`, `:141`) to `errors.*` text via `errorMessage` (`en.json:86`, `:179-189`) and show in Refused captures.
 
-- [ ] Task 5: Inline finalization and completion panel (AC 6)
-  - [ ] 5.1 On last line confirmed, show completion panel with task id, order, line count, `All lines picked` and Back to tasks once the last line reads Synced or `Captured - pending sync` (offline); no `pick_task.completed` from the picker (server finalizes inline, `src/compliance/pick.ts:612-628`).
-  - [ ] 5.2 A `LOT_ON_HOLD`, `INSUFFICIENT_STOCK_FOR_PICK` or `PICK_LINE_ALREADY_CONFIRMED` refusal of the last confirm renders from `errors.*` in Refused captures and reloads the task.
-  - [ ] 5.3 The task leaves the inbox once the list returns it completed (re-fetch pending and in_progress lists).
+- [x] Task 5: Inline finalization and completion panel (AC 6)
+  - [x] 5.1 On last line confirmed, show completion panel with task id, order, line count, `All lines picked` and Back to tasks once the last line reads Synced or `Captured - pending sync` (offline); no `pick_task.completed` from the picker (server finalizes inline, `src/compliance/pick.ts:612-628`).
+  - [x] 5.2 A `LOT_ON_HOLD`, `INSUFFICIENT_STOCK_FOR_PICK` or `PICK_LINE_ALREADY_CONFIRMED` refusal of the last confirm renders from `errors.*` in Refused captures and reloads the task.
+  - [x] 5.3 The task leaves the inbox once the list returns it completed (re-fetch pending and in_progress lists).
 
-- [ ] Task 6: Device classes, accessibility and i18n (AC 7)
-  - [ ] 6.1 Handheld: one page at a time, primary pinned 56 px; Tablet/Desktop: inbox and task side by side; no horizontal scroll at 360 px (EXPERIENCE.md:135, mock L450-454).
-  - [ ] 6.2 After each confirm, announce the result and the next instruction through the aria-live region; the scan field stays focused and armed (EXPERIENCE.md:74, `:119`).
-  - [ ] 6.3 All new copy under `floor.*`; extend the i18n literal guard (`edge/test/unit/i18n-literals.test.ts` ALLOWED_LITERAL_PATTERNS); zero axe violations and keyboard-only pass (e2e and accessibility specs).
+- [x] Task 6: Device classes, accessibility and i18n (AC 7)
+  - [x] 6.1 Handheld: one page at a time, primary pinned 56 px; Tablet/Desktop: inbox and task side by side; no horizontal scroll at 360 px (EXPERIENCE.md:135, mock L450-454).
+  - [x] 6.2 After each confirm, announce the result and the next instruction through the aria-live region; the scan field stays focused and armed (EXPERIENCE.md:74, `:119`).
+  - [x] 6.3 All new copy under `floor.*`; extend the i18n literal guard (`edge/test/unit/i18n-literals.test.ts` ALLOWED_LITERAL_PATTERNS); zero axe violations and keyboard-only pass (e2e and accessibility specs).
 
-- [ ] Task 7: Tests and regression (AC 3, AC 7)
-  - [ ] 7.1 Edge unit tests: inbox grouping and ownership ordering, line state machine (wrong bin, wrong lot, held lot, quantity gate), outbox event shape, i18n literals guard.
-  - [ ] 7.2 Integration tests for both projection extensions (`test/integration/story-3-16.test.ts`).
-  - [ ] 7.3 E2E spec for scan bin to scan lot to confirm to completion; accessibility spec run.
-  - [ ] 7.4 Full regression: edge build (`npm --workspace @inventory/edge run build`), edge unit suite, edge lint and typecheck, root unit and integration tests.
+- [x] Task 7: Tests and regression (AC 3, AC 7)
+  - [x] 7.1 Edge unit tests: inbox grouping and ownership ordering, line state machine (wrong bin, wrong lot, held lot, quantity gate), outbox event shape, i18n literals guard.
+  - [x] 7.2 Integration tests for both projection extensions (`test/integration/story-3-16.test.ts`).
+  - [x] 7.3 E2E spec for scan bin to scan lot to confirm to completion; accessibility spec run.
+  - [x] 7.4 Full regression: edge build (`npm --workspace @inventory/edge run build`), edge unit suite, edge lint and typecheck, root unit and integration tests.
 
 ## Dev Notes
 
@@ -130,7 +157,7 @@ The 3.15 code review (2026-10-23) produced hard-won rules that 3.16 MUST follow:
 
 ### Agent Model Used
 
-Record the model that implements this story.
+deepseek/deepseek-v4-flash-0731
 
 ### Debug Log References
 
@@ -146,6 +173,7 @@ Anticipated files this story will create or update (confirm and complete during 
 
 - NEW `edge/app/floor/tasks/page.tsx` (or equivalent routed view)
 - NEW `edge/src/components/floor-tasks.tsx` (inbox screen)
+- NEW `edge/src/components/floor-tasks-model.ts` (pure inbox merge/ownership rules, unit-tested)
 - NEW `edge/src/components/pick-line.tsx` (line execution screen)
 - NEW `edge/src/components/pick-line-model.ts` (pure state machine, unit-tested)
 - UPDATE `edge/src/components/app-shell.tsx` (view union, render chain, no-access card)
@@ -158,12 +186,46 @@ Anticipated files this story will create or update (confirm and complete during 
 - NEW `edge/test/unit/floor-tasks.test.ts`, `edge/test/unit/pick-line.test.ts`
 - NEW `test/integration/story-3-16.test.ts`
 - NEW `edge/test/e2e/floor-tasks.spec.ts`, `edge/test/accessibility/floor-tasks.spec.ts`
+- NEW `edge/test/fixtures/floor-stub.ts` (e2e/a11y fetch stub)
 - UPDATE `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-23: Story 3.16 created by create-story with full context. Status set to ready-for-dev.
+- 2026-10-23: Dev auto run started, status set to in-progress; predecessor story 3.15 review patches committed as `251948c` to give a clean baseline.
+- 2026-10-23: Story 3.16 implemented end to end. Server: bootstrap nav row `Floor tasks` (warehouse write) and `NAV_ENTRIES` entry `/floor/tasks`; `pick_task.listPickTasks` now joins `erp_sales_order` for `so_number_ext` and sub-selects `confirmed_line_count`/`line_count` (FILTER predicates matching `pick.ts:830-831`); `pick_line.listPickLinesByTask` LEFT JOINs `location_register`/`lot_master`/`item_master` for `location_code`/`directed_lot_number`/`uom`. Edge: `floor-tasks` view, inbox (two status reads merged client-side, ownership ordering, offline list with "Showing the list from", empty "All caught up"), `pick-line` 3-step stepper (scan bin, scan lot with held-lot guard, confirm qty), one `pick_line.confirmed` outbox event per confirm with idempotency-key reuse, optimistic local confirmation so the completion panel renders even offline, inline finalization panel ("Pick complete", Back to tasks). i18n: all new copy under `floor.*` plus `nav.floorTasks`; literal guard extended. Tests: unit (`floor-tasks.test.ts`, `pick-line.test.ts`), integration (`story-3-16.test.ts`, 3/3), e2e (`floor-tasks.spec.ts`, 4/4), accessibility (`floor-tasks.spec.ts`, 2/2). Edge build/lint/typecheck and root lint/unit pass; 26 pre-existing integration failures identical to baseline (verified by stash diff).
+
+## Review Triage Log
+
+### 2026-10-23 — Review pass
+- intent_gap: 0
+- bad_spec: 0
+- patch: 12: (high 4, medium 7, low 1)
+- defer: 1
+- reject: 4
+- addressed_findings:
+  - [high] [patch] Refused captures never rendered `errors.*` text and announced "Captured - pending sync" on refusal. Wired `refusalCodeOf` through `readCaptureRefusalCode` (outbox.ts), set the refused code, and announced `floor.refused` with the mapped error.
+  - [high] [patch] Optimistic `confirmedRef` masked refusals and could show "Pick complete" on a refused last line. Moved the add to after a non-refused settlement and cleared it on refusal.
+  - [high] [patch] Unassigned (actionable) tasks were dropped by `FloorList`'s re-filter, breaking AC 2.2. Filter now keeps `assigned_to === null`.
+  - [high] [patch] Offline pick execution was impossible (early `!online` gate). Gate now only shows needs-connection when no task data is loaded; in-progress picks continue offline.
+  - [medium] [patch] A single failed status read was masked as an empty inbox. Both reads are now checked and a failure renders `floor.failed`.
+  - [medium] [patch] `nextViewState` was dead code asserted by a unit test but unused by the component. Removed the function/type and its test.
+  - [medium] [patch] Detail read (`getPickTaskById`) left `so_number_ext` null, so the header/completion panel showed a UUID. Added the `erp_sales_order` LEFT JOIN (`FOR UPDATE OF pick_task` on the locked read).
+  - [medium] [patch] A held directed lot that slipped past the soft scan guard surfaced as "needs connection". `assertLotNotHeld` failures now rethrow `LOT_ON_HOLD` and map to the on-hold copy.
+  - [medium] [patch] Inbox did not refresh after inline completion in the two-pane layout. `onComplete` now triggers the inbox reload.
+  - [medium] [patch] An all-cancelled task sat on the loading branch forever. Added a terminal `floor.noLines` card.
+  - [medium] [patch] Idempotency key was not rotated after a refusal, so a retry replayed the refusal. The signature/key are cleared on refusal.
+  - [low] [patch] The held-lot copy told the operator to pick the very lot that is blocked. Added `floor.onHoldDirected` for the held-equals-directed case.
+
+## Auto Run Result
+
+- **Summary**: Story 3.16 delivered the floor task inbox and pick-line execution screen end to end. Server: bootstrap `Floor tasks` nav row and `/floor/tasks` NAV_ENTRIES entry, `pick_task` list joins (`so_number_ext`, `confirmed_line_count`, `line_count`), `pick_line` detail joins (`location_code`, `directed_lot_number`, `uom`), and `so_number_ext` on the by-id detail read. Edge: inbox (two status reads merged client-side, ownership ordering, offline list, empty state), 3-step pick-line stepper with held-lot guard, one `pick_line.confirmed` outbox event per confirm with idempotency-key reuse, refusal surfacing, inline finalization/completion panel, device-class and a11y behavior, and full `floor.*` i18n.
+- **Files changed**: see the File List above; the implementation matched the anticipated set (plus `edge/src/components/floor-tasks-model.ts`, `edge/src/components/pick-line-model.ts`, `edge/app/floor/tasks/page.tsx`, `edge/test/fixtures/floor-stub.ts`, and `edge/src/components/navigation/nav-model.ts`).
+- **Review findings**: 12 patches applied (4 high, 7 medium, 1 low), 1 deferred (integration test exercises the direct confirm route rather than the outbox replay path), 4 rejected (crypto.randomUUID secure-context, quantity gate vacuous by spec, INNER JOIN drop for orphan tasks, UUID fallback for degraded joins).
+- **Follow-up review recommended**: true — the patch pass fixed several high-consequence defects (refusal rendering, false completion, offline execution) across the confirm/settlement path.
+- **Verification performed**: `npm --workspace @inventory/edge run build` pass; `typecheck` pass; `lint` pass; edge unit suite 205/205 pass; `test/integration/story-3-16.test.ts` 3/3 pass; e2e `floor-tasks.spec.ts` 4/4 and accessibility 2/2 (as reported by the implementation run).
+- **Residual risks**: `getPickTaskById` now returns a populated `so_number_ext` (additive, no caller asserted null); refusal-code lookup is best-effort and falls back to `floor.failed`; offline `reload()` cannot refresh the inbox, which relies on the next sync pass.
 
 ## Status
 
-ready-for-dev
+done

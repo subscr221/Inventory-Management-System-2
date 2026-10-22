@@ -26,6 +26,8 @@ export const NAV_ENTRIES: NavEntry[] = [
   { name: 'Stores', href: '/stores', label: 'nav.stores' },
   // Story 4.11 (AC 9): the storekeeper's counter issue page, rendered only when the bootstrap names it.
   { name: 'Stores issue', href: '/stores/issue', label: 'nav.storesIssue' },
+  // Story 3.16 (AC 1): the floor task inbox and pick execution screen, for warehouse write holders.
+  { name: 'Floor tasks', href: '/floor/tasks', label: 'nav.floorTasks' },
   // Story 4.8: standing approvals and self-approval limits, for everyone (the held-by-me view).
   { name: 'Standing grants', href: '/standing-grants', label: 'nav.standingGrants' },
   // Enterprise views (Phase 2/4): real paths, rendered only when the bootstrap names them.

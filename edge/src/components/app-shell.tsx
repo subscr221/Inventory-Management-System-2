@@ -39,6 +39,7 @@ import { StoresAccept, type StoresAcceptProps } from './stores-accept';
 import { StoresIssue } from './stores-issue';
 import { PutawayTask } from './putaway-task';
 import { GrnRead } from './grn-read';
+import { FloorTasks, type FloorTasksProps } from './floor-tasks';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import { useDeviceClass, type DeviceClass } from '../lib/use-device-class';
@@ -94,6 +95,8 @@ export interface AppShellProps {
   /** Story 3.14: the stores inbox and acceptance screen, injected by the edge client. */
   storesInbox?: StoresInboxProps;
   storesAccept?: StoresAcceptProps;
+  /** Story 3.16: the floor task inbox and pick execution screen, injected by the edge client. */
+  floorTasks?: FloorTasksProps;
   /** Story 8.9: the signed-in user, for the damage cases workbench grouping. */
   userId?: string;
   /**
@@ -150,7 +153,8 @@ type BaseView =
   | 'stores-accept'
   | 'stores-issue'
   | 'putaway-task'
-  | 'grn-read';
+  | 'grn-read'
+  | 'floor-tasks';
 
 /** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
 const BASE_VIEW_ENTRY: Record<BaseView, string> = {
@@ -171,6 +175,8 @@ const BASE_VIEW_ENTRY: Record<BaseView, string> = {
   // Story 3.15 (AC 1): putaway detail and the GRN read card are reached from the Stores inbox.
   'putaway-task': 'Stores',
   'grn-read': 'Stores',
+  // Story 3.16 (AC 1): the floor task inbox and pick execution screen.
+  'floor-tasks': 'Floor tasks',
 };
 
 function isBaseView(view: string): view is BaseView {
@@ -225,6 +231,7 @@ export function AppShell({
   gateCapture,
   storesInbox,
   storesAccept,
+  floorTasks,
   userId = '',
   view = 'frontline',
   online = true,
@@ -423,6 +430,15 @@ export function AppShell({
               <PutawayTask online={online} ready={navigationConfirmed} />
             ) : view === 'grn-read' ? (
               <GrnRead online={online} ready={navigationConfirmed} />
+            ) : view === 'floor-tasks' ? (
+              <FloorTasks
+                {...(floorTasks ?? {
+                  online,
+                  ready: navigationConfirmed,
+                  siteId: '',
+                  userId,
+                })}
+              />
             ) : view === 'damage-cases' ? (
               <DamageCases online={online} userId={userId} />
             ) : view === 'standing-grants' ? (
