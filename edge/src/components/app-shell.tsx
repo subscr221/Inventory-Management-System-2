@@ -37,6 +37,8 @@ import { GateEntry, type GateEntryProps } from './gate-entry/gate-entry';
 import { StoresInbox, type StoresInboxProps } from './stores-inbox';
 import { StoresAccept, type StoresAcceptProps } from './stores-accept';
 import { StoresIssue } from './stores-issue';
+import { PutawayTask } from './putaway-task';
+import { GrnRead } from './grn-read';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import { useDeviceClass, type DeviceClass } from '../lib/use-device-class';
@@ -146,7 +148,9 @@ type BaseView =
   | 'gate'
   | 'stores'
   | 'stores-accept'
-  | 'stores-issue';
+  | 'stores-issue'
+  | 'putaway-task'
+  | 'grn-read';
 
 /** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
 const BASE_VIEW_ENTRY: Record<BaseView, string> = {
@@ -164,6 +168,9 @@ const BASE_VIEW_ENTRY: Record<BaseView, string> = {
   stores: 'Stores',
   'stores-accept': 'Stores',
   'stores-issue': 'Stores issue',
+  // Story 3.15 (AC 1): putaway detail and the GRN read card are reached from the Stores inbox.
+  'putaway-task': 'Stores',
+  'grn-read': 'Stores',
 };
 
 function isBaseView(view: string): view is BaseView {
@@ -412,6 +419,10 @@ export function AppShell({
               />
             ) : view === 'stores-issue' ? (
               <StoresIssue />
+            ) : view === 'putaway-task' ? (
+              <PutawayTask online={online} ready={navigationConfirmed} />
+            ) : view === 'grn-read' ? (
+              <GrnRead online={online} ready={navigationConfirmed} />
             ) : view === 'damage-cases' ? (
               <DamageCases online={online} userId={userId} />
             ) : view === 'standing-grants' ? (

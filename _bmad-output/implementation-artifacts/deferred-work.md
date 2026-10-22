@@ -1,4 +1,4 @@
-# Deferred Work
+﻿# Deferred Work
 
 Triaged 2026-09-04 by a party-mode round table (Winston, Amelia, Murat, John, Grumbal, Ravi) over a nine-agent code survey of every entry. Line numbers in the Ref column point at the pre-triage ledger at commit 3868f81 (working tree of 2026-09-04) for traceability. The verdict counts in Table 1 cover all 484 entries.
 
@@ -939,7 +939,7 @@ Suite after the sweep and its follow-up: 2111/2111, 0 failures.
 - `getExcludedPlatformRefs` loads the entire `migration_domain_platform_exclusion` table for a site+domain on every verification run with no cap comparable to `MAX_EVENT_ARRAY_ENTRIES` [src/read/projections/migration_domain_verification.ts:712-720]. Same class as the already-deferred 10,000-finding cap; pilot volumes are far below any real bound.
 - `POST /api/v1/migration/domains/:domain/platform-exclusions` accepts `platform_ref` with no existence check against the domain's real platform table - a typo'd or wrong-domain reference is silently accepted and downgrades nothing. Consistent with the route's existing trust-the-authenticated-actor design elsewhere in this story, not a regression; would need a per-domain platform-ref lookup to fix.
 - `document_ref_prefix` has no upper-bound length check, unlike waiver narratives (`MAX_WAIVER_NARRATIVE_CHARS`) [src/api/v1/migration.ts:1506-1513]. Low risk: role-gated internal route.
-- The platform-exclusion feature (register → downgrade → sign-off) has only one happy-path integration test - no coverage for registering an exclusion with no matching finding, the duplicate-registration-via-different-idempotency-key no-op, or registering under the wrong domain [test/integration/story-13-2.test.ts]. Same class as the already-deferred lot/GRN coverage gap.
+- The platform-exclusion feature (register â†’ downgrade â†’ sign-off) has only one happy-path integration test - no coverage for registering an exclusion with no matching finding, the duplicate-registration-via-different-idempotency-key no-op, or registering under the wrong domain [test/integration/story-13-2.test.ts]. Same class as the already-deferred lot/GRN coverage gap.
 - A header-only CSV import (0 data rows, 0 rejections) returns 201 with `manifest_loaded: false` and no field explaining why nothing loaded [src/api/v1/migration.ts:1418-1429]. Cosmetic; the caller can infer the cause from `rows.length`/`rejections.length` being both zero.
 
 ## Deferred from: code review of story-13-3 (2026-09-12)
@@ -1166,7 +1166,7 @@ No earlier row is closed by this batch. Row 192 (no lock on reserve source-bin s
 
 ## Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)
 
-- Escalation to `warehouse_manager` per the DOA "Tolerance-breach acceptance band" (primary `unloading_supervisor`, escalation `warehouse_manager`) is not built. Corrected 2026-09-27 code review: the band is not timeout-based — it conditions the *initial* routing itself on breach magnitude (`unloading_supervisor` accepts up to 5 percent over tolerance; above 5 percent, or if unavailable, `warehouse_manager` is the approver). `applyWeighbridgeProjection` routes every `tolerance_breach` unconditionally to `unloading_supervisor` regardless of size or availability, and the `notification.created` payload carries no `escalation` field, so no escalation path exists for either condition. Deferred: pilot is single-site/single-holder with no greater-than-5-percent breach traffic yet; implementing the magnitude/availability check (DOA delegation lookup, payload shape, dispatch routing) is scoped to a follow-up story before scaling past pilot.
+- Escalation to `warehouse_manager` per the DOA "Tolerance-breach acceptance band" (primary `unloading_supervisor`, escalation `warehouse_manager`) is not built. Corrected 2026-09-27 code review: the band is not timeout-based â€” it conditions the *initial* routing itself on breach magnitude (`unloading_supervisor` accepts up to 5 percent over tolerance; above 5 percent, or if unavailable, `warehouse_manager` is the approver). `applyWeighbridgeProjection` routes every `tolerance_breach` unconditionally to `unloading_supervisor` regardless of size or availability, and the `notification.created` payload carries no `escalation` field, so no escalation path exists for either condition. Deferred: pilot is single-site/single-holder with no greater-than-5-percent breach traffic yet; implementing the magnitude/availability check (DOA delegation lookup, payload shape, dispatch routing) is scoped to a follow-up story before scaling past pilot.
 - No breach acceptance or disposition action exists after Story 3.3: the breach is a notification, not a durable task row, so nothing records that the unloading supervisor accepted, rejected or re-weighed the load.
 - Breach notifications emitted before this fix on staging targeted `receiving_supervisor`, a role with no holder; the dispatcher claimed them with zero recipients, and they are not re-emitted. They are rehearsal data only; production starts clean.
 - The edge app has no notification inbox screen (`git grep api/v1/notifications -- edge/src` is empty), so a supervisor sees a breach only through `GET /api/v1/notifications` or web push until one is built.
@@ -1345,3 +1345,10 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 
 - Typed or rejected challans bind `po_ref_ext` `UNKNOWN` and the weigh tab cannot rebind them later. Resolves with the offline PO and ASN bucket (Q1, Q2).
 - `test/integration/story-3-13.test.ts` teardown truncates a long table list with CASCADE on shared state. Matches the existing integration convention; revisit if suites move to parallel databases.
+
+## Deferred from: create-story of 3-15 (2026-10-22)
+
+- Offline putaway.completed: the edge door accepted the event with completed_by unstamped from the device payload and no execute-role gate. Story 3.15 refuses putaway.completed and location.override at the edge door with 403 CENTRAL_ONLY_OPERATION; an offline putaway path needs actor stamping and an execute-role gate before it can ship.
+- Alternative-rack list on the putaway detail: the screen offers the suggested bin and scan-or-type; ranked alternatives are deferred.
+- Stock-by-location read for the putaway card: the card shows the task quantity and source bay, not live bin occupancy.
+- Server-side label print queue: labels are device-local IndexedDB only; there is no cross-device restore or print server.

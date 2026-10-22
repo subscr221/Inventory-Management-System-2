@@ -23,10 +23,14 @@ export interface ArrivalRow {
 
 export interface PutawayRow {
   putaway_task_id: string;
-  sku?: string | null;
-  lot_id?: string | null;
-  quantity?: string | null;
-  directed_location_code?: string | null;
+  sku: string;
+  lot_id: string | null;
+  quantity: string;
+  from_location_id: string;
+  from_location_code?: string | null;
+  site_id: string;
+  status: 'ready' | 'held' | 'completed';
+  directed_location_code: string | null;
 }
 
 export interface IssueRow {
@@ -40,6 +44,7 @@ export interface DoneRow {
   id: string;
   title: string;
   statusKey: 'stores.done.captured' | 'stores.done.synced';
+  href?: string;
 }
 
 export interface InboxCard {
@@ -47,6 +52,7 @@ export interface InboxCard {
   title: string;
   detail: string;
   pillKey: string;
+  pillValue?: string;
   actionKey: string;
   actionHref: string | null;
   disabledReasonKey: string | null;
@@ -126,18 +132,21 @@ export function buildInbox(input: InboxInput): InboxGroup[] {
     },
     {
       key: 'putaway',
-      titleKey: 'stores.group.putaway',
+      titleKey: 'putaway.group',
       cards: input.showPutaway
         ? input.putaway.map((task) => ({
             id: task.putaway_task_id,
-            title: task.sku ?? task.putaway_task_id,
-            detail: [task.quantity, task.lot_id, task.directed_location_code]
+            title: task.sku,
+            detail: [task.quantity, task.lot_id, task.from_location_code]
               .filter(Boolean)
               .join(' · '),
-            pillKey: 'stores.pill.awaitingQc',
-            actionKey: 'stores.action.putaway',
-            actionHref: null,
-            disabledReasonKey: 'stores.reason.putawayNotYet',
+            pillKey: task.directed_location_code
+              ? 'putaway.card.suggested'
+              : 'putaway.pill.ready',
+            ...(task.directed_location_code ? { pillValue: task.directed_location_code } : {}),
+            actionKey: 'putaway.action.open',
+            actionHref: `/stores/putaway?task=${encodeURIComponent(task.putaway_task_id)}`,
+            disabledReasonKey: null,
           }))
         : [],
     },

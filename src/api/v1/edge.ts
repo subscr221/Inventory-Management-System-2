@@ -22,6 +22,7 @@ import {
   validateEdgeEnvelope,
   assertEdgeMaintenanceEventAllowed,
   assertEdgeIndentIssueEventRefused,
+  assertEdgePutawayEventRefused,
   // Story 6.4 (FR-MO-13, AC 6): the production-stream allowlist and the edit-log write its refusal
   // requires.
   assertEdgeProductionEventAllowed,
@@ -637,6 +638,10 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   assertEdgeMaintenanceEventAllowed(body);
   // Story 4.11 (D8): counter issue and line closure are online-only.
   assertEdgeIndentIssueEventRefused(body);
+  // Story 3.15 (AC 6): putaway completion and location override are online-only; the door would
+  // otherwise accept putaway.completed with completed_by unstamped from the device payload and no
+  // execute-role gate.
+  assertEdgePutawayEventRefused(body);
   // Story 8.1 (Binding Scope Decision 9): the same allowlist shape for the qc stream - plan
   // creation, approval, completion hand-off and conditional release are central-only.
   assertEdgeQcEventAllowed(body);

@@ -399,6 +399,43 @@ export function assertEdgeIndentIssueEventRefused(envelope: EventEnvelope): void
   );
 }
 
+/**
+ * Story 3.15 (AC 6): putaway completion and location override are online-only. Both events live on
+ * the 'putaway' stream (`src/events/schema.ts`), and the edge door previously accepted them with
+ * `completed_by` taken unstamped from the device payload and no execute-role gate.
+ */
+const EDGE_REFUSED_PUTAWAY_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'putaway.completed',
+  'location.override',
+]);
+
+/**
+ * Story 3.15 (AC 6): putaway completion and location override are online-only. Both events live on
+ * the 'putaway' stream (`src/events/schema.ts`), and the edge door previously accepted them with
+ * `completed_by` taken unstamped from the device payload and no execute-role gate.
+ *
+ * Only the two named event types are refused. Other putaway-stream events (e.g. putaway.started) are
+ * not central-only and must still pass through the door. stream_type and event_type are normalized
+ * before comparison so casing/whitespace variants cannot bypass the gate.
+ */
+export function assertEdgePutawayEventRefused(envelope: EventEnvelope): void {
+  if (!envelope) return;
+  const streamType = typeof envelope.stream_type === 'string'
+    ? envelope.stream_type.trim().toLowerCase()
+    : '';
+  const eventType = typeof envelope.event_type === 'string'
+    ? envelope.event_type.trim().toLowerCase()
+    : '';
+  if (!EDGE_REFUSED_PUTAWAY_EVENT_TYPES.has(eventType)) return;
+  void streamType;
+  throw new AppError(
+    403,
+    'CENTRAL_ONLY_OPERATION',
+    'Putaway completion and location override must be recorded online through the putaway route, not from an edge device',
+    { stream_type: envelope.stream_type, event_type: envelope.event_type },
+  );
+}
+
 export function assertEdgeMaintenanceEventAllowed(envelope: EventEnvelope): void {
   if (!envelope.event_type.startsWith('maintenance.')) return;
   if (EDGE_MAINTENANCE_EVENT_TYPES.has(envelope.event_type)) return;

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { t, type MessageKey } from '../i18n/locale';
+import { t, errorMessage, type MessageKey } from '../i18n/locale';
 import { authorizedFetch } from '../session/api-fetch';
 import { ScanField } from './scan-field';
 import {
@@ -62,6 +62,8 @@ export function StoresInbox({
   const [doneHighlight, setDoneHighlight] = useState<string | null>(null);
   const [lotSheet, setLotSheet] = useState<string | null>(null);
   const mounted = useRef(true);
+const locationCodes = useRef(new Map<string, string | null>());
+  const putawayError = useRef('');
 
   useEffect(
     () => () => {
@@ -71,6 +73,7 @@ export function StoresInbox({
   );
 
   const load = useCallback(async () => {
+    putawayError.current = '';
     if (!siteCodeExt) {
       setState({ kind: 'message', text: t('stores.noSite') });
       return;
@@ -94,13 +97,48 @@ export function StoresInbox({
         return;
       }
       const arrivals = ((await arrivalsRes.json()) as { arrivals?: ArrivalRow[] }).arrivals ?? [];
-      const putaway = putawayRes.ok
-        ? (((await putawayRes.json()) as { tasks?: PutawayRow[] }).tasks ?? [])
-        : [];
+      let putawayRaw: PutawayRow[] = [];
+      if (putawayRes.ok) {
+        putawayRaw = (((await putawayRes.json()) as { tasks?: PutawayRow[] }).tasks ?? []);
+      } else {
+        const body = (await putawayRes.json().catch(() => ({}))) as Record<string, unknown>;
+        const code = typeof body['error_code'] === 'string' ? body['error_code'] : '';
+        putawayError.current = code ? errorMessage(code) : t('stores.failed');
+      }
+      const putaway = await Promise.all(
+        putawayRaw.map(async (task) => {
+          let code = locationCodes.current.get(task.from_location_id);
+          if (code === undefined) {
+            try {
+              const locRes = await authorizedFetch(
+                `/api/v1/locations/${encodeURIComponent(task.from_location_id)}`,
+              );
+              if (locRes.ok) {
+                const location = (await locRes.json()) as Record<string, unknown>;
+                if (typeof location['location_code'] === 'string') {
+                  code = location['location_code'];
+                } else {
+                  code = null;
+                }
+              } else {
+                code = null;
+              }
+            } catch {
+              code = null;
+            }
+            locationCodes.current.set(task.from_location_id, code);
+          }
+          return { ...task, from_location_code: code };
+        }),
+      );
       const issues = issuesRes.ok
         ? (((await issuesRes.json()) as { indents?: IssueRow[] }).indents ?? [])
         : [];
       const grns = grnsRes.ok ? (((await grnsRes.json()) as { grns?: GrnRow[] }).grns ?? []) : [];
+      if (putawayError.current && putawayRaw.length === 0) {
+        setState({ kind: 'message', text: putawayError.current });
+        return;
+      }
       setState({ kind: 'ready', arrivals, putaway, issues, grns });
     } catch {
       if (mounted.current) setState({ kind: 'message', text: t('stores.needsConnection') });
@@ -153,13 +191,17 @@ export function StoresInbox({
   }
 
   const doneFromServer: DoneRow[] = [
-    ...acceptedToday(state.arrivals),
+    ...acceptedToday(state.arrivals).map((row) => ({
+      ...row,
+      href: `/stores/grn?grn=${encodeURIComponent(row.id)}`,
+    })),
     ...state.grns
       .filter((grn) => isToday(grn.received_at ?? grn.created_at))
       .map((grn) => ({
         id: grn.grn_id,
         title: grn.grn_number ?? grn.grn_id,
         statusKey: 'stores.done.synced' as const,
+        href: `/stores/grn?grn=${encodeURIComponent(grn.grn_id)}`,
       })),
   ];
   const doneIds = new Set(doneFromServer.map((row) => row.id));
@@ -206,7 +248,9 @@ export function StoresInbox({
                     <h3>{card.title}</h3>
                     <p>{card.detail}</p>
                   </div>
-                  <span className="stores-pill">{t(card.pillKey as MessageKey)}</span>
+                  <span className="stores-pill">
+                    {t(card.pillKey as MessageKey).replace('{code}', card.pillValue ?? '')}
+                  </span>
                   <CardAction card={card} />
                 </li>
               ))}
@@ -227,7 +271,11 @@ export function StoresInbox({
                 }
               >
                 <div>
-                  <h3>{row.title}</h3>
+                  <h3>
+                    <a href={row.href ?? `/stores/grn?grn=${encodeURIComponent(row.id)}`}>
+                      {row.title}
+                    </a>
+                  </h3>
                   <p>{t(row.statusKey as MessageKey)}</p>
                 </div>
                 <span className="stores-pill">{t(row.statusKey as MessageKey)}</span>

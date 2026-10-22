@@ -22,6 +22,8 @@ export interface ScanFieldProps {
   onChange: (value: string) => void;
   /** Test seam: force the coarse-pointer/camera path on or off. */
   cameraAvailable?: boolean;
+  /** Label for the manual-entry action; the gate's challan wording is the default. */
+  typeLabel?: string;
 }
 
 /**
@@ -38,6 +40,7 @@ export function ScanField({
   onScan,
   onChange,
   cameraAvailable,
+  typeLabel,
 }: ScanFieldProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [announcement, setAnnouncement] = useState('');
@@ -166,7 +169,7 @@ export function ScanField({
             inputRef.current?.focus();
           }}
         >
-          {t('gate.typeNumber')}
+          {typeLabel ?? t('gate.typeNumber')}
         </button>
         {canUseCamera ? (
           <button

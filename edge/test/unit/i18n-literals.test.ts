@@ -31,6 +31,10 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^damage-cases-/,
   // Story 4.11: the stores counter issue page.
   /^storesIssue\./,
+  // Story 3.15: directed putaway and the device label queue.
+  /^putaway\./,
+  /^labels\./,
+  /^grn\./,
   // Story 4.8: the standing grants page.
   /^standingGrants\./,
   /^standing-grants-/,

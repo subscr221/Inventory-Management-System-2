@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { errorMessage, t, type MessageKey } from '../i18n/locale';
 import { authorizedFetch } from '../session/api-fetch';
+import { labelStore } from '../local-db/label-queue';
+import { buildLabels } from './label-queue-model';
+import { LabelQueue } from './label-queue';
 import { acceptanceMissing, type ArrivalRow } from './stores-inbox-model';
 import {
   buildReceiptRows,
@@ -277,13 +280,18 @@ async function submit() {
         prepared = { submission, rows: buildReceiptRows(submission) };
         submissionRef.current = prepared;
       }
-      setSubmittedGrnId(prepared.submission.grnId);
-      const response = await onSubmitReceipt(prepared.submission, prepared.rows);
-      if (response.kind === 'error') {
-        setMessage(errorMessage(response.errorCode));
-        return;
-      }
-      setResult(prepared.rows);
+setSubmittedGrnId(prepared.submission.grnId);
+  const response = await onSubmitReceipt(prepared.submission, prepared.rows);
+  if (response.kind === 'error') {
+    setMessage(errorMessage(response.errorCode));
+    return;
+  }
+  try {
+    await labelStore.putMany(buildLabels(prepared.submission.grnId, prepared.rows));
+  } catch {
+    setMessage(t('labels.queuedFailed'));
+  }
+  setResult(prepared.rows);
     } finally {
       setSubmitting(false);
     }
@@ -308,6 +316,7 @@ async function submit() {
           <li>{t('stores.done.rejected').replace('{count}', String(summary.rejected))}</li>
         </ul>
         <p>{online ? t('stores.done.synced') : t('stores.done.pending')}</p>
+        <LabelQueue grnId={submittedGrnId} />
         <a className="primary-action" href="/stores">
           {t('stores.done.back')}
         </a>
