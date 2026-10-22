@@ -46,7 +46,7 @@ export function GrnRead({ online, ready }: { online: boolean; ready: boolean }) 
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     setQuery({ grn: params.get('grn') ?? '', line: params.get('line') ?? '' });
-  }, [window.location.search]);
+    }, [typeof window !== 'undefined' ? window.location.search : '']);
   const [state, setState] = useState<State>({ kind: 'loading' });
 
   useEffect(() => {
@@ -77,12 +77,16 @@ export function GrnRead({ online, ready }: { online: boolean; ready: boolean }) 
         const grn = (await res.json()) as GrnView;
         let supplier: string | null = null;
         if (grn.po_ref_ext) {
-          const poRes = await authorizedFetch(
-            `/api/v1/erp/purchase-orders/${encodeURIComponent(grn.po_ref_ext)}`,
-          );
-          if (poRes.ok) {
-            const po = (await poRes.json()) as Record<string, unknown>;
-            if (typeof po['supplier_ref_ext'] === 'string') supplier = po['supplier_ref_ext'];
+          try {
+            const poRes = await authorizedFetch(
+              `/api/v1/erp/purchase-orders/${encodeURIComponent(grn.po_ref_ext)}`,
+            );
+            if (poRes.ok) {
+              const po = (await poRes.json()) as Record<string, unknown>;
+              if (typeof po['supplier_ref_ext'] === 'string') supplier = po['supplier_ref_ext'];
+            }
+          } catch {
+            supplier = null;
           }
         }
         if (!cancelled) setState({ kind: 'ready', grn, supplier });

@@ -117,6 +117,7 @@ const locationCodes = useRef(new Map<string, string | null>());
                 const location = (await locRes.json()) as Record<string, unknown>;
                 if (typeof location['location_code'] === 'string') {
                   code = location['location_code'];
+                  locationCodes.current.set(task.from_location_id, code);
                 } else {
                   code = null;
                 }
@@ -126,7 +127,6 @@ const locationCodes = useRef(new Map<string, string | null>());
             } catch {
               code = null;
             }
-            locationCodes.current.set(task.from_location_id, code);
           }
           return { ...task, from_location_code: code };
         }),
@@ -135,7 +135,13 @@ const locationCodes = useRef(new Map<string, string | null>());
         ? (((await issuesRes.json()) as { indents?: IssueRow[] }).indents ?? [])
         : [];
       const grns = grnsRes.ok ? (((await grnsRes.json()) as { grns?: GrnRow[] }).grns ?? []) : [];
-      if (putawayError.current && putawayRaw.length === 0) {
+      if (
+        putawayError.current &&
+        putawayRaw.length === 0 &&
+        arrivals.length === 0 &&
+        issues.length === 0 &&
+        grns.length === 0
+      ) {
         setState({ kind: 'message', text: putawayError.current });
         return;
       }

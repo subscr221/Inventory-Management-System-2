@@ -299,3 +299,33 @@ Kilo (kilo/kilo-auto/efficient)
   [`en.json:1163`](../../edge/src/messages/en.json#L1163)
 - 2026-10-22: Implemented the edge-door refusal, putaway inbox cards and detail, device label queue, GRN read card, i18n strings and tests. Story moved to review.
 - 2026-10-22: Live app test. Fixed the pre-bootstrap 401 on both routed views and the challan-specific ScanField action copy; rebuilt and re-verified the edge build, 190 unit tests, i18n guard and the real API and UI flows.
+
+### Review Findings
+
+Code review 2026-10-23 over the diff `bf3eadf..b7f92a6`. Findings were verified against the source; `next build` and the story unit test were run.
+
+#### Decision resolved
+
+Resolved 2026-10-23: option A - follow AC6 (two-event scope). The test and docstring are corrected as a patch below.
+
+#### Patch
+
+- [x] [Review][Patch] Align the edge-door refusal test and docstring with AC6 [test/unit/story-3-15.test.ts:37] - change the `putaway.started` case to `doesNotThrow`, correct the `assertEdgePutawayEventRefused` docstring that claims `stream_type` is compared, and add a cross-stream case `envelope('receiving','location.override')` that must throw `CENTRAL_ONLY_OPERATION`.
+- [x] [Review][Patch] `window.location.search` in an effect dependency array breaks the production build [edge/src/components/putaway-task.tsx:50] and [edge/src/components/grn-read.tsx:49] - `next build` fails with `ReferenceError: window is not defined` while prerendering `/stores/grn`. Make the dependency server-safe (guard with `typeof window !== 'undefined'`) or re-read the query on `popstate` as `damage-cases.tsx` does.
+- [x] [Review][Patch] Idempotency key is minted once per mount and reused across changed payloads [edge/src/components/putaway-task.tsx:60] - a timed-out completion retried with a different rack reuses the key; `src/events/store.ts:960` replays by `idempotency_key` alone, so the server returns the first completion while the screen reports the new rack. Re-mint the key when the payload changes.
+- [x] [Review][Patch] A 403 on the task detail route leaves the screen on Loading forever [edge/src/components/putaway-task.tsx:117] - `setStatus('read-only')` with `task` still null hits the `if (!task && status !== 'failed')` loading gate. Render the no-access card for `read-only` without a task.
+- [x] [Review][Patch] Task state is not reset when `?task=` changes [edge/src/components/putaway-task.tsx:47] - the effect only sets `taskId`; the previous task, suggestion and status stay rendered and `submit` posts the old `putaway_task_id`. Reset to `loading` and clear task/suggestion at the start of the load.
+- [x] [Review][Patch] Printing one label prints every label but marks only the clicked one [edge/src/components/label-queue.tsx:22] - `PRINT_CSS` reveals `#grn-label-print` (the whole list) while `done` marks one `grn_line_id`. Scope the print region per label or mark all printed.
+- [x] [Review][Patch] A cancelled print dialog still marks the label printed [edge/src/components/label-queue.tsx:54] - `afterprint` is attached unconditionally and fires when the dialog is cancelled. Use a `matchMedia('print')` start signal to confirm a real print before `markPrinted`.
+- [x] [Review][Patch] Label queueing failure is silent and can block the completion screen [edge/src/components/stores-accept.tsx:289] - `labels.queuedFailed` is set but the done branch never renders `message`, and `await putMany` runs before `setResult`, so an IndexedDB hang never shows the completion screen. Render the message and do not block `setResult` on the write.
+- [x] [Review][Patch] One failed putaway read collapses the whole Stores inbox [edge/src/components/stores-inbox.tsx:1661] - `if (putawayError.current && putawayRaw.length === 0)` replaces arrivals, issues and GRNs with a single error card. Degrade only the putaway group.
+- [x] [Review][Patch] A GRN 404 renders the raw token `GRN_NOT_FOUND` [edge/src/components/grn-read.tsx:73] - `errors.GRN_NOT_FOUND` has no `en.json` string, and a label QR for a still-pending GRN reaches this path. Add the string and a pending-GRN message.
+- [x] [Review][Patch] Optional enrichment reads abort the loaded screen [edge/src/components/putaway-task.tsx:107] and [edge/src/components/grn-read.tsx:79] - a thrown source-bay or supplier read discards the loaded task or GRN. Wrap the optional reads in their own try/catch.
+- [x] [Review][Patch] Failed source-bay lookups are cached as `null` for the mount [edge/src/components/stores-inbox.tsx:110] - `code = null` is cached and the miss test is `undefined`, so a transient failure blanks the bay code until reload. Cache only successes.
+- [x] [Review][Patch] Re-queuing a GRN line resets a printed label to queued [edge/src/local-db/label-queue.ts:69] - `putMany` overwrites with `status: 'queued'` and `printed_at: null` from `buildLabels`. Merge existing rows and preserve `printed`.
+- [x] [Review][Patch] `markPrinted` rejection is unhandled [edge/src/components/label-queue.tsx:57] - `void labelStore.markPrinted(...).then(reload)` has no `.catch`. Handle the rejection.
+- [x] [Review][Patch] A connectivity drop hides the completed confirmation [edge/src/components/putaway-task.tsx:191] - the `!online` branch is checked before `status === 'done'`. Check `done` first.
+
+#### Dismissed
+
+Dismissed as noise or handled elsewhere (8): required `PutawayRow` fields rendering `undefined` (server projection and DB NOT NULL); labels fabricating quantity `0` or empty sku (row construction always sets them); unchecked `grn.lines` (server-owned, integration-tested shape); completed or held tasks still offering the action (server rejects via `PUTAWAY_TASK_NOT_READY`/`ALREADY_COMPLETED`); `crypto.randomUUID()` on an insecure origin (PKCE requires HTTPS and dev is localhost); `typeLabel ??` with an empty string (callers pass translations); `putaway.override.*` versus AC4's `putaway.overrideReason.*` namespace (functional equivalence); offline detail lacking the disabled-primary shape (the reason text is displayed).

@@ -17,7 +17,7 @@ import {
  */
 
 const PRINT_CSS =
-  '@media print { body * { visibility: hidden; } #grn-label-print, #grn-label-print * { visibility: visible; } #grn-label-print { position: absolute; left: 0; top: 0; width: 100%; } }';
+  '@media print { body * { visibility: hidden; } .label-printing, .label-printing * { visibility: visible; } .label-printing { position: absolute; left: 0; top: 0; width: 100%; } }';
 
 const qrCache = new Map<string, string>();
 
@@ -36,6 +36,7 @@ export function LabelQueue({ grnId }: { grnId: string }) {
   const [labels, setLabels] = useState<QueuedLabel[]>([]);
   const [loadError, setLoadError] = useState('');
   const [printAvailable, setPrintAvailable] = useState(false);
+  const [printingId, setPrintingId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -51,14 +52,34 @@ export function LabelQueue({ grnId }: { grnId: string }) {
     void reload();
   }, [reload]);
 
-  function print(label: QueuedLabel): void {
-    if (!printAvailable) return;
+  useEffect(() => {
+    if (!printingId) return;
+    const labelId = printingId;
+    const supportsPrintQuery = typeof window.matchMedia === 'function';
+    let started = !supportsPrintQuery;
+    const query = supportsPrintQuery ? window.matchMedia('print') : null;
+    const onQueryChange = (event: MediaQueryListEvent) => {
+      if (event.matches) started = true;
+    };
+    query?.addEventListener?.('change', onQueryChange);
     const done = () => {
-      void labelStore.markPrinted(label.grn_line_id).then(reload);
+      query?.removeEventListener?.('change', onQueryChange);
+      setPrintingId(null);
+      if (!started) return;
+      void labelStore
+        .markPrinted(labelId)
+        .then(reload)
+        .catch(() => {
+          void reload();
+        });
     };
     window.addEventListener('afterprint', done, { once: true });
     window.print();
-  }
+    return () => {
+      window.removeEventListener('afterprint', done);
+      query?.removeEventListener?.('change', onQueryChange);
+    };
+  }, [printingId, reload]);
 
   if (loadError) {
     return (
@@ -77,7 +98,12 @@ export function LabelQueue({ grnId }: { grnId: string }) {
       ) : (
         <ul className="stores-summary" id="grn-label-print">
           {labels.map((label) => (
-            <li key={label.grn_line_id} className="stores-label">
+            <li
+              key={label.grn_line_id}
+              className={
+                printingId === label.grn_line_id ? 'stores-label label-printing' : 'stores-label'
+              }
+            >
               <img src={qrDataUrl(label)} alt={t('labels.qrAlt')} width={72} height={72} />
               <dl>
                 {labelLines(label).map((line) => (
@@ -91,7 +117,7 @@ export function LabelQueue({ grnId }: { grnId: string }) {
               <button
                 className="secondary-action"
                 type="button"
-                onClick={() => print(label)}
+                onClick={() => setPrintingId(label.grn_line_id)}
                 disabled={!printAvailable}
               >
                 {label.status === 'printed' ? t('labels.reprint') : t('labels.print')}

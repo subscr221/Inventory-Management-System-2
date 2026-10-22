@@ -415,19 +415,16 @@ const EDGE_REFUSED_PUTAWAY_EVENT_TYPES: ReadonlySet<string> = new Set([
  * `completed_by` taken unstamped from the device payload and no execute-role gate.
  *
  * Only the two named event types are refused. Other putaway-stream events (e.g. putaway.started) are
- * not central-only and must still pass through the door. stream_type and event_type are normalized
- * before comparison so casing/whitespace variants cannot bypass the gate.
+ * not central-only and must still pass through the door. event_type is normalized before comparison
+ * so casing/whitespace variants cannot bypass the gate; the refusal keys on the event type, so
+ * location.override is refused on any stream, not only the putaway stream.
  */
 export function assertEdgePutawayEventRefused(envelope: EventEnvelope): void {
   if (!envelope) return;
-  const streamType = typeof envelope.stream_type === 'string'
-    ? envelope.stream_type.trim().toLowerCase()
-    : '';
   const eventType = typeof envelope.event_type === 'string'
     ? envelope.event_type.trim().toLowerCase()
     : '';
   if (!EDGE_REFUSED_PUTAWAY_EVENT_TYPES.has(eventType)) return;
-  void streamType;
   throw new AppError(
     403,
     'CENTRAL_ONLY_OPERATION',

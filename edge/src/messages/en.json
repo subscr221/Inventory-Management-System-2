@@ -160,6 +160,7 @@
   "errors.RECEIVING_REASON_INVALID": "That reason does not fit this line. Check the condition and choose again.",
   "errors.RECEIVING_OTHER_EVIDENCE_REQUIRED": "Other needs a photo and one line saying what is wrong.",
   "errors.LOCATION_NOT_FOUND": "The target location was not found or is not active. Confirm the location and try again.",
+  "errors.GRN_NOT_FOUND": "This GRN is not available yet. If it was just completed, it may still be syncing.",
   "errors.PUTAWAY_TASK_NOT_FOUND": "The putaway task was not found. Refresh and try again.",
   "errors.PUTAWAY_TASK_NOT_HELD": "This putaway task is no longer awaiting release.",
   "errors.PUTAWAY_DESTINATION_INVALID": "That location cannot take this putaway. Scan an active bin in this site.",

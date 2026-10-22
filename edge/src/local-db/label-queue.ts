@@ -58,17 +58,21 @@ async function withStore<T>(
 
 export const labelStore = {
   async putMany(labels: QueuedLabel[]): Promise<void> {
-    if (labels.length === 0) return;
-    const db = await openDatabase();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const done = new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
-      tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
-    });
-    const store = tx.objectStore(STORE_NAME);
-    for (const label of labels) store.put(label);
-    await done;
+    for (const label of labels) {
+      const previous = await withStore<QueuedLabel | undefined>('readonly', (store) =>
+        store.get(label.grn_line_id),
+      );
+      const merged: QueuedLabel =
+        previous?.status === 'printed'
+          ? {
+              ...label,
+              status: 'printed',
+              printed_at: previous.printed_at,
+              created_at: previous.created_at,
+            }
+          : label;
+      await withStore('readwrite', (store) => store.put(merged));
+    }
   },
 
   async listByGrn(grnId: string): Promise<QueuedLabel[]> {

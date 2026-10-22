@@ -286,12 +286,12 @@ setSubmittedGrnId(prepared.submission.grnId);
     setMessage(errorMessage(response.errorCode));
     return;
   }
-  try {
-    await labelStore.putMany(buildLabels(prepared.submission.grnId, prepared.rows));
-  } catch {
-    setMessage(t('labels.queuedFailed'));
-  }
-  setResult(prepared.rows);
+      setResult(prepared.rows);
+      void labelStore
+        .putMany(buildLabels(prepared.submission.grnId, prepared.rows))
+        .catch(() => {
+          setMessage(t('labels.queuedFailed'));
+        });
     } finally {
       setSubmitting(false);
     }
@@ -316,6 +316,11 @@ setSubmittedGrnId(prepared.submission.grnId);
           <li>{t('stores.done.rejected').replace('{count}', String(summary.rejected))}</li>
         </ul>
         <p>{online ? t('stores.done.synced') : t('stores.done.pending')}</p>
+        {message ? (
+          <p role="alert" className="stores-announcement">
+            {message}
+          </p>
+        ) : null}
         <LabelQueue grnId={submittedGrnId} />
         <a className="primary-action" href="/stores">
           {t('stores.done.back')}

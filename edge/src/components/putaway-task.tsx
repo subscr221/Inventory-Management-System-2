@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { errorMessage, t, type MessageKey } from '../i18n/locale';
 import { authorizedFetch } from '../session/api-fetch';
 import { ScanField } from './scan-field';
@@ -47,7 +47,7 @@ export function PutawayTask({ online, ready }: { online: boolean; ready: boolean
   useEffect(() => {
     if (typeof window === 'undefined') return;
     setTaskId(new URLSearchParams(window.location.search).get('task') ?? '');
-  }, [window.location.search]);
+  }, [typeof window !== 'undefined' ? window.location.search : '']);
   const [task, setTask] = useState<Task | null>(null);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [fromCode, setFromCode] = useState('-');
@@ -57,7 +57,8 @@ export function PutawayTask({ online, ready }: { online: boolean; ready: boolean
   const [scanning, setScanning] = useState(false);
   const [reason, setReason] = useState<OverrideReason | null>(null);
   const [confidence, setConfidence] = useState<OverrideConfidence | null>(null);
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const idempotencyKey = useRef('');
+  const lastSubmit = useRef<string | null>(null);
   const [doneCode, setDoneCode] = useState('');
 
   useEffect(() => {
@@ -68,6 +69,16 @@ export function PutawayTask({ online, ready }: { online: boolean; ready: boolean
       setMessage(t('putaway.missingTask'));
       return;
     }
+    setTask(null);
+    setSuggestion(null);
+    setFromCode('-');
+    setScanned('');
+    setScanning(false);
+    setReason(null);
+    setConfidence(null);
+    setMessage('');
+    setStatus('loading');
+    lastSubmit.current = null;
     let cancelled = false;
     async function load() {
       try {
@@ -93,13 +104,15 @@ export function PutawayTask({ online, ready }: { online: boolean; ready: boolean
         setTask(loaded);
 
         const [locationRes, suggestionRes] = await Promise.all([
-          authorizedFetch(`/api/v1/locations/${encodeURIComponent(loaded.from_location_id)}`),
+          authorizedFetch(
+            `/api/v1/locations/${encodeURIComponent(loaded.from_location_id)}`,
+          ).catch(() => null),
           authorizedFetch(
             `/api/v1/putaway-tasks/${encodeURIComponent(taskId)}/suggestion`,
           ),
         ]);
         if (cancelled) return;
-        if (locationRes.ok) {
+        if (locationRes?.ok) {
           const location = (await locationRes.json()) as Record<string, unknown>;
           if (typeof location['location_code'] === 'string') setFromCode(location['location_code']);
         }
@@ -140,6 +153,11 @@ export function PutawayTask({ online, ready }: { online: boolean; ready: boolean
 
   async function submit(code: string, chosenReason?: OverrideReason, chosenConfidence?: OverrideConfidence) {
     if (!task) return;
+    const signature = `${code.trim().toLowerCase()}|${chosenReason ?? ''}|${chosenConfidence ?? ''}`;
+    if (lastSubmit.current !== signature) {
+      lastSubmit.current = signature;
+      idempotencyKey.current = crypto.randomUUID();
+    }
     setStatus('submitting');
     setMessage('');
     try {
@@ -153,7 +171,7 @@ export function PutawayTask({ online, ready }: { online: boolean; ready: boolean
               directedCode: suggestion?.locationCode ?? task.directed_location_code,
               reason: chosenReason ?? null,
               confidence: chosenConfidence ?? null,
-              idempotencyKey,
+              idempotencyKey: idempotencyKey.current,
             }),
           ),
         },
@@ -188,6 +206,17 @@ export function PutawayTask({ online, ready }: { online: boolean; ready: boolean
     void submit(code);
   }
 
+  if (status === 'done') {
+    return (
+      <section className="edge-card" id="putaway-done" aria-live="polite">
+        <h1>{t('putaway.done.title')}</h1>
+        <p>{t('putaway.done.body').replace('{code}', doneCode)}</p>
+        <a className="primary-action" href="/stores">
+          {t('putaway.done.back')}
+        </a>
+      </section>
+    );
+  }
   if (!online) {
     return (
       <section className="edge-card" aria-live="polite">
@@ -205,7 +234,7 @@ export function PutawayTask({ online, ready }: { online: boolean; ready: boolean
   if (status === 'loading') {
     return <p className="stores-status">{t('putaway.loading')}</p>;
   }
-  if (!task && status !== 'failed') {
+  if (!task && status !== 'failed' && status !== 'read-only') {
     return <p className="stores-status">{t('putaway.loading')}</p>;
   }
   if (status === 'failed') {
@@ -218,12 +247,11 @@ export function PutawayTask({ online, ready }: { online: boolean; ready: boolean
       </section>
     );
   }
-  if (status === 'done') {
+  if (status === 'read-only' && !task) {
     return (
-      <section className="edge-card" id="putaway-done" aria-live="polite">
-        <h1>{t('putaway.done.title')}</h1>
-        <p>{t('putaway.done.body').replace('{code}', doneCode)}</p>
-        <a className="primary-action" href="/stores">
+      <section className="edge-card" role="alert">
+        <p>{message || errorMessage('FUNCTION_ACCESS_DENIED')}</p>
+        <a className="secondary-action" href="/stores">
           {t('putaway.done.back')}
         </a>
       </section>

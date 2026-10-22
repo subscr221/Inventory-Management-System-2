@@ -34,10 +34,19 @@ describe('Story 3.15 edge putaway refusal', () => {
     });
   }
 
-  it('refuses any other event on the putaway stream', () => {
+  it('leaves other events on the putaway stream alone', () => {
+    assert.doesNotThrow(() =>
+      assertEdgePutawayEventRefused(envelope('putaway', 'putaway.started')),
+    );
+  });
+
+  it('refuses a central-only event whatever its stream', () => {
     assert.throws(
-      () => assertEdgePutawayEventRefused(envelope('putaway', 'putaway.started')),
-      (err: unknown) => err instanceof AppError && err.errorCode === 'CENTRAL_ONLY_OPERATION',
+      () => assertEdgePutawayEventRefused(envelope('receiving', 'location.override')),
+      (err: unknown) =>
+        err instanceof AppError &&
+        err.statusCode === 403 &&
+        err.errorCode === 'CENTRAL_ONLY_OPERATION',
     );
   });
 

@@ -1,5 +1,5 @@
 # generated: 2026-07-12
-# last_updated: 2026-10-21 (sprint-change-proposal-2026-10-21 applied: 13 frontline edge stories 3-13..3-20, 4-12, 4-13, 7-11, 8-10, 8-11 added to backlog; prior: story 2-10 item groups master created, ready-for-dev)
+# last_updated: 2026-10-23 (story 3-16 created, ready-for-dev; code review of story 3-15: 15 patches applied; prior: 2026-10-21 sprint-change-proposal-2026-10-21 applied: 13 frontline edge stories 3-13..3-20, 4-12, 4-13, 7-11, 8-10, 8-11 added to backlog; prior: story 2-10 item groups master created, ready-for-dev)
 #   patches applied, story-9-6 22/22, gates clean; 2 deferred 9.6C-1/9.6C-2; 9-7 done
 #   (code review chunks A-E 2026-09-06: chunk A 12 patches + decision-1 interim, chunk B 6,
 #   chunk C 8, chunk E 9 docs patches all applied; chunk D partial on 2026-09-06, COMPLETED
@@ -948,8 +948,8 @@ development_status:
   3-12-weighbridge-breach-task-routing-for-pilot-roles: done   # PRE-PILOT BLOCKING defect (sprint-change 2026-09-26); story context created 2026-09-27 via create-story. Routing decision: unloading_supervisor (access matrix breach owner), receiving_supervisor not provisioned. Staging check is runbook row 2.10e (operator task, still pending). Code review 2026-09-27 (Blind Hunter + Edge Case Hunter + Acceptance Auditor): 1 decision deferred (DOA-band magnitude/availability escalation to warehouse_manager not implemented, real gap corrected in deferred-work.md, follow-up story before scaling past pilot), 1 patch applied (smoke-leg crash guards), 2 deferred, 11 dismissed.
   3-13-gate-entry-and-weighbridge-capture-screen: done   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G01, G02; XL); story file created 2026-10-21 (baseline 4f37d32); existing implementation continuation, reopened acceptance gaps 2026-10-21; code review done 2026-10-22, 20 patches applied, D1 to D5 resolved
   3-14-stores-inbox-scan-anything-bar-and-acceptance-into-inspection-bay: review   # dev-story 2026-10-22 from baseline a07e22f; story file created from epics.md (no prior file); 7 integration + 12 edge unit tests, full suite 26 pre-existing ECONNRESET failures identical at baseline. PRE-PILOT BLOCKING (sprint-change 2026-10-21; G03, G04, G11, G21; L)
-  3-15-directed-putaway-task-screen-label-queue-and-grn-read-card: review   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G05, G04 label queue; M)
-  3-16-floor-task-inbox-and-pick-execution-screen: backlog   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G08 picker; L)
+  3-15-directed-putaway-task-screen-label-queue-and-grn-read-card: done   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G05, G04 label queue; M) # code review 2026-10-23: 15 patches applied, AC6 two-event scope confirmed
+  3-16-floor-task-inbox-and-pick-execution-screen: ready-for-dev   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G08 picker; L) # story file created 2026-10-23
   3-17-short-pick-exception-seam-and-tiles: backlog   # PILOT (sprint-change 2026-10-21; G08 short pick; M)
   3-18-pack-station-and-dispatch-screen: backlog   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G08 pack and dispatch; L)
   3-19-unloading-exception-commands-server: backlog   # PILOT (sprint-change 2026-10-21; G08 unloading server; L)
