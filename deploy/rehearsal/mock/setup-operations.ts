@@ -104,6 +104,39 @@ export async function setupOperations(ctx: Ctx): Promise<void> {
     });
   }
 
+  await step('setup: stores inspection bay (IB-01)', async () => {
+    // Story 3.14: acceptance posts GOOD rows to one active staging zone per site. The location tree
+    // comes from seed.mjs; this adds the bay through the API as a warehouse manager.
+    const reader = await ctx.as('invctl');
+    const siteRes = await ctx.request(
+      'GET',
+      `/api/v1/locations/${encodeURIComponent(ctx.siteCode)}`,
+      undefined,
+      reader,
+    );
+    must(siteRes, 200, `site ${ctx.siteCode}`);
+    const site = (siteRes.body['location'] as Json | undefined) ?? siteRes.body;
+    const found = await ctx.request('GET', '/api/v1/locations/IB-01', undefined, reader);
+    if (found.status === 200) return 'exists';
+    if (found.status !== 404) throw new Error(`reading IB-01 answered ${found.status}`);
+    const created = await ctx.request(
+      'POST',
+      '/api/v1/locations',
+      {
+        location_code: 'IB-01',
+        level: 'zone',
+        parent_location_id: site['location_id'],
+        zone_type: 'staging',
+        status: 'active',
+      },
+      await ctx.as('whmanager'),
+    );
+    if (created.status === 409 && created.body['error_code'] === 'DUPLICATE_LOCATION_CODE')
+      return 'exists';
+    must(created, 201, 'inspection bay IB-01');
+    return 'created';
+  });
+
   await step('setup: DOA entries', async () => {
     const headers = await ctx.as('compliance');
     let created = 0;

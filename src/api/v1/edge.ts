@@ -47,6 +47,7 @@ import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/i
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 import { config } from '../../config/index.js';
 import { getLocationById } from '../../read/projections/location_register.js';
+import { getPool } from '../../config/db.js';
 import type { AuthContext } from '../../middleware/context.js';
 import { getCrossDockTaskById } from '../../read/projections/cross_dock_task.js';
 import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
@@ -414,6 +415,8 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   // Story 3.13 (AC 1): the gate entry and weighbridge capture screen, for the gate officer and
   // weighbridge operator only (a store_assistant holding inventory is not sent it).
   { name: 'Gate entry', modules: 'gate', functionScope: 'write' },
+  // Story 3.14 (AC 1): the storekeeper's task inbox, for receiving write at the site.
+  { name: 'Stores', modules: ['receiving'], functionScope: 'write' },
   // Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
   { name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
   // Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
@@ -441,10 +444,11 @@ async function hasDamageCaseScope(authContext: AuthContext, siteId: string): Pro
  * a store_assistant holding `inventory` is never sent it.
  */
 function hasGateScope(authContext: AuthContext, siteId: string): boolean {
+  const gateNavRoles = new Set(['gate_officer', 'weighbridge_operator']);
   return authContext.roles.some(
     (r) =>
       (r.module === 'gate' || r.module === 'weighbridge' || r.module === 'inventory') &&
-      (r.role === 'gate_officer' || r.role === 'weighbridge_operator') &&
+      gateNavRoles.has(r.role) &&
       r.functionScope === 'write' &&
       assignmentCoversLocation(r, siteId),
   );
@@ -515,6 +519,18 @@ const edgeBootstrapBase: RouteHandler = async (req, res) => {
   // Only a site row is a gate: an assignment at a zone or bin must not advertise a site code.
   const gateSite = operatingSite?.level === 'site' ? operatingSite : null;
 
+  // Story 3.14 (AC 2): the acceptance screen posts GOOD rows to the site's inspection bay by code.
+  // One active, non-quarantine staging zone per site, preferring the platform literal IB-01.
+  const inspectionBay = gateSite
+    ? await getPool().query(
+        `SELECT location_code FROM location_register
+WHERE site_id = $1 AND level = 'zone' AND zone_type = 'staging'
+  AND quarantine = false AND status = 'active'
+ORDER BY (location_code = 'IB-01') DESC, location_code LIMIT 1`,
+        [gateSite.location_id],
+      )
+    : null;
+
   sendJson(res, 200, {
     user_id: authContext.userId,
     user_name: authContext.displayName ?? authContext.externalId,
@@ -522,6 +538,7 @@ const edgeBootstrapBase: RouteHandler = async (req, res) => {
     site_name: edgeSiteName(),
     site_code_ext: gateSite?.location_code ?? null,
     gate_id: config.gate.id,
+    inspection_bay_code: (inspectionBay?.rows[0]?.['location_code'] as string | undefined) ?? null,
     role: assignment.role,
     navigation,
     offline_ready: true,

@@ -1,6 +1,6 @@
-import { StoresIssue } from '../../../src/components/stores-issue';
+import { EdgeClient } from '../../../src/components/edge-client';
 
-/** Story 4.11 (AC 9): the storekeeper's online counter issue page; all state lives in the component. */
+/** Story 4.11 / 3.14 (AC 1): the storekeeper's online counter issue page, now inside AppShell. */
 export default function StoresIssuePage() {
-  return <StoresIssue />;
+  return <EdgeClient view="stores-issue" />;
 }

@@ -642,6 +642,79 @@ const releasePutawayTaskBase: RouteHandler = async (req, res, params) => {
   }
 };
 
+/**
+ * Story 3.14 (AC 2): open truck arrivals for the stores inbox. `store_assistant` holds no gate or
+ * weighbridge module, so this receiving-scoped read is their only view of an open gate event. It
+ * joins the binding token to the accepted weighment and to any GRN already raised on it.
+ */
+const listArrivalsBase: RouteHandler = async (req, res) => {
+  assertRoleAllowed(req, RECEIVING_READ_ROLES, 'read');
+  const url = new URL(req.url ?? '', `http://${req.headers.host ?? 'localhost'}`);
+  const siteCode = url.searchParams.get('site');
+  if (!siteCode) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'site query parameter is required');
+    return;
+  }
+  const site = await getLocationByCode(siteCode);
+  if (!site || site.status !== 'active' || site.level !== 'site') {
+    throw new AppError(404, 'RECEIVING_SITE_NOT_FOUND', `No active site exists for "${siteCode}"`);
+  }
+  assertSiteAccess(req, site.location_id, 'read');
+  const result = await getPool().query(
+    `SELECT g.gate_event_id, g.challan_number_ext, g.vehicle_reg_ext, g.driver_name,
+        g.challan_photo_ref, g.entered_at, g.binding_status, g.po_ref_ext,
+        g.supplier_ref_ext, g.supplier_name_unlisted, g.supplier_unlisted,
+        g.correlation_id::text AS binding_token,
+        EXISTS (
+          SELECT 1 FROM weighbridge_event w
+          WHERE w.correlation_id = g.correlation_id AND w.status = 'accepted'
+        ) AS has_accepted_weighment,
+        gr.grn_id,
+        po.line_count, po.open_qty::text AS open_qty
+   FROM gate_event g
+   LEFT JOIN LATERAL (
+     SELECT grn_id FROM grn WHERE correlation_id = g.correlation_id
+     ORDER BY created_at LIMIT 1
+   ) gr ON true
+   LEFT JOIN LATERAL (
+     SELECT count(*)::int AS line_count, COALESCE(sum(open_qty), 0) AS open_qty
+     FROM erp_purchase_order_line
+     WHERE po_number_ext = g.po_ref_ext AND open_qty > 0
+   ) po ON true
+  WHERE g.site_id = $1 AND g.status = 'open'
+  ORDER BY g.entered_at ASC, g.gate_event_id ASC`,
+    [site.location_id],
+  );
+  const arrivals = result.rows.map((row) => ({
+    gate_event_id: row['gate_event_id'] as string,
+    challan_number_ext: (row['challan_number_ext'] as string | null) ?? null,
+    vehicle_reg_ext: row['vehicle_reg_ext'] as string,
+    driver_name: (row['driver_name'] as string | null) ?? null,
+    challan_photo_ref: row['challan_photo_ref'] as string,
+    entered_at:
+      row['entered_at'] instanceof Date
+        ? row['entered_at'].toISOString()
+        : String(row['entered_at']),
+    binding_status: row['binding_status'] as 'matched' | 'unmatched',
+    po_ref_ext: (row['po_ref_ext'] as string | null) ?? null,
+    supplier_ref_ext: (row['supplier_ref_ext'] as string | null) ?? null,
+    supplier_name_unlisted: (row['supplier_name_unlisted'] as string | null) ?? null,
+    supplier_unlisted: row['supplier_unlisted'] === true,
+    binding_token: row['binding_token'] as string,
+    has_accepted_weighment: row['has_accepted_weighment'] === true,
+    grn_id: (row['grn_id'] as string | null) ?? null,
+    po_summary:
+      row['po_ref_ext'] === null
+        ? null
+        : {
+            po_ref_ext: row['po_ref_ext'] as string,
+            line_count: Number(row['line_count'] ?? 0),
+            open_qty: String(row['open_qty'] ?? '0'),
+          },
+  }));
+  sendJson(res, 200, { arrivals });
+};
+
 export const createGrnLineHandler: RouteHandler = requireRole({
   module: 'receiving',
   functionScope: 'write',
@@ -658,6 +731,10 @@ export const listDiscrepanciesHandler: RouteHandler = requireRole({
   module: 'receiving',
   functionScope: 'read',
 })(listDiscrepanciesBase);
+export const listArrivalsHandler: RouteHandler = requireRole({
+  module: 'receiving',
+  functionScope: 'read',
+})(listArrivalsBase);
 export const releasePutawayTaskHandler: RouteHandler = requireRole({
   module: 'receiving',
   functionScope: 'write',

@@ -9,6 +9,9 @@ import { createIndentRaisedEvent } from '../capture/indent';
 import { createDamageCaptureEvents } from '../capture/damage';
 import type { CaptureSettlement, DamageSubmitInput, DamageSubmitResult } from './report-damage';
 import { createGateEnteredEvent, createWeighbridgeRecordedEvent } from '../capture/gate';
+import type { ReceiptRow, ReceiptSubmission } from '../capture/receiving';
+import type { DoneRow } from './stores-inbox-model';
+import type { ReceiptSubmitResult } from './stores-accept';
 import type {
   GateSubmitInput,
   GateSubmitResult,
@@ -47,10 +50,12 @@ import {
   readCaptureSettlement,
   readFailures,
   readOutboxCounts,
+  readPendingReceipts,
   readWaitingForOtherOwners,
   resetAuthRequired,
   salvageUnheldOutboxRows,
 } from '../local-db/outbox';
+import { createOutboxEvent } from '../capture/outbox-event';
 import {
   applyWorklistSnapshot,
   nextStreamVersion,
@@ -84,6 +89,7 @@ interface BootstrapResponse {
   // Story 3.13: the gate capture needs the operating site's external code and the gate id.
   site_code_ext?: string | null;
   gate_id?: string | null;
+  inspection_bay_code?: string | null;
 }
 
 interface WorklistMeta {
@@ -100,6 +106,9 @@ interface RuntimeState {
   // Story 3.13: bootstrap-supplied gate context (empty until a live bootstrap confirms it).
   siteCodeExt: string | null;
   gateId: string | null;
+  // Story 3.14: the site's inspection bay for the acceptance screen, and the receipts still queued.
+  inspectionBayCode: string | null;
+  pendingReceipts: DoneRow[];
   role: string;
   navigation: string[];
   pendingCount: number;
@@ -141,6 +150,8 @@ const initialState: RuntimeState = {
   siteName: '',
   siteCodeExt: null,
   gateId: null,
+  inspectionBayCode: null,
+  pendingReceipts: [],
   role: '',
   navigation: [],
   pendingCount: 0,
@@ -242,7 +253,10 @@ export function EdgeClient({
     | 'report-damage'
     | 'damage-cases'
     | 'standing-grants'
-    | 'gate';
+    | 'gate'
+    | 'stores'
+    | 'stores-accept'
+    | 'stores-issue';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
@@ -290,13 +304,15 @@ export function EdgeClient({
   const refreshLocalState = useCallback(
     async (db: PowerSyncDatabase) => {
       const currentUser = signedInUserId.current;
-      const [counts, failures, rowsAuthRequired, waiting, ownUnsettled] = await Promise.all([
-        readOutboxCounts(db),
-        readFailures(db),
-        hasAuthRequired(db, currentUser ?? undefined),
-        currentUser ? readWaitingForOtherOwners(db, currentUser) : Promise.resolve([]),
-        currentUser ? countUnsettled(db, currentUser) : Promise.resolve(0),
-      ]);
+      const [counts, failures, rowsAuthRequired, waiting, ownUnsettled, pendingReceipts] =
+        await Promise.all([
+          readOutboxCounts(db),
+          readFailures(db),
+          hasAuthRequired(db, currentUser ?? undefined),
+          currentUser ? readWaitingForOtherOwners(db, currentUser) : Promise.resolve([]),
+          currentUser ? countUnsettled(db, currentUser) : Promise.resolve(0),
+          currentUser ? readPendingReceipts(db, currentUser) : Promise.resolve([]),
+        ]);
       const authRequired = rowsAuthRequired || sessionAuthLost.current;
       const knownUsers = readKnownUsers();
       const online = navigator.onLine;
@@ -314,6 +330,11 @@ export function EdgeClient({
         waitingForOthers: waiting.map((entry) => ({
           userName: knownUsers[entry.userId] ?? '',
           count: entry.count,
+        })),
+        pendingReceipts: pendingReceipts.map((row) => ({
+          id: row.grnId,
+          title: row.challan ?? row.grnId,
+          statusKey: 'stores.done.captured' as const,
         })),
         // Story 1.12 (AC4): once nothing is left to upload, the sign-out gate notice goes away.
         signOutBlockedCount: ownUnsettled === 0 ? 0 : current.signOutBlockedCount,
@@ -507,6 +528,7 @@ export function EdgeClient({
             siteName: bootstrap.site_name,
             siteCodeExt: bootstrap.site_code_ext?.trim() || null,
             gateId: bootstrap.gate_id?.trim() || null,
+            inspectionBayCode: bootstrap.inspection_bay_code?.trim() || null,
             // No site on the bootstrap: gate capture is closed, so hide its nav row.
             navigation: bootstrap.site_code_ext?.trim()
               ? bootstrap.navigation
@@ -958,6 +980,79 @@ export function EdgeClient({
     [refreshLocalState, requireReady, state.role, state.siteCodeExt, state.siteId, state.userId],
   );
 
+  const submitReceipt = useCallback(
+    async (submission: ReceiptSubmission, rows: ReceiptRow[]): Promise<ReceiptSubmitResult> => {
+      if (navigator.onLine) {
+        for (const row of rows) {
+          const response = await authorizedFetch('/api/v1/grn-lines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...row.body,
+              idempotency_key: `stores-receipt-${row.grn_line_id}`,
+            }),
+          }).catch(() => null);
+          if (!response) return { kind: 'error', errorCode: 'STORES_OFFLINE' };
+          if (response.ok) continue;
+          const body = (await response.json().catch(() => null)) as {
+            error_code?: unknown;
+          } | null;
+          return {
+            kind: 'error',
+            errorCode:
+              typeof body?.error_code === 'string' ? body.error_code : 'INVALID_EVENT_ENVELOPE',
+          };
+        }
+        const current = database.current;
+        if (current) await refreshLocalState(current);
+        return { kind: 'posted', grnId: submission.grnId };
+      }
+      const db = requireReady();
+      const occurredAt = new Date().toISOString();
+      for (const row of rows) {
+        const eventId = crypto.randomUUID();
+        await insertCaptureEvent(
+          db,
+          createOutboxEvent({
+            eventId,
+            streamType: 'receiving',
+            streamId: row.grn_line_id,
+            eventType: 'goods.received',
+            payload: row.body,
+            userId: state.userId,
+            role: state.role,
+            siteId: state.siteId,
+            correlationId: submission.bindingToken,
+            deviceId: deviceId(),
+            idempotencyKey: `edge-receipt-${row.grn_line_id}`,
+            occurredAt,
+            captureMethod: 'MANUAL',
+          }),
+        );
+      }
+      await refreshLocalState(db);
+      return { kind: 'pending', grnId: submission.grnId };
+    },
+    [refreshLocalState, requireReady, state.role, state.siteId, state.userId],
+  );
+
+  const storeReceiptPhoto = useCallback(
+    async (file: File): Promise<string> => {
+      if (signingOut.current) throw new Error('Signing out: capture is closed');
+      if (!state.userId) throw new Error('Sign-in is not ready');
+      const attachmentId = crypto.randomUUID();
+      await pendingPhotoStore.put({
+        attachmentId,
+        blob: file,
+        contentType: file.type || 'image/jpeg',
+        ownerUserId: state.userId,
+        createdAt: new Date().toISOString(),
+      });
+      return attachmentId;
+    },
+    [state.userId],
+  );
+
   const selectWorkOrder = useCallback(async (workOrderId: string) => {
     const db = database.current;
     const reservations = db ? await readCachedReservations(db, workOrderId) : [];
@@ -1107,6 +1202,20 @@ export function EdgeClient({
         stampUnverified: gateLookups.stampUnverified,
         onSubmitGate: submitGate,
         onSubmitWeighment: submitWeighment,
+      }}
+      storesInbox={{
+        online: state.online,
+        siteCodeExt: state.siteCodeExt,
+        siteId: state.siteId,
+        navigation: state.navigation,
+        pendingReceipts: state.pendingReceipts,
+      }}
+      storesAccept={{
+        online: state.online,
+        siteCodeExt: state.siteCodeExt,
+        inspectionBayCode: state.inspectionBayCode,
+        onSubmitReceipt: submitReceipt,
+        storePhoto: storeReceiptPhoto,
       }}
       userId={state.userId}
       onRetry={() => {

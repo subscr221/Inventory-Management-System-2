@@ -65,6 +65,10 @@ import { openReceiptDamageCase, assertDamageCaseAllowsRelease } from './damage.j
  */
 
 const RECEIVING_STREAM_TYPES = new Set(['receiving']);
+
+/** Story 3.14: the evidence fields are references/notes, not payloads. */
+const MAX_INSPECT_NOTE_LENGTH = 200;
+const MAX_ATTACHMENT_REF_LENGTH = 512;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const UNIT_COST_REGEX = /^\d+(\.\d+)?$/;
@@ -393,6 +397,61 @@ export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
 function assertReceiptReasonShape(p: Record<string, unknown>, challanReceipt: boolean): void {
   const reasonFields = ['reason_code', 'reason_detail', 'reason_note', 'reason_photo_ref'];
   const present = (field: string): boolean => p[field] !== undefined && p[field] !== null;
+
+  // Story 3.14: the inspection-on-opening note and the general material photo. These are notes for
+  // QC, not a disposition, and they are allowed on any receipt (including a job-work challan).
+  const inspectOnOpening = p['inspect_on_opening'];
+  if (present('inspect_on_opening')) {
+    if (inspectOnOpening !== 'suspected' && inspectOnOpening !== 'observed')
+      throw new AppError(
+        400,
+        'RECEIVING_INSPECT_INVALID',
+        "inspect_on_opening must be 'suspected' or 'observed'",
+        { inspect_on_opening: inspectOnOpening },
+      );
+    if (present('inspect_note')) {
+      const note = p['inspect_note'];
+      if (
+        typeof note !== 'string' ||
+        !note.trim() ||
+        note.trim().length > MAX_INSPECT_NOTE_LENGTH ||
+        /[\r\n]/.test(note)
+      )
+        throw new AppError(
+          400,
+          'RECEIVING_INSPECT_INVALID',
+          `inspect_note must be one line of at most ${MAX_INSPECT_NOTE_LENGTH} characters`,
+        );
+      p['inspect_note'] = note.trim();
+    }
+    if (present('inspect_photo_ref')) {
+      const photo = p['inspect_photo_ref'];
+      if (
+        typeof photo !== 'string' ||
+        !photo.trim() ||
+        photo.trim().length > MAX_ATTACHMENT_REF_LENGTH
+      )
+        throw new AppError(400, 'RECEIVING_INSPECT_INVALID', 'inspect_photo_ref is invalid');
+      p['inspect_photo_ref'] = photo.trim();
+    }
+  } else if (present('inspect_note') || present('inspect_photo_ref')) {
+    throw new AppError(
+      400,
+      'RECEIVING_INSPECT_INVALID',
+      'inspect_note and inspect_photo_ref require inspect_on_opening',
+      { fields: ['inspect_note', 'inspect_photo_ref'].filter(present) },
+    );
+  }
+  if (present('material_photo_ref')) {
+    const photo = p['material_photo_ref'];
+    if (
+      typeof photo !== 'string' ||
+      !photo.trim() ||
+      photo.trim().length > MAX_ATTACHMENT_REF_LENGTH
+    )
+      throw new AppError(400, 'RECEIVING_INSPECT_INVALID', 'material_photo_ref is invalid');
+    p['material_photo_ref'] = photo.trim();
+  }
 
   if (!present('line_condition')) p['line_condition'] = 'GOOD';
   const condition = p['line_condition'];
@@ -835,6 +894,11 @@ export async function applyGoodsReceivedProjection(
     reason_detail: optionalText('reason_detail'),
     reason_note: optionalText('reason_note'),
     reason_photo_ref: optionalText('reason_photo_ref'),
+    // Story 3.14: the inspect-on-opening note and the material photo are persisted on every line.
+    inspect_on_opening: optionalText('inspect_on_opening') as 'suspected' | 'observed' | null,
+    inspect_note: optionalText('inspect_note'),
+    inspect_photo_ref: optionalText('inspect_photo_ref'),
+    material_photo_ref: optionalText('material_photo_ref'),
   };
 
   // 1. Resolve the accepted weighment for the binding token (AC1, AD-2 chain). Only a Story 3.3

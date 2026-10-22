@@ -34,6 +34,9 @@ import { StandingGrants } from './standing-grants';
 import { ReportDamage, type ReportDamageProps } from './report-damage';
 import { DamageCases } from './damage-cases';
 import { GateEntry, type GateEntryProps } from './gate-entry/gate-entry';
+import { StoresInbox, type StoresInboxProps } from './stores-inbox';
+import { StoresAccept, type StoresAcceptProps } from './stores-accept';
+import { StoresIssue } from './stores-issue';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import { useDeviceClass, type DeviceClass } from '../lib/use-device-class';
@@ -86,6 +89,9 @@ export interface AppShellProps {
   reportDamage?: ReportDamageProps;
   /** Story 3.13: the gate entry and weighbridge capture, injected by the edge client. */
   gateCapture?: GateEntryProps;
+  /** Story 3.14: the stores inbox and acceptance screen, injected by the edge client. */
+  storesInbox?: StoresInboxProps;
+  storesAccept?: StoresAcceptProps;
   /** Story 8.9: the signed-in user, for the damage cases workbench grouping. */
   userId?: string;
   /**
@@ -131,26 +137,33 @@ export interface AppShellProps {
 }
 
 type BaseView =
-| 'new-requisition'
-| 'check-stock'
-| 'my-requests'
-| 'report-damage'
-| 'damage-cases'
-| 'standing-grants'
-| 'gate';
+  | 'new-requisition'
+  | 'check-stock'
+  | 'my-requests'
+  | 'report-damage'
+  | 'damage-cases'
+  | 'standing-grants'
+  | 'gate'
+  | 'stores'
+  | 'stores-accept'
+  | 'stores-issue';
 
 /** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
 const BASE_VIEW_ENTRY: Record<BaseView, string> = {
-'new-requisition': 'New requisition',
-'check-stock': 'Check stock',
-'my-requests': 'My requests',
-// Story 8.9 (Task 11.1): a deep link without the entry gets the same no-access card.
-'report-damage': 'Report damage',
-'damage-cases': 'Damage cases',
-// Story 4.8: the grants a person holds, assigns and approves.
-'standing-grants': 'Standing grants',
-// Story 3.13 (AC 1): gate entry and weighbridge capture.
-'gate': 'Gate entry',
+  'new-requisition': 'New requisition',
+  'check-stock': 'Check stock',
+  'my-requests': 'My requests',
+  // Story 8.9 (Task 11.1): a deep link without the entry gets the same no-access card.
+  'report-damage': 'Report damage',
+  'damage-cases': 'Damage cases',
+  // Story 4.8: the grants a person holds, assigns and approves.
+  'standing-grants': 'Standing grants',
+  // Story 3.13 (AC 1): gate entry and weighbridge capture.
+  gate: 'Gate entry',
+  // Story 3.14 (AC 1): the storekeeper's inbox and acceptance, and the re-homed issue page.
+  stores: 'Stores',
+  'stores-accept': 'Stores',
+  'stores-issue': 'Stores issue',
 };
 
 function isBaseView(view: string): view is BaseView {
@@ -200,10 +213,12 @@ export function AppShell({
   onRetry,
   onLoadCrossDockTask,
   onConfirmCrossDock,
-onSubmitIndent,
-reportDamage,
-gateCapture,
-userId = '',
+  onSubmitIndent,
+  reportDamage,
+  gateCapture,
+  storesInbox,
+  storesAccept,
+  userId = '',
   view = 'frontline',
   online = true,
   navigationConfirmed = false,
@@ -378,6 +393,25 @@ userId = '',
               <ReportDamage {...(reportDamage ?? {})} />
             ) : view === 'gate' ? (
               <GateEntry {...(gateCapture ?? {})} />
+            ) : view === 'stores' ? (
+              <StoresInbox
+                {...(storesInbox ?? { online, siteCodeExt: null, siteId: '', navigation })}
+              />
+            ) : view === 'stores-accept' ? (
+              <StoresAccept
+                {...(storesAccept ?? {
+                  online,
+                  siteCodeExt: null,
+                  inspectionBayCode: null,
+                  onSubmitReceipt: async () => ({
+                    kind: 'error' as const,
+                    errorCode: 'INVALID_EVENT_ENVELOPE',
+                  }),
+                  storePhoto: async () => '',
+                })}
+              />
+            ) : view === 'stores-issue' ? (
+              <StoresIssue />
             ) : view === 'damage-cases' ? (
               <DamageCases online={online} userId={userId} />
             ) : view === 'standing-grants' ? (

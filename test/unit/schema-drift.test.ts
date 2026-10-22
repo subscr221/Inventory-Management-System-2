@@ -2733,6 +2733,32 @@ describe('Story 2.1 schema drift guard', () => {
     );
   });
 
+  it('Story 3.14 mirrors the GRN line inspect migration into init-db.sql, after grn_line', () => {
+    const inspectSql = read('read/projections/grn_line_inspect.sql');
+    for (const fragment of [
+      'ADD COLUMN IF NOT EXISTS inspect_on_opening TEXT',
+      'ADD COLUMN IF NOT EXISTS inspect_note TEXT',
+      'ADD COLUMN IF NOT EXISTS inspect_photo_ref TEXT',
+      'ADD COLUMN IF NOT EXISTS material_photo_ref TEXT',
+      'chk_grn_line_inspect_on_opening',
+      'chk_grn_line_inspect_evidence',
+    ]) {
+      assert.ok(inspectSql.includes(fragment), `grn_line_inspect.sql missing ${fragment}`);
+    }
+    const body = inspectSql.slice(inspectSql.indexOf('ALTER TABLE grn_line ADD COLUMN'));
+    const mirrorAt = normalizeSql(initDb).indexOf(normalizeSql(body));
+    assert.ok(mirrorAt >= 0, 'init-db.sql does not mirror grn_line_inspect.sql verbatim');
+    const grnLineAt = normalizeSql(initDb)
+      .toLowerCase()
+      .indexOf('create table if not exists grn_line(');
+    assert.ok(grnLineAt >= 0, 'init-db.sql defines grn_line');
+    assert.ok(mirrorAt > grnLineAt, 'the mirror must follow the grn_line definition it alters');
+    assert.ok(
+      migrateSource.indexOf("'../../read/projections/grn_line_inspect.sql'") >
+        migrateSource.indexOf("'../../read/projections/grn_line_condition.sql'"),
+    );
+  });
+
   it('Story 3.10 applies dependency-safe additive cross-dock alterations in final vocabulary order', () => {
     const grnSql = read('read/projections/grn_line.sql');
     const pickTaskSql = read('read/projections/pick_task.sql');

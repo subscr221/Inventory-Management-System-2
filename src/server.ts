@@ -130,6 +130,7 @@ import {
   getGrnHandler,
   listGrnsHandler,
   listDiscrepanciesHandler,
+  listArrivalsHandler,
   releasePutawayTaskHandler,
 } from './api/v1/receiving.js';
 import {
@@ -802,6 +803,8 @@ export function createAppRouter(): Router {
   router.get('/api/v1/grns/:grnId', getGrnHandler);
   router.get('/api/v1/grns', listGrnsHandler);
   router.get('/api/v1/receiving/discrepancies', listDiscrepanciesHandler);
+  // Story 3.14: the stores inbox arrivals read.
+  router.get('/api/v1/receiving/arrivals', listArrivalsHandler);
   router.post('/api/v1/putaway-tasks/:putawayTaskId/release', releasePutawayTaskHandler);
 
   // Story 3.5: Directed Putaway and Location Override

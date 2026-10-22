@@ -39,10 +39,7 @@ export interface OutboxCounts {
   failedCount: number;
 }
 
-export async function insertCaptureEvent(
-  db: QueryExecutor,
-  event: EdgeEventRecord,
-): Promise<void> {
+export async function insertCaptureEvent(db: QueryExecutor, event: EdgeEventRecord): Promise<void> {
   await db.execute(
     `INSERT INTO edge_outbox (
       id, stream_type, stream_id, event_type, event_version, payload, metadata,
@@ -77,9 +74,52 @@ const NOT_RETAINED = `id NOT IN (SELECT id FROM edge_outbox_retained)`;
 
 export type RetainedReason = 'refused' | 'parked_for_owner';
 
-async function inWriteTransaction(db: QueryExecutor, work: (tx: QueryExecutor) => Promise<void>): Promise<void> {
+async function inWriteTransaction(
+  db: QueryExecutor,
+  work: (tx: QueryExecutor) => Promise<void>,
+): Promise<void> {
   if (db.writeTransaction) await db.writeTransaction(work);
   else await work(db);
+}
+
+/**
+ * Story 3.14: the GRNs this device has captured but not yet settled, for the stores inbox
+ * "Done today" section. Only the signed-in owner's rows count (the Story 1.12 rule).
+ */
+export async function readPendingReceipts(
+  db: QueryExecutor,
+  ownerUserId?: string,
+): Promise<Array<{ grnId: string; challan: string | null; pending: boolean }>> {
+  const rows = await db.getAll<{
+    payload: string;
+    metadata: string;
+    local_status: string;
+  }>(
+    `SELECT payload, metadata, local_status FROM edge_outbox WHERE event_type = ? AND ${NOT_RETAINED}`,
+    ['goods.received'],
+  );
+  const seen = new Set<string>();
+  const receipts: Array<{ grnId: string; challan: string | null; pending: boolean }> = [];
+  for (const row of rows) {
+    const owner = outboxRowOwner(row.metadata);
+    if (ownerUserId && owner !== null && owner !== ownerUserId) continue;
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const grnId = payload['grn_id'];
+    if (typeof grnId !== 'string' || seen.has(grnId)) continue;
+    seen.add(grnId);
+    receipts.push({
+      grnId,
+      challan:
+        typeof payload['challan_number_ext'] === 'string' ? payload['challan_number_ext'] : null,
+      pending: row.local_status !== 'acked',
+    });
+  }
+  return receipts;
 }
 
 export async function readOutboxCounts(db: QueryExecutor): Promise<OutboxCounts> {
@@ -215,7 +255,11 @@ export async function resetAuthRequired(db: QueryExecutor, ownerUserId: string):
  * no upsert: delete then insert, and only when the source row still exists, so a repeat never drops
  * a copy whose edge_outbox row a checkpoint already removed.
  */
-export async function retainOutboxRow(tx: QueryExecutor, id: string, reason: RetainedReason): Promise<void> {
+export async function retainOutboxRow(
+  tx: QueryExecutor,
+  id: string,
+  reason: RetainedReason,
+): Promise<void> {
   await tx.execute(
     `DELETE FROM edge_outbox_retained WHERE id = ? AND EXISTS (SELECT 1 FROM edge_outbox WHERE id = ?)`,
     [id, id],
@@ -231,7 +275,10 @@ export async function retainOutboxRow(tx: QueryExecutor, id: string, reason: Ret
  * Story 1.13: rescue rows an older build settled without retaining. Runs at start, before any
  * re-queue or connect. Rows earlier checkpoints already deleted cannot be recovered.
  */
-export async function salvageUnheldOutboxRows(db: QueryExecutor, signedInUserId: string): Promise<void> {
+export async function salvageUnheldOutboxRows(
+  db: QueryExecutor,
+  signedInUserId: string,
+): Promise<void> {
   await inWriteTransaction(db, async (tx) => {
     const rows = await tx.getAll<{ id: string; local_status: EdgeLocalStatus; metadata: string }>(
       `SELECT id, local_status, metadata FROM edge_outbox
@@ -243,7 +290,8 @@ export async function salvageUnheldOutboxRows(db: QueryExecutor, signedInUserId:
         continue;
       }
       const owner = outboxRowOwner(row.metadata);
-      if (owner !== null && owner !== signedInUserId) await retainOutboxRow(tx, row.id, 'parked_for_owner');
+      if (owner !== null && owner !== signedInUserId)
+        await retainOutboxRow(tx, row.id, 'parked_for_owner');
     }
   });
 }
@@ -268,7 +316,10 @@ export async function dismissRetainedRow(db: QueryExecutor, id: string): Promise
     if (rows.length === 0) {
       throw new Error(`No dismissable refused copy for id ${id}`);
     }
-    await tx.execute(`DELETE FROM edge_outbox_retained WHERE id = ? AND retained_reason = ?`, [id, 'refused']);
+    await tx.execute(`DELETE FROM edge_outbox_retained WHERE id = ? AND retained_reason = ?`, [
+      id,
+      'refused',
+    ]);
   });
 }
 

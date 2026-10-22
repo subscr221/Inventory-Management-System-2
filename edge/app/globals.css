@@ -1423,3 +1423,130 @@ textarea:focus-visible {
     display: none;
   }
 }
+
+/* Story 3.14: stores inbox and acceptance. Touch targets follow EXPERIENCE.md: 56/48/34 px. */
+.stores-inbox,
+.stores-accept {
+  display: grid;
+  gap: 1rem;
+}
+
+.stores-status,
+.stores-empty {
+  color: #4a4a4a;
+  margin: 0.25rem 0;
+}
+
+.stores-group h2,
+.stores-accept h1,
+.stores-line h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.stores-cards,
+.stores-lines,
+.stores-summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.stores-card {
+  display: grid;
+  gap: 0.35rem;
+  border: 1px solid #d6d6d6;
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+
+.stores-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.stores-card p {
+  margin: 0;
+  color: #4a4a4a;
+}
+
+.stores-card-highlight {
+  outline: 3px solid #1a4d8f;
+}
+
+.stores-pill {
+  display: inline-block;
+  justify-self: start;
+  border: 1px solid #7a7a7a;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.82rem;
+}
+
+.stores-banner,
+.stores-warning {
+  border-left: 4px solid #7a5b00;
+  padding-left: 0.6rem;
+  color: #4a3600;
+}
+
+.stores-condition-row {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+}
+
+.stores-condition-row label,
+.stores-line label,
+.stores-accept label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.stores-accept input:not([type='radio']):not([type='checkbox']),
+.stores-accept select,
+.stores-accept button,
+.stores-inbox button,
+.stores-inbox a {
+  min-height: 48px;
+}
+
+.stores-footer {
+  display: grid;
+  gap: 0.5rem;
+  border-top: 1px solid #d6d6d6;
+  padding-top: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .stores-footer {
+    position: sticky;
+    bottom: 0;
+    background: #fff;
+    padding-bottom: 0.75rem;
+  }
+}
+
+@media (pointer: coarse) {
+  .stores-accept input,
+  .stores-accept select,
+  .stores-accept button,
+  .stores-inbox button,
+  .stores-inbox a,
+  .stores-line input,
+  .stores-line select {
+    min-height: 56px;
+  }
+}
+
+@media (pointer: fine) and (min-width: 900px) {
+  .stores-accept input,
+  .stores-accept select,
+  .stores-accept button,
+  .stores-inbox button,
+  .stores-inbox a {
+    min-height: 34px;
+  }
+}

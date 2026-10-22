@@ -464,6 +464,15 @@ export interface GoodsReceivedPayload {
   reason_note?: string;
   /** Story 3.11: opaque photo attachment key (the challan_photo_ref precedent), required with 'OTHER'. */
   reason_photo_ref?: string;
+  /**
+   * Story 3.14: what the storekeeper saw while unloading. A NOTE for the inspector, not a verdict;
+   * 'suspected' or 'observed' only, with an optional one-line note and photo.
+   */
+  inspect_on_opening?: 'suspected' | 'observed';
+  inspect_note?: string;
+  inspect_photo_ref?: string;
+  /** Story 3.14: one material photo of what arrived, required by the acceptance screen. */
+  material_photo_ref?: string;
 }
 
 export interface GoodsReceivedEnvelope extends Omit<EventEnvelope, 'payload'> {

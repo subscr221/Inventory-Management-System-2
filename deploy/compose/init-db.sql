@@ -15328,3 +15328,31 @@ END $$;
 ALTER TABLE indent ADD COLUMN IF NOT EXISTS damage_report_id UUID;
 
 CREATE INDEX IF NOT EXISTS idx_indent_damage_report ON indent (damage_report_id) WHERE damage_report_id IS NOT NULL;
+
+-- grn_line_inspect: MIRROR of read/projections/grn_line_inspect.sql (Story 3.14; ALTER-only on
+-- grn_line above). This copy exists for first-boot container init only - change both files together.
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS inspect_on_opening TEXT;
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS inspect_note TEXT;
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS inspect_photo_ref TEXT;
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS material_photo_ref TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_grn_line_inspect_evidence'
+      AND conrelid = 'grn_line'::regclass
+  ) THEN
+    ALTER TABLE grn_line DROP CONSTRAINT IF EXISTS chk_grn_line_inspect_on_opening;
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_inspect_on_opening
+      CHECK (inspect_on_opening IS NULL OR inspect_on_opening IN ('suspected', 'observed'));
+
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_inspect_evidence
+      CHECK (
+        inspect_on_opening IS NOT NULL
+        OR (inspect_note IS NULL AND inspect_photo_ref IS NULL)
+      );
+  END IF;
+END $$;

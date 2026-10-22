@@ -314,6 +314,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/grns/:grnId',
       'GET /api/v1/grns',
       'GET /api/v1/receiving/discrepancies',
+      // Story 3.14: the stores inbox arrivals read.
+      'GET /api/v1/receiving/arrivals',
       'POST /api/v1/putaway-tasks/:putawayTaskId/release',
       // Story 3.5: Directed Putaway and Location Override
       'GET /api/v1/putaway-tasks',
