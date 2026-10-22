@@ -3,7 +3,8 @@ baseline_commit: a07e22f
 ---
 # Story 3.14: Stores Inbox, Scan Anything Bar and Acceptance into Inspection Bay
 
-Status: review
+Status: done
+review_loop_iteration: 0
 
 ## Story
 As a storekeeper (`store_assistant`),
@@ -81,6 +82,61 @@ so that UJ-PUT-01 steps 1 to 3 and the acceptance half of step 4 run on the PWA 
 - [Source: _bmad-output/planning-artifacts/epics.md#Story 3.14]
 - [Source: _bmad-output/planning-artifacts/sprint-change-proposal-2026-10-21.md#4.1, #4.4, #6]
 - [Source: src/compliance/receiving.ts, src/api/v1/receiving.ts, read/projections/grn_line_condition.sql]
+
+## Suggested Review Order
+
+**Server seam (AC 1, 2)**
+
+- Receives arrivals with weighment and GRN joins; scope allows receiving/inventory modules and write assignments.  
+  [`receiving.ts:1`](../../src/api/v1/receiving.ts#L1)
+- Registers the route before `/grns/:grnId`; site filtering via `receivingScope`.  
+  [`server.ts:1`](../../src/server.ts#L1)
+- Adds `inspection_bay_code` to edge bootstrap via the receiving module.  
+  [`edge.ts:1`](../../src/api/v1/edge.ts#L1)
+- Boots IB-01 inspection bay zones per pilot site; active, non-quarantine, staging type.  
+  [`setup-operations.ts:1`](../../deploy/rehearsal/mock/setup-operations.ts#L1)
+- Adds `stores` nav entry and `Stores` NAVIGATION_CAPABILITIES row before `Stores issue`.  
+  [`edge.ts:1`](../../src/api/v1/edge.ts#L1)
+
+**GRN inspect-on-opening fields (AC 8)**
+
+- Adds `grn_line_inspect.sql` ALTER-only, appended after `grn_line_condition.sql`.  
+  [`migrate.ts:1`](../../src/events/migrate.ts#L1)
+- Types `inspect_on_opening`, `inspect_note`, `inspect_photo_ref`, `material_photo_ref` in schema.  
+  [`schema.ts:1`](../../src/events/schema.ts#L1)
+- Assertions allow note/photo only when inspect toggle is active.  
+  [`receiving.ts:1`](../../src/compliance/receiving.ts#L1)
+- Mirrors verbatim at tail of `init-db.sql`; pinned by name in `schema-drift.test.ts`.  
+  [`init-db.sql:1`](../../deploy/compose/init-db.sql#L1)
+
+**Edge shell, inbox, scan bar (AC 1, 3, 4)**
+
+- Three views wired into `app-shell.tsx`, `edge-client.tsx`, `app/stores/{,accept,issue}/page.tsx`.  
+  [`app-shell.tsx:1`](../../edge/src/components/app-shell.tsx#L1)
+- Four groups: Arrived awaiting acceptance, Cleared by QC - put away, Issues pending, Returns to shelf.  
+  [`stores-inbox.tsx:1`](../../edge/src/components/stores-inbox.tsx#L1)
+- Scan bar routes: unmatched→arrival, accepted→done card, lot→damage sheet, else unknown.  
+  [`stores-inbox.tsx:146`](../../edge/src/components/stores-inbox.tsx#L146)
+- Empty groups read `Nothing waiting`; done section lists captured and synced GRNs.  
+  [`stores-inbox.tsx:160`](../../edge/src/components/stores-inbox.tsx#L160)
+
+**Acceptance band cap and condition split (AC 5, 6, 7)**
+
+- Band cap: `ordered × (1 + tolerance%) - cumulative(GOOD+DAMAGED)` with floor at zero.  
+  [`receiving.ts:142`](../../edge/src/capture/receiving.ts#L142)
+- GOOD/DAMAGED/REJECTED ordering: DAMAGED/REJECTED before GOOD.  
+  [`receiving.ts:250`](../../edge/src/capture/receiving.ts#L250)
+- Offline: envelopes + photos to outbox, `received_by` server-set, refusal → Refused captures.  
+  [`edge-client.ts:3`](../../edge/src/components/edge-client.tsx#L3)
+
+**Integration and tests (AC 9)**
+
+- 7 integration tests cover weighment join, GRN join, ordering, bootstrap `inspection_bay_code`.  
+  [`story-3-14.test.ts:1`](../../test/unit/story-3-14.test.ts#L1)
+- `stores.*` i18n literals added; `i18n-literals.test.ts` guard green.  
+  [`i18n-literals.test.ts:6`](../../edge/test/unit/i18n-literals.test.ts#L6)
+- Playwright e2e and axe specs for zero WCAG AA violations and 56/48/34 px targets.  
+  [`stores-inbox.spec.ts:1`](../../edge/test/e2e/stores-inbox.spec.ts#L1)
 
 ## Dev Agent Record
 ### Agent Model Used
