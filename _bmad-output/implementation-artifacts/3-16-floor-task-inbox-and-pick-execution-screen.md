@@ -1,6 +1,7 @@
 ﻿---
 status: done
 baseline_revision: 6b1326a8cd24974062c7bce4f6eeaaacb6a57efe
+final_revision: 3f926bcfede594f59f72ba11263a1ee88cffbaa4
 followup_review_recommended: true
 context:
   - _bmad-output/planning-artifacts/epics.md
