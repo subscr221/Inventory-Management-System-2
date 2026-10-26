@@ -3,6 +3,9 @@ import { resolve } from 'node:path';
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Next treats 127.0.0.1 as cross-origin when the dev server is bound to 0.0.0.0.
+  // Without this, the dev client never hydrates and the shell stays a static page.
+  allowedDevOrigins: ['127.0.0.1'],
   turbopack: { root: resolve(process.cwd(), '..') },
   async headers() {
     return [

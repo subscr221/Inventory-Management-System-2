@@ -1,49 +1,107 @@
 'use client';
 
-import { useState } from 'react';
-import type { ChartData } from 'chart.js';
-import { ChartComponent } from './chart-component';
-import { AdvancedFilter, type AppliedFilter } from '../filters/advanced-filter';
-import { t } from '../../i18n/locale';
+import { useMemo, useState } from 'react';
+import { t, type MessageKey } from '../../i18n/locale';
 
-interface KPIData {
-  value: string | number;
-  label: string;
-  trend?: 'up' | 'down' | 'neutral';
-  change?: string;
+type LineStatus = 'available' | 'below-min' | 'in-transit' | 'on-hold';
+type DeskFilter = 'all' | 'below-min' | 'in-transit' | 'on-hold';
+
+interface StockLine {
+  sku: string;
+  nameKey: MessageKey;
+  locationKey: MessageKey;
+  uomKey: MessageKey;
+  onHand: string;
+  reserved: string;
+  available: string;
+  status: LineStatus;
 }
 
-interface ActivityItem {
-  id: number;
-  action: string;
-  user: string;
-  time: string;
-}
-
-type WidgetData = KPIData | ChartData<'bar' | 'line' | 'pie'> | ActivityItem[];
-
-interface DashboardWidget {
-  id: string;
-  title: string;
-  type: 'kpi' | 'chart' | 'list';
-  data: WidgetData;
-  position: { x: number; y: number };
-  size: { width: number; height: number };
-  chartType?: 'bar' | 'line' | 'pie';
-}
-
-interface FilterOption {
-  id: string;
-  label: string;
-  type: 'text' | 'number' | 'date' | 'select' | 'checkbox';
-  options?: Array<{ value: string; label: string }>;
-}
-
-const ACTIVITY_ITEMS: ActivityItem[] = [
-  { id: 1, action: 'Cross-dock task completed', user: 'John Doe', time: '2 min ago' },
-  { id: 2, action: 'New indent raised', user: 'Jane Smith', time: '15 min ago' },
-  { id: 3, action: 'Maintenance WO updated', user: 'Bob Johnson', time: '1 hour ago' },
+const LINES: readonly StockLine[] = [
+  {
+    sku: 'RM-ALU-1201',
+    nameKey: 'dashboard.item.aluminiumSheet',
+    locationKey: 'dashboard.loc.binA14',
+    uomKey: 'dashboard.uom.sheet',
+    onHand: '42',
+    reserved: '6',
+    available: '36',
+    status: 'below-min',
+  },
+  {
+    sku: 'FG-PNL-088',
+    nameKey: 'dashboard.item.panelAssembly',
+    locationKey: 'dashboard.loc.fgStore',
+    uomKey: 'dashboard.uom.each',
+    onHand: '120',
+    reserved: '18',
+    available: '102',
+    status: 'available',
+  },
+  {
+    sku: 'JW-CST-014',
+    nameKey: 'dashboard.item.customerCoil',
+    locationKey: 'dashboard.loc.quarantine',
+    uomKey: 'dashboard.uom.kg',
+    onHand: '850',
+    reserved: '850',
+    available: '0',
+    status: 'on-hold',
+  },
+  {
+    sku: 'INT-4412',
+    nameKey: 'dashboard.item.transferPlant',
+    locationKey: 'dashboard.loc.inTransit',
+    uomKey: 'dashboard.uom.each',
+    onHand: '24',
+    reserved: '24',
+    available: '0',
+    status: 'in-transit',
+  },
 ];
+
+const FILTERS: readonly DeskFilter[] = ['all', 'below-min', 'in-transit', 'on-hold'];
+
+function openingFilter(role: string): DeskFilter {
+  if (role === 'warehouse-manager' || role === 'warehouse_admin') return 'below-min';
+  if (role === 'procurement-specialist') return 'on-hold';
+  if (role === 'logistics-coordinator') return 'in-transit';
+  return 'all';
+}
+
+function filterLabel(filter: DeskFilter): string {
+  switch (filter) {
+    case 'all':
+      return t('dashboard.tabAll');
+    case 'below-min':
+      return t('dashboard.tabBelowMin');
+    case 'in-transit':
+      return t('dashboard.tabInTransit');
+    case 'on-hold':
+      return t('dashboard.tabOnHold');
+    default: {
+      const neverFilter: never = filter;
+      return neverFilter;
+    }
+  }
+}
+
+function statusLabel(status: LineStatus): string {
+  switch (status) {
+    case 'available':
+      return t('dashboard.status.available');
+    case 'below-min':
+      return t('dashboard.status.belowMin');
+    case 'in-transit':
+      return t('dashboard.status.inTransit');
+    case 'on-hold':
+      return t('dashboard.status.onHold');
+    default: {
+      const neverStatus: never = status;
+      return neverStatus;
+    }
+  }
+}
 
 export function EnhancedDashboard({
   role,
@@ -54,231 +112,202 @@ export function EnhancedDashboard({
   pendingCount?: number;
   failedCount?: number;
 }) {
-  const [widgets, setWidgets] = useState<DashboardWidget[]>([
-    {
-      id: 'inventory-levels',
-      title: t('dashboard.inventoryLevels'),
-      type: 'kpi',
-      data: { value: '87%', label: 'Storage Utilization', trend: 'up', change: '+2%' } as KPIData,
-      position: { x: 0, y: 0 },
-      size: { width: 1, height: 1 },
-    },
-    {
-      id: 'inventory-trend',
-      title: t('dashboard.inventoryTrend'),
-      type: 'chart',
-      chartType: 'line',
-      data: {
-        labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
-        datasets: [
-          {
-            label: 'Inventory Level',
-            data: [65, 72, 70, 78, 82, 87],
-            borderColor: 'rgb(255, 99, 132)',
-            backgroundColor: 'rgba(255, 99, 132, 0.5)',
-          },
-        ],
-      },
-      position: { x: 1, y: 0 },
-      size: { width: 1, height: 1 },
-    },
-    {
-      id: 'recent-activity',
-      title: t('dashboard.recentActivity'),
-      type: 'list',
-      data: ACTIVITY_ITEMS,
-      position: { x: 0, y: 1 },
-      size: { width: 2, height: 1 },
-    },
-  ]);
+  const [filter, setFilter] = useState<DeskFilter>(() => openingFilter(role));
+  const [query, setQuery] = useState('');
+  const [selectedSku, setSelectedSku] = useState<string>(LINES[0]?.sku ?? '');
 
-  const [roleView, setRoleView] = useState(role);
-  const [activeFilters, setActiveFilters] = useState<AppliedFilter[]>([]);
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return LINES.filter((line) => {
+      if (filter !== 'all' && line.status !== filter) return false;
+      if (!needle) return true;
+      const name = t(line.nameKey).toLowerCase();
+      return line.sku.toLowerCase().includes(needle) || name.includes(needle);
+    });
+  }, [filter, query]);
 
-  const filterOptions: FilterOption[] = [
-    {
-      id: 'date-range',
-      label: t('filter.dateRange'),
-      type: 'date',
-    },
-    {
-      id: 'status',
-      label: t('filter.status'),
-      type: 'select',
-      options: [
-        { value: 'all', label: t('filter.allStatuses') },
-        { value: 'pending', label: t('filter.pending') },
-        { value: 'completed', label: t('filter.completed') },
-        { value: 'in-progress', label: t('filter.inProgress') },
-      ],
-    },
-    {
-      id: 'category',
-      label: t('filter.category'),
-      type: 'select',
-      options: [
-        { value: 'all', label: t('filter.allCategories') },
-        { value: 'raw-materials', label: t('filter.rawMaterials') },
-        { value: 'finished-goods', label: t('filter.finishedGoods') },
-        { value: 'work-in-progress', label: t('filter.workInProgress') },
-      ],
-    },
-    {
-      id: 'location',
-      label: t('filter.location'),
-      type: 'text',
-    },
-  ];
+  const selected = visible.find((line) => line.sku === selectedSku) ?? visible[0] ?? null;
 
-  const handleDragStart = (e: React.DragEvent, widgetId: string) => {
-    e.dataTransfer.setData('widgetId', widgetId);
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = (e: React.DragEvent, newPosition: { x: number; y: number }) => {
-    e.preventDefault();
-    const widgetId = e.dataTransfer.getData('widgetId');
-
-    setWidgets((prev) =>
-      prev.map((widget) =>
-        widget.id === widgetId ? { ...widget, position: newPosition } : widget,
-      ),
-    );
-  };
-
-  const handleApplyFilters = (appliedFilters: AppliedFilter[]) => {
-    setActiveFilters(appliedFilters);
-  };
-
-  const handleResetFilters = () => {
-    setActiveFilters([]);
-  };
-
-  const renderKPIWidget = (widget: DashboardWidget) => {
-    const data = widget.data as KPIData;
-    return (
-      <div className="dashboard-widget kpi-widget">
-        <h3>{widget.title}</h3>
-        <div className="kpi-content">
-          <span className="kpi-value">{data.value}</span>
-          <span className="kpi-label">{data.label}</span>
-          {data.trend ? (
-            <span className={`kpi-trend ${data.trend}`}>{data.change}</span>
-          ) : null}
-        </div>
-      </div>
-    );
-  };
-
-  const renderChartWidget = (widget: DashboardWidget) => {
-    return (
-      <div className="dashboard-widget chart-widget">
-        <ChartComponent
-          type={widget.chartType ?? 'bar'}
-          data={widget.data as ChartData<'bar' | 'line' | 'pie'>}
-          title={widget.title}
-        />
-      </div>
-    );
-  };
-
-  const renderListWidget = (widget: DashboardWidget) => {
-    const items = widget.data as ActivityItem[];
-    return (
-      <div className="dashboard-widget list-widget">
-        <h3>{widget.title}</h3>
-        <ul className="activity-list">
-          {items.map((item) => (
-            <li key={item.id} className="activity-item">
-              <span className="activity-action">{item.action}</span>
-              <span className="activity-user">by {item.user}</span>
-              <span className="activity-time">{item.time}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  };
-
-  const renderWidget = (widget: DashboardWidget) => {
-    switch (widget.type) {
-      case 'kpi':
-        return renderKPIWidget(widget);
-      case 'chart':
-        return renderChartWidget(widget);
-      case 'list':
-        return renderListWidget(widget);
-    }
-  };
+  const belowMin = LINES.filter((line) => line.status === 'below-min').length;
+  const inTransit = LINES.filter((line) => line.status === 'in-transit').length;
+  const onHold = LINES.filter((line) => line.status === 'on-hold').length;
 
   return (
-    <div className="enhanced-dashboard">
-      <div className="dashboard-controls">
-        <div className="view-selector">
-          <label htmlFor="role-view">{t('dashboard.viewByRole')}</label>
-          <select
-            id="role-view"
-            value={roleView}
-            onChange={(e) => setRoleView(e.target.value)}
-          >
-            <option value="warehouse-manager">{t('roles.warehouseManager')}</option>
-            <option value="procurement-specialist">{t('roles.procurementSpecialist')}</option>
-            <option value="logistics-coordinator">{t('roles.logisticsCoordinator')}</option>
-          </select>
-        </div>
-
-        <div className="dashboard-header">
-          <h2>{t('dashboard.title')}</h2>
+    <section className="inventory-desk" aria-labelledby="inventory-desk-title">
+      <header className="inventory-desk-header">
+        <div>
+          <h2 id="inventory-desk-title">{t('dashboard.title')}</h2>
           <p>{t('dashboard.welcomeMessage')}</p>
         </div>
+        <a className="primary-action" href="/requisitions/new">
+          {t('dashboard.newRequisition')}
+        </a>
+      </header>
+
+      <div className="inventory-desk-metrics">
+        <FilterMetric
+          filter="below-min"
+          active={filter}
+          count={belowMin}
+          label={t('dashboard.metricBelowMin')}
+          onSelect={setFilter}
+        />
+        <FilterMetric
+          filter="in-transit"
+          active={filter}
+          count={inTransit}
+          label={t('dashboard.metricInTransit')}
+          onSelect={setFilter}
+        />
+        <FilterMetric
+          filter="on-hold"
+          active={filter}
+          count={onHold}
+          label={t('dashboard.metricOnHold')}
+          onSelect={setFilter}
+        />
+        <div className="inventory-desk-metric">
+          <span className="inventory-desk-metric-value">{pendingCount}</span>
+          <span className="inventory-desk-metric-label">{t('sync.pendingCount')}</span>
+        </div>
+        <div className="inventory-desk-metric">
+          <span className="inventory-desk-metric-value">{failedCount}</span>
+          <span className="inventory-desk-metric-label">{t('sync.failedCount')}</span>
+        </div>
       </div>
 
-      <AdvancedFilter
-        filterOptions={filterOptions}
-        onApplyFilters={handleApplyFilters}
-        onResetFilters={handleResetFilters}
-      />
-
-      <dl className="sync-counts" aria-live="polite">
-        <div>
-          <dt>{t('sync.pendingCount')}</dt>
-          <dd>{pendingCount}</dd>
-        </div>
-        <div>
-          <dt>{t('sync.failedCount')}</dt>
-          <dd>{failedCount}</dd>
-        </div>
-        {activeFilters.length > 0 ? (
-          <div>
-            <dt>{t('dashboard.activeFilters')}</dt>
-            <dd>{activeFilters.length}</dd>
-          </div>
-        ) : null}
-      </dl>
-
-      <div className="dashboard-grid">
-        {widgets
-          .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
-          .map((widget) => (
-            <div
-              key={widget.id}
-              className={`dashboard-grid-item size-${widget.size.width}x${widget.size.height}`}
-              style={{
-                gridColumn: `${widget.position.x + 1} / span ${widget.size.width}`,
-                gridRow: `${widget.position.y + 1} / span ${widget.size.height}`,
-              }}
-              draggable
-              onDragStart={(e) => handleDragStart(e, widget.id)}
-              onDragOver={handleDragOver}
-              onDrop={(e) => handleDrop(e, widget.position)}
+      <div className="inventory-desk-toolbar">
+        <div className="inventory-desk-tabs" role="tablist" aria-label={t('dashboard.title')}>
+          {FILTERS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              aria-selected={filter === item}
+              className={filter === item ? 'is-active' : undefined}
+              onClick={() => setFilter(item)}
             >
-              {renderWidget(widget)}
-            </div>
+              {filterLabel(item)}
+            </button>
           ))}
+        </div>
+        <label className="inventory-desk-search">
+          <span>{t('dashboard.searchLabel')}</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t('dashboard.searchPlaceholder')}
+          />
+        </label>
       </div>
-    </div>
+
+      <div className="inventory-desk-split">
+        {visible.length === 0 ? (
+          <p className="inventory-desk-empty">{t('dashboard.empty')}</p>
+        ) : (
+          <table className="inventory-desk-table">
+            <thead>
+              <tr>
+                <th scope="col">{t('dashboard.colSku')}</th>
+                <th scope="col">{t('dashboard.colItem')}</th>
+                <th scope="col">{t('dashboard.colOnHand')}</th>
+                <th scope="col">{t('dashboard.colLocation')}</th>
+                <th scope="col">{t('dashboard.colStatus')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((line) => {
+                const isSelected = selected?.sku === line.sku;
+                return (
+                  <tr
+                    key={line.sku}
+                    className={isSelected ? 'is-selected' : undefined}
+                    aria-selected={isSelected}
+                    tabIndex={0}
+                    onClick={() => setSelectedSku(line.sku)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') setSelectedSku(line.sku);
+                    }}
+                  >
+                    <th scope="row">{line.sku}</th>
+                    <td>{t(line.nameKey)}</td>
+                    <td>
+                      {line.onHand} {t(line.uomKey)}
+                    </td>
+                    <td>{t(line.locationKey)}</td>
+                    <td>
+                      <span className={`inventory-desk-pill is-${line.status}`}>
+                        {statusLabel(line.status)}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+
+        {selected ? (
+          <aside className="inventory-desk-detail" aria-labelledby="inventory-desk-detail-title">
+            <p className="inventory-desk-sku">{selected.sku}</p>
+            <h3 id="inventory-desk-detail-title">{t(selected.nameKey)}</h3>
+            <p className={`inventory-desk-pill is-${selected.status}`}>{statusLabel(selected.status)}</p>
+            <dl>
+              <div>
+                <dt>{t('dashboard.detailOnHand')}</dt>
+                <dd>
+                  {selected.onHand} {t(selected.uomKey)}
+                </dd>
+              </div>
+              <div>
+                <dt>{t('dashboard.detailReserved')}</dt>
+                <dd>
+                  {selected.reserved} {t(selected.uomKey)}
+                </dd>
+              </div>
+              <div>
+                <dt>{t('dashboard.detailAvailable')}</dt>
+                <dd>
+                  {selected.available} {t(selected.uomKey)}
+                </dd>
+              </div>
+              <div>
+                <dt>{t('dashboard.colLocation')}</dt>
+                <dd>{t(selected.locationKey)}</dd>
+              </div>
+            </dl>
+            <a className="secondary-action" href="/stock">
+              {t('dashboard.checkStock')}
+            </a>
+          </aside>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function FilterMetric({
+  filter,
+  active,
+  count,
+  label,
+  onSelect,
+}: {
+  filter: Exclude<DeskFilter, 'all'>;
+  active: DeskFilter;
+  count: number;
+  label: string;
+  onSelect: (filter: DeskFilter) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={active === filter ? 'inventory-desk-metric is-active' : 'inventory-desk-metric'}
+      onClick={() => onSelect(filter)}
+    >
+      <span className="inventory-desk-metric-value">{count}</span>
+      <span className="inventory-desk-metric-label">{label}</span>
+    </button>
   );
 }
