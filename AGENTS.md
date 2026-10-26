@@ -42,3 +42,13 @@ Rules:
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## Cloud Agent environment
+
+Node.js 24.22.1 is installed at `/usr/local/bin`. Some agent shells put an older `node` earlier on `PATH`. Put `/usr/local/bin` first on `PATH` before `npm`, `npx`, or `tsx`.
+
+PostgreSQL 18 listens on `127.0.0.1` port `5442`. The database name, roles, and passwords match `.env.test` and the GitHub Actions Postgres service (`admin_user` / `admin_password`, `app_user` / `app_password`). `npm test` loads `.env.test` and expects that port.
+
+Boot starts Postgres, applies `deploy/pipeline/ci/db-roles.sql`, runs migrations with `.env.test`, then serves the API on port 3000 and the edge app on port 3001. The API reads a generated `.env` (gitignored) with `AUTH_MODE=local`. `GET /api/v1/health` reports process status. `next dev` rewrites `edge/next-env.d.ts` to the dev route types. Leave that generated edit uncommitted.
+
+npm 11 skips dependency install scripts until they are allowed. The environment `~/.npmrc` allows `@journeyapps/wa-sqlite`, `better-sqlite3`, `esbuild`, and `sharp`.
