@@ -37,11 +37,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: var(--control-height);
-  padding: 0 var(--space-4);
-  border-radius: var(--rounded);
+  min-height: var(--control-compact);
+  padding: 0 var(--space-3);
+  border-radius: var(--rounded-sm);
   background: var(--accent);
   color: var(--on-accent);
+  font-size: var(--caption-size);
   font-weight: var(--label-weight);
   text-decoration: none;
 }
@@ -58,11 +59,11 @@
 
 .inventory-desk-metric {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-1);
-  min-height: var(--control-height-secondary);
-  padding: var(--space-3);
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--control-compact);
+  padding: 0 var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
   background: var(--surface);
@@ -80,9 +81,10 @@ button.inventory-desk-metric {
 }
 
 .inventory-desk-metric-value {
-  font-size: var(--title-size);
+  font-size: var(--label-size);
   font-weight: var(--title-weight);
   font-variant-numeric: tabular-nums;
+  line-height: 1.2;
 }
 
 .inventory-desk-metric-label {
@@ -104,8 +106,9 @@ button.inventory-desk-metric {
 
 .inventory-desk-tabs button {
   flex: 0 0 auto;
-  min-height: var(--control-height-secondary);
-  padding: 0 var(--space-3);
+  min-height: var(--control-compact);
+  padding: 0 var(--space-2);
+  font-size: var(--caption-size);
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -127,8 +130,8 @@ button.inventory-desk-metric {
 
 .inventory-desk-search input {
   width: 100%;
-  min-height: var(--control-height-secondary);
-  padding: 0 var(--space-3);
+  min-height: var(--control-compact);
+  padding: 0 var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
   background: var(--surface);
@@ -225,6 +228,26 @@ button.inventory-desk-metric {
   background: var(--surface);
 }
 
+.inventory-desk-detail-head {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.inventory-desk-detail-head .inventory-desk-pill {
+  margin-top: var(--space-1);
+}
+
+.inventory-desk-photo {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-sm);
+  background: var(--bg);
+}
+
 .inventory-desk-detail h3,
 .inventory-desk-sku {
   margin: 0;
@@ -256,8 +279,10 @@ button.inventory-desk-metric {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: var(--control-height-secondary);
+  justify-self: start;
+  min-height: var(--control-compact);
   padding: 0 var(--space-3);
+  font-size: var(--caption-size);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
   color: var(--accent);
