@@ -183,6 +183,12 @@ function isBaseView(view: string): view is BaseView {
   return view in BASE_VIEW_ENTRY;
 }
 
+function isEnterpriseView(
+  view: NonNullable<AppShellProps['view']>,
+): view is 'workflows' | 'access-control' | 'reports' {
+  return view === 'workflows' || view === 'access-control' || view === 'reports';
+}
+
 /** The nav registry entry each view belongs to (null: reached from a link, not from the nav). */
 const VIEW_NAV_ENTRY: Record<NonNullable<AppShellProps['view']>, string | null> = {
   ...BASE_VIEW_ENTRY,
@@ -385,6 +391,15 @@ export function AppShell({
             ) : isBaseView(view) &&
               navigationConfirmed &&
               !navigation.includes(BASE_VIEW_ENTRY[view]) ? (
+              <section className="edge-card" role="alert" aria-labelledby="base-denied-heading">
+                <h2 id="base-denied-heading">{t('nav.deniedTitle')}</h2>
+                <p>{t('nav.deniedBody')}</p>
+                <a className="secondary-action" href="/">
+                  {t('nav.home')}
+                </a>
+              </section>
+            ) : isEnterpriseView(view) && !navigationConfirmed ? null : isEnterpriseView(view) &&
+              !navigation.includes(VIEW_NAV_ENTRY[view] ?? '') ? (
               <section className="edge-card" role="alert" aria-labelledby="base-denied-heading">
                 <h2 id="base-denied-heading">{t('nav.deniedTitle')}</h2>
                 <p>{t('nav.deniedBody')}</p>
