@@ -1,6 +1,6 @@
 'use client';
 
-import { SyncStatusBadge } from './sync-status-badge';
+import { SyncStatusBadge, syncStatusMessage } from './sync-status-badge';
 import { BottomNav } from './bottom-nav';
 import { IconRail } from './icon-rail';
 import { TestCaptureButton } from './test-capture-button';
@@ -569,7 +569,7 @@ export function AppShell({
               <div className="card-grid">
                 <section className="edge-card" id="dashboard" aria-labelledby="ready-heading">
                   <h2 id="ready-heading">{t('bootstrap.readyTitle')}</h2>
-                  <p>{t('sync.offline')}</p>
+                  <p>{t(syncStatusMessage(syncState))}</p>
                   <dl className="sync-counts">
                     <div>
                       <dt>{t('sync.pendingCount')}</dt>

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveSyncUiState, isPendingStatus } from '../../src/sync/sync-status';
+import { deriveSyncUiState, isPendingStatus, syncServiceIsDown } from '../../src/sync/sync-status';
 
 describe('edge sync status model', () => {
   it('separates online, offline, syncing, pending, and failed states', () => {
@@ -38,6 +38,48 @@ describe('edge sync status model', () => {
       }),
       'error',
     );
+    assert.equal(
+      deriveSyncUiState({
+        online: true,
+        pendingCount: 0,
+        syncing: false,
+        failedCount: 0,
+        syncServiceDown: true,
+      }),
+      'unavailable',
+    );
+    assert.equal(
+      deriveSyncUiState({
+        online: false,
+        pendingCount: 0,
+        syncing: false,
+        failedCount: 0,
+        syncServiceDown: true,
+      }),
+      'offline',
+    );
+    assert.equal(
+      deriveSyncUiState({
+        online: true,
+        pendingCount: 2,
+        syncing: false,
+        failedCount: 0,
+        syncServiceDown: true,
+      }),
+      'unavailable',
+    );
+  });
+
+  it('treats a failed PowerSync connection as the service being down', () => {
+    assert.equal(
+      syncServiceIsDown({ connected: false, dataFlowStatus: { downloadError: new Error('down') } }),
+      true,
+    );
+    assert.equal(
+      syncServiceIsDown({ connected: true, dataFlowStatus: { downloadError: new Error('stale') } }),
+      false,
+    );
+    assert.equal(syncServiceIsDown({ connected: false, dataFlowStatus: {} }), false);
   });
 
   it('keeps permanent failures out of pending counts', () => {

@@ -7,6 +7,7 @@ const CLASS_BY_STATE: Record<SyncUiState, string> = {
   captured: 'sync-captured',
   syncing: 'sync-syncing',
   error: 'sync-error',
+  unavailable: 'sync-unavailable',
 };
 
 const LABEL_BY_STATE: Record<SyncUiState, MessageKey> = {
@@ -15,10 +16,15 @@ const LABEL_BY_STATE: Record<SyncUiState, MessageKey> = {
   captured: 'sync.captured',
   syncing: 'sync.syncing',
   error: 'sync.error',
+  unavailable: 'sync.unavailable',
 };
 
+export function syncStatusMessage(state: SyncUiState): MessageKey {
+  return LABEL_BY_STATE[state];
+}
+
 export function SyncStatusBadge({ state }: { state: SyncUiState }) {
-  const label = t(LABEL_BY_STATE[state]);
+  const label = t(syncStatusMessage(state));
   return (
     <div
       className={`sync-badge ${CLASS_BY_STATE[state]}`}

@@ -12,6 +12,7 @@
   "sync.captured": "Captured - pending sync",
   "sync.syncing": "Syncing...",
   "sync.error": "Sync Error",
+  "sync.unavailable": "Sync service unavailable",
   "sync.failedNeedsAttention": "Sync failed - needs attention",
   "sync.retry": "Retry Sync",
   "sync.liveLabel": "Synchronization status",

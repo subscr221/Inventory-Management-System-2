@@ -9,6 +9,7 @@ const SYNC_LABELS: Record<string, MessageKey> = {
   captured: 'sync.captured',
   syncing: 'sync.syncing',
   error: 'sync.error',
+  unavailable: 'sync.unavailable',
 };
 
 export interface CrossDockTaskContext {

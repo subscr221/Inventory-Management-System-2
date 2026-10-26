@@ -526,6 +526,7 @@ textarea:focus-visible {
 }
 
 .sync-offline,
+.sync-unavailable,
 .sync-pending {
   background: var(--warn-bg);
   color: var(--warn);

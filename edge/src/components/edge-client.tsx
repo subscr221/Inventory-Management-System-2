@@ -69,7 +69,7 @@ import {
   type WorklistMeter,
 } from '../local-db/worklist';
 import { EdgePowerSyncConnector } from '../sync/connector';
-import { deriveSyncUiState, type SyncUiState } from '../sync/sync-status';
+import { deriveSyncUiState, syncServiceIsDown, type SyncUiState } from '../sync/sync-status';
 import { refreshWorklist } from '../sync/worklist-refresh';
 import { authorizedFetch } from '../session/api-fetch';
 import { classifyBootstrapRefusal } from '../session/bootstrap-refusal';
@@ -264,6 +264,9 @@ export function EdgeClient({
     | 'floor-tasks';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
+  // The start effect must not re-run when the route changes, but worklist refresh reads the page.
+  const viewRef = useRef(view);
+  viewRef.current = view;
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
   const session = useRef<EdgeSession | null>(null);
   const redirecting = useRef(false);
@@ -322,6 +325,7 @@ export function EdgeClient({
       const knownUsers = readKnownUsers();
       const online = navigator.onLine;
       const syncing = Boolean(db.currentStatus.dataFlowStatus.uploading);
+      const syncServiceDown = online && syncServiceIsDown(db.currentStatus);
       setState((current) => ({
         ...current,
         ...counts,
@@ -344,7 +348,9 @@ export function EdgeClient({
         // Story 1.12 (AC4): once nothing is left to upload, the sign-out gate notice goes away.
         signOutBlockedCount: ownUnsettled === 0 ? 0 : current.signOutBlockedCount,
         online,
-        syncState: authRequired ? 'error' : deriveSyncUiState({ online, syncing, ...counts }),
+        syncState: authRequired
+          ? 'error'
+          : deriveSyncUiState({ online, syncing, syncServiceDown, ...counts }),
       }));
       uploadPhotos();
     },
@@ -396,6 +402,7 @@ export function EdgeClient({
   useEffect(() => {
     let cancelled = false;
     let stopWatching: (() => void) | undefined;
+    let stopStatus: (() => void) | undefined;
     let stopAuthLost: (() => void) | undefined;
 
     // Story 1.12 (AC3): the API rejected the token after a refresh, or the refresh itself failed.
@@ -544,10 +551,19 @@ export function EdgeClient({
             authRequired: false,
             signOutAvailable: sessionReady,
           }));
+          stopStatus = db.registerListener({
+            statusChanged: () => {
+              if (!cancelled) void refreshLocalState(db);
+            },
+          });
           void db
             .connect(new EdgePowerSyncConnector('', () => signedInUserId.current))
             .catch(() => undefined);
-          if (navigator.onLine) void refreshWorklistNow(db).catch(() => undefined);
+          // The worklist is a maintenance-module read. Other roles only get a 403, so the
+          // automatic refresh stays on the technician page. The refresh button still tries.
+          if (navigator.onLine && viewRef.current === 'maintenance') {
+            void refreshWorklistNow(db).catch(() => undefined);
+          }
           uploadPhotos();
         } catch (error) {
           if (!(error instanceof SiteRefusedError) && !cached)
@@ -584,7 +600,9 @@ export function EdgeClient({
       // Story 1.12: an auth loss that happened offline redirects once the network is back.
       if (sessionAuthLost.current) redirectToSignIn();
       const db = database.current;
-      if (db) void refreshWorklistNow(db).catch(() => undefined);
+      if (db && viewRef.current === 'maintenance') {
+        void refreshWorklistNow(db).catch(() => undefined);
+      }
     }
 
     window.addEventListener('online', onOnline);
@@ -595,6 +613,7 @@ export function EdgeClient({
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', refreshConnectivity);
       stopWatching?.();
+      stopStatus?.();
       stopAuthLost?.();
       session.current?.dispose();
       session.current = null;
@@ -845,8 +864,9 @@ export function EdgeClient({
   }>({ openTrucks: [], stamp: null, stampUnverified: false });
   useEffect(() => {
     const site = state.siteCodeExt;
-    if (!site || !state.online) {
-      setGateLookups({ openTrucks: [], stamp: null, stampUnverified: Boolean(site) });
+    const gateAllowed = state.navigationConfirmed && state.navigation.includes('Gate entry');
+    if (!site || !state.online || !gateAllowed) {
+      setGateLookups({ openTrucks: [], stamp: null, stampUnverified: Boolean(site && gateAllowed) });
       return;
     }
     let cancelled = false;
@@ -911,7 +931,7 @@ export function EdgeClient({
       cancelled = true;
     };
     // pendingCount: refresh the truck list after the outbox changes (a gate entry or weighment).
-  }, [state.siteCodeExt, state.online, state.pendingCount]);
+  }, [state.siteCodeExt, state.online, state.pendingCount, state.navigation, state.navigationConfirmed]);
 
   const submitGate = useCallback(
     async (input: GateSubmitInput): Promise<GateSubmitResult> => {
@@ -1309,7 +1329,12 @@ export function EdgeClient({
       view={view}
       online={state.online}
       navigationConfirmed={state.navigationConfirmed}
-      refusedCaptures={{ siteId: state.siteId, userId: state.userId, online: state.online }}
+      refusedCaptures={{
+        siteId: state.siteId,
+        userId: state.userId,
+        online: state.online,
+        ready: state.navigationConfirmed,
+      }}
       onDismissFailure={dismissFailure}
       maintenance={{
         workOrders: state.workOrders,
