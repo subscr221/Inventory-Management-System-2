@@ -62,7 +62,7 @@ export function StoresInbox({
   const [doneHighlight, setDoneHighlight] = useState<string | null>(null);
   const [lotSheet, setLotSheet] = useState<string | null>(null);
   const mounted = useRef(true);
-const locationCodes = useRef(new Map<string, string | null>());
+  const locationCodes = useRef(new Map<string, string | null>());
   const putawayError = useRef('');
 
   useEffect(
@@ -183,7 +183,11 @@ const locationCodes = useRef(new Map<string, string | null>());
   }
 
   if (state.kind === 'loading') {
-    return <p className="stores-status">{t('stores.loading')}</p>;
+    return (
+      <p className="stores-status edge-card" role="status">
+        {t('stores.loading')}
+      </p>
+    );
   }
   if (state.kind === 'message') {
     return (
@@ -223,7 +227,7 @@ const locationCodes = useRef(new Map<string, string | null>());
 
   return (
     <div id="stores-inbox" className="stores-inbox">
-      <section className="stores-scan" aria-label={t('stores.scan.label')}>
+      <section className="edge-card stores-scan" aria-label={t('stores.scan.label')}>
         <ScanField
           id="stores-scan"
           label={t('stores.scan.label')}
@@ -237,37 +241,47 @@ const locationCodes = useRef(new Map<string, string | null>());
         </p>
       </section>
 
-      {groups.map((group) => (
-        <section
-          key={group.key}
-          className="stores-group"
-          aria-labelledby={`stores-group-${group.key}`}
-        >
-          <h2 id={`stores-group-${group.key}`}>{t(group.titleKey as MessageKey)}</h2>
-          {group.cards.length === 0 ? (
-            <p className="stores-empty">{t('stores.nothingWaiting')}</p>
-          ) : (
-            <ul className="stores-cards">
-              {group.cards.map((card) => (
-                <li key={card.id} className="stores-card">
-                  <div>
-                    <h3>{card.title}</h3>
-                    <p>{card.detail}</p>
-                  </div>
-                  <span className="stores-pill">
-                    {t(card.pillKey as MessageKey).replace('{code}', card.pillValue ?? '')}
-                  </span>
-                  <CardAction card={card} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      ))}
+      <div className="edge-card stores-worklist">
+        {groups.map((group) => (
+          <section
+            key={group.key}
+            className="stores-group"
+            aria-labelledby={`stores-group-${group.key}`}
+          >
+            <div className="stores-group-head">
+              <h2 id={`stores-group-${group.key}`}>{t(group.titleKey as MessageKey)}</h2>
+              <span className={group.cards.length > 0 ? 'stores-count is-open' : 'stores-count'}>
+                {group.cards.length}
+              </span>
+            </div>
+            {group.cards.length === 0 ? (
+              <p className="stores-empty">{t('stores.nothingWaiting')}</p>
+            ) : (
+              <ul className="stores-cards">
+                {group.cards.map((card) => (
+                  <li key={card.id} className="stores-card">
+                    <div className="stores-card-copy">
+                      <h3>{card.title}</h3>
+                      <p>{card.detail}</p>
+                    </div>
+                    <span className="stores-pill">
+                      {t(card.pillKey as MessageKey).replace('{code}', card.pillValue ?? '')}
+                    </span>
+                    <CardAction card={card} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        ))}
+      </div>
 
       {done.length > 0 ? (
-        <section className="stores-group" aria-labelledby="stores-group-done">
-          <h2 id="stores-group-done">{t('stores.group.doneToday')}</h2>
+        <section className="edge-card stores-group" aria-labelledby="stores-group-done">
+          <div className="stores-group-head">
+            <h2 id="stores-group-done">{t('stores.group.doneToday')}</h2>
+            <span className="stores-count is-open">{done.length}</span>
+          </div>
           <ul className="stores-cards">
             {done.map((row) => (
               <li
@@ -276,7 +290,7 @@ const locationCodes = useRef(new Map<string, string | null>());
                   doneHighlight === row.id ? 'stores-card stores-card-highlight' : 'stores-card'
                 }
               >
-                <div>
+                <div className="stores-card-copy">
                   <h3>
                     <a href={row.href ?? `/stores/grn?grn=${encodeURIComponent(row.id)}`}>
                       {row.title}
@@ -292,15 +306,17 @@ const locationCodes = useRef(new Map<string, string | null>());
       ) : null}
 
       {lotSheet ? (
-        <section className="edge-card" role="dialog" aria-labelledby="stores-lot-heading">
+        <section className="edge-card stores-lot" role="dialog" aria-labelledby="stores-lot-heading">
           <h2 id="stores-lot-heading">{t('stores.lotSheet.title').replace('{lot}', lotSheet)}</h2>
           <p>{t('stores.lotSheet.body')}</p>
-          <a className="primary-action" href={`/damage/new?lot=${encodeURIComponent(lotSheet)}`}>
-            {t('stores.lotSheet.reportDamage')}
-          </a>
-          <button className="secondary-action" type="button" onClick={() => setLotSheet(null)}>
-            {t('stores.cancel')}
-          </button>
+          <div className="stores-lot-actions">
+            <a className="primary-action" href={`/damage/new?lot=${encodeURIComponent(lotSheet)}`}>
+              {t('stores.lotSheet.reportDamage')}
+            </a>
+            <button className="secondary-action" type="button" onClick={() => setLotSheet(null)}>
+              {t('stores.cancel')}
+            </button>
+          </div>
         </section>
       ) : null}
     </div>
