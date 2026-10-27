@@ -36,6 +36,8 @@ export function ScanMark() {
   return (
     <svg
       className="scan-mark"
+      width={18}
+      height={18}
       viewBox="0 0 24 24"
       aria-hidden="true"
       focusable="false"

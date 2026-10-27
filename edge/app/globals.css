@@ -689,44 +689,70 @@ textarea:focus-visible {
   font-size: var(--label-size);
 }
 
-/* Scan boxes carry the viewfinder mark inside the control, left of the text. */
+/* Scan boxes: one rounded control. The mark is fixed at 18px inside it. */
 .scan-input-box {
   position: relative;
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
   max-width: 480px;
   min-width: 0;
+  min-height: var(--control-height-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.scan-input-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .scan-input-icon {
   position: absolute;
-  left: 10px;
-  top: 0;
-  bottom: 0;
+  left: 12px;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin-top: -9px;
   display: flex;
   align-items: center;
+  justify-content: center;
+  overflow: hidden;
   color: var(--text-muted);
   pointer-events: none;
 }
 
+.scan-input-icon svg,
 .scan-mark {
+  display: block;
   width: 18px;
   height: 18px;
+  max-width: 18px;
+  max-height: 18px;
+  flex: 0 0 18px;
 }
 
 .scan-input-box > input,
 .desk-field .scan-input-box > input,
 #gate-entry .scan-input-box > input,
-.damage-form .scan-input-box > input {
-  padding-left: 36px;
-}
-
+.damage-form .scan-input-box > input,
 .scan-field .scan-input-box > input {
   width: 100%;
-  border: 1px solid var(--border);
-  border-radius: var(--rounded-sm);
-  background: var(--surface);
+  min-width: 0;
+  height: var(--control-height-secondary);
+  min-height: var(--control-height-secondary);
+  border: 0;
+  border-radius: var(--rounded);
+  background: transparent;
+  box-shadow: none;
+  padding: 0 12px 0 40px;
   color: var(--text);
+}
+
+.scan-input-box > input:focus-visible {
+  outline: none;
 }
 
 .desk-field textarea {
@@ -1144,6 +1170,16 @@ textarea:focus-visible {
 
 .damage-form input.scan-input:not([type='radio']):not([type='checkbox']) {
   min-height: 56px;
+}
+
+.damage-form .scan-input-box > input.scan-input {
+  max-width: none;
+  height: var(--control-height-secondary);
+  min-height: var(--control-height-secondary);
+  border: 0;
+  border-radius: var(--rounded);
+  background: transparent;
+  padding: 0 12px 0 40px;
 }
 
 .damage-action-form textarea {
