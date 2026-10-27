@@ -152,19 +152,17 @@ test('keyboard-only: tab order reaches every Resolve, Confirm and Cancel control
 
   await page.keyboard.press('Tab');
   await expect(page.getByText('Skip to content')).toBeFocused();
-  // The sidebar comes first in the tab order, then the top bar, then the primary navigation.
+  // The sidebar is the module list. Sign out and the top bar sit between it and the cards.
   const nav = page.getByRole('navigation', { name: 'Primary navigation' });
-  await tabTo(page, page.getByRole('button', { name: 'Open search' }));
   await tabTo(page, nav.getByRole('link', { name: 'Dashboard' }));
   await page.keyboard.press('Tab');
   await expect(nav.getByRole('link', { name: 'Frontline' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(nav.getByRole('link', { name: 'Refused captures' })).toBeFocused();
-  await page.keyboard.press('Tab');
   const openCards = page.getByRole('region', { name: 'Open refusals' }).getByRole('listitem');
   const firstResolve = openCards.nth(0).getByRole('button', { name: 'Resolve', exact: true });
   const secondResolve = openCards.nth(1).getByRole('button', { name: 'Resolve', exact: true });
-  await expect(firstResolve).toBeFocused();
+  await tabTo(page, firstResolve);
   await expect(firstResolve).toHaveCSS('min-height', COMPACT_CONTROL);
   await expect(firstResolve).toHaveCSS('outline-style', 'solid');
 
@@ -199,14 +197,12 @@ test('keyboard-only: Tab reaches the Check connection control on the offline car
   await page.keyboard.press('Tab');
   await expect(page.getByText('Skip to content')).toBeFocused();
   const nav = page.getByRole('navigation', { name: 'Primary navigation' });
-  await tabTo(page, page.getByRole('button', { name: 'Open search' }));
   await tabTo(page, nav.getByRole('link', { name: 'Dashboard' }));
   await page.keyboard.press('Tab');
   await expect(nav.getByRole('link', { name: 'Frontline' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(nav.getByRole('link', { name: 'Refused captures' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(check).toBeFocused();
+  await tabTo(page, check);
   await expect(check).toHaveCSS('min-height', COMPACT_CONTROL);
   await expect(check).toHaveCSS('outline-style', 'solid');
 });

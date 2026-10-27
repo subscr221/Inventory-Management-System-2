@@ -110,14 +110,13 @@ test('keyboard navigation reaches role navigation and capture action', async ({ 
   // deterministic sequence regardless of the autofocus.
   await page.getByText('Skip to content').focus();
   await expect(page.getByText('Skip to content')).toBeFocused();
-  // The sidebar comes first in the tab order, then the top bar, then the primary navigation.
+  // The sidebar is the module list, then the top bar, then the capture form.
   const nav = page.getByRole('navigation', { name: 'Primary navigation' });
-  await tabTo(page, page.getByRole('button', { name: 'Open search' }));
   await tabTo(page, nav.getByRole('link', { name: 'Dashboard' }));
   await page.keyboard.press('Tab');
   await expect(nav.getByRole('link', { name: 'Frontline' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByLabel('Cross-dock task ID')).toBeFocused();
+  await tabTo(page, page.getByRole('button', { name: 'Open search' }));
+  await tabTo(page, page.getByLabel('Cross-dock task ID'));
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Load known task' })).toBeFocused();
   // The frontline view stacks several capture forms (cross-dock, then indent with seven inputs)

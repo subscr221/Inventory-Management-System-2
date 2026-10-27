@@ -306,17 +306,31 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-3);
+  min-height: 52px;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--side-hover);
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: var(--rounded-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--caption-size);
+  font-weight: var(--title-weight);
 }
 
 .edge-sidebar-brand h1,
 .edge-sidebar-brand .brand-name {
   margin: 0;
-  font-size: var(--title-size);
+  font-size: var(--label-size);
   font-weight: var(--title-weight);
-  color: var(--side-text);
-  letter-spacing: 0.02em;
+  line-height: 1.2;
+  color: var(--on-accent);
 }
 
 .edge-sidebar-site {
@@ -326,7 +340,9 @@ textarea:focus-visible {
 }
 
 .edge-sidebar-section {
+  flex: 1;
   padding: var(--space-2) 0;
+  overflow: auto;
 }
 
 .edge-sidebar-caption {
@@ -365,13 +381,20 @@ textarea:focus-visible {
   background: var(--side-hover);
 }
 
-.edge-sidebar-item.active {
-  color: var(--accent-on-dark);
+.edge-sidebar-item[aria-current='page'] {
+  color: var(--on-accent);
+  background: var(--side-hover);
   box-shadow: inset 3px 0 0 var(--accent-on-dark);
+  font-weight: var(--label-weight);
 }
 
-.edge-sidebar-item.active .edge-sidebar-icon {
+.edge-sidebar-item[aria-current='page'] .nav-icon {
   color: var(--accent-on-dark);
+}
+
+.edge-sidebar .nav-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .edge-sidebar-icon {
@@ -384,8 +407,21 @@ textarea:focus-visible {
 
 .edge-sidebar-footer {
   margin-top: auto;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3);
   border-top: 1px solid var(--side-hover);
+}
+
+.edge-sidebar-footer .edge-sidebar-caption {
+  padding: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  color: var(--side-text);
+}
+
+.edge-sidebar-footer .edge-sidebar-site {
+  padding: 0 0 var(--space-2);
 }
 
 /* Top bar (Zoho Books top bar: search, site switcher, + New, user menu) */
@@ -540,38 +576,6 @@ textarea:focus-visible {
 .sync-error {
   background: var(--err-bg);
   color: var(--err);
-}
-
-/* Flat tab nav kept for view switching inside content; the sidebar owns module navigation. */
-.edge-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0;
-  padding: 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.edge-nav a {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--control-height-secondary);
-  padding: 0 var(--space-3);
-  color: var(--text-muted);
-  font-size: var(--text-size);
-  font-weight: var(--label-weight);
-  border-bottom: 3px solid transparent;
-}
-
-.edge-nav a:hover {
-  color: var(--text);
-  background: var(--bg);
-}
-
-.edge-nav a[aria-current='true'],
-.edge-nav a.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
 }
 
 .edge-main {
@@ -1315,8 +1319,7 @@ textarea:focus-visible {
   }
 
   .edge-sidebar,
-  .icon-rail,
-  .edge-nav {
+  .icon-rail {
     display: none;
   }
 
@@ -1374,8 +1377,7 @@ textarea:focus-visible {
   }
 
   .edge-sidebar,
-  .bottom-nav,
-  .edge-nav {
+  .bottom-nav {
     display: none;
   }
 
@@ -1410,12 +1412,12 @@ textarea:focus-visible {
 }
 
 @media (min-width: 1101px) and (pointer: fine) {
-  /* Desktop: sidebar, compact density */
+  /* Desktop: sidebar, compact density. The bar is 52px; the controls inside it stay 34px. */
   :root {
     --control-height: var(--control-compact);
     --control-height-secondary: var(--control-compact);
     --nav-item-height: var(--control-compact);
-    --header-height: var(--control-compact);
+    --header-height: 52px;
     --text-size: var(--body-size);
   }
 

@@ -40,6 +40,7 @@ import { StoresIssue } from './stores-issue';
 import { PutawayTask } from './putaway-task';
 import { GrnRead } from './grn-read';
 import { FloorTasks, type FloorTasksProps } from './floor-tasks';
+import { NavIcon } from './navigation/nav-icons';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import { useDeviceClass, type DeviceClass } from '../lib/use-device-class';
@@ -275,25 +276,33 @@ export function AppShell({
         {navSurface === 'sidebar' ? (
           <aside className="edge-sidebar">
             <div className="edge-sidebar-brand">
+              <span className="brand-mark" aria-hidden="true">
+                {t('app.mark')}
+              </span>
               <h1 className="brand-name">{t('app.title')}</h1>
             </div>
-            <p className="edge-sidebar-site">{siteName}</p>
-            <div className="edge-sidebar-section">
-              <p className="edge-sidebar-caption">{userName}</p>
+            <nav className="edge-sidebar-section" aria-label={t('nav.label')}>
               {navEntries.length > 0 ? (
                 <ul className="edge-sidebar-nav">
                   {navEntries.map((link) => (
                     <li key={link.href}>
-                      <a className="edge-sidebar-item" href={link.href}>
+                      <a
+                        className="edge-sidebar-item"
+                        href={link.href}
+                        aria-current={link.href === activeHref ? 'page' : undefined}
+                      >
+                        <NavIcon name={link.name} />
                         {t(link.label as MessageKey)}
                       </a>
                     </li>
                   ))}
                 </ul>
               ) : null}
-            </div>
-            {onSignOut ? (
-              <div className="edge-sidebar-footer">
+            </nav>
+            <div className="edge-sidebar-footer">
+              <p className="edge-sidebar-caption">{userName}</p>
+              <p className="edge-sidebar-site">{siteName}</p>
+              {onSignOut ? (
                 <button
                   type="button"
                   className="edge-sidebar-item"
@@ -301,10 +310,11 @@ export function AppShell({
                   disabled={signingOut}
                   aria-busy={signingOut}
                 >
+                  <NavIcon name="sign-out" />
                   {t('auth.signOut')}
                 </button>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </aside>
         ) : null}
         <div className="edge-content">
@@ -338,15 +348,6 @@ export function AppShell({
               )}
             </p>
           ))}
-          {navEntries.length > 0 ? (
-            <nav className="edge-nav" aria-label={t('nav.label')}>
-              {navEntries.map((link) => (
-                <a key={link.href} href={link.href}>
-                  {t(link.label as MessageKey)}
-                </a>
-              ))}
-            </nav>
-          ) : null}
           <main id="main-content" className="edge-main" tabIndex={-1}>
             {authRequired ? (
               <div className="auth-required" role="alert">

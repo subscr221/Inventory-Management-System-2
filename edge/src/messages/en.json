@@ -1,6 +1,7 @@
 {
   "app.title": "Inventory Edge Shell",
   "app.shortTitle": "Inventory Edge",
+  "app.mark": "IE",
   "app.subtitle": "Offline-first frontline edge shell for inventory capture",
   "app.defaultUserName": "Signed-in user",
   "app.defaultSiteName": "Site not loaded",
@@ -77,7 +78,6 @@
   "search.navigateHint": "Use arrow keys to navigate, Enter to go",
   "search.close": "Close",
   "search.shortcut": "Ctrl+K",
-  "search.icon": "🔍",
   "errors.INVALID_EVENT_ENVELOPE": "The captured event format is invalid. Contact support.",
   "errors.UNTAGGED_TRANSACTION": "The event is missing required business tags.",
   "errors.STREAM_CONFLICT": "This event conflicts with the latest central state.",
