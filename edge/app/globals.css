@@ -679,13 +679,15 @@ textarea:focus-visible {
 }
 
 /* Form controls: surface fill, border, compact desktop height, accent focus halo. */
-.cross-dock-capture form {
+.cross-dock-capture form,
+.indent-capture form {
   display: grid;
   gap: var(--space-2);
   margin-top: var(--space-4);
 }
 
-.cross-dock-capture input {
+.cross-dock-capture input,
+.indent-capture input:not([type='checkbox']) {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--rounded);
@@ -831,7 +833,8 @@ textarea:focus-visible {
   max-width: 420px;
 }
 
-.base-form input {
+.base-form input,
+.base-form select {
   width: 100%;
   min-height: var(--control-height-secondary);
   border: 1px solid var(--border);
@@ -841,7 +844,8 @@ textarea:focus-visible {
   color: var(--text);
 }
 
-.base-form input:focus-visible {
+.base-form input:focus-visible,
+.base-form select:focus-visible {
   outline: 3px solid var(--accent-soft);
   outline-offset: 2px;
 }
@@ -1630,4 +1634,15 @@ textarea:focus-visible {
   .floor-screen .scan-input {
     min-height: 34px;
   }
+}
+
+.indent-capture label:has(input[type='checkbox']) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.indent-capture form .primary-action {
+  justify-self: start;
+  margin-top: var(--space-2);
 }
