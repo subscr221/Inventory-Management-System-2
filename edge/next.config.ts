@@ -9,6 +9,10 @@ const powerSyncUpstream = (process.env['POWERSYNC_UPSTREAM'] ?? 'http://127.0.0.
   '',
 );
 
+// The API is a separate process in local dev. Production nginx publishes /api/ on the same
+// origin. Without this rewrite the shell's bootstrap never runs and the site stays unloaded.
+const apiUpstream = (process.env['API_UPSTREAM'] ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
+
 const nextConfig: NextConfig = {
   output: 'standalone',
   // Next treats 127.0.0.1 as cross-origin when the dev server is bound to 0.0.0.0.
@@ -19,6 +23,7 @@ const nextConfig: NextConfig = {
     return [
       { source: '/powersync', destination: `${powerSyncUpstream}/` },
       { source: '/powersync/:path*', destination: `${powerSyncUpstream}/:path*` },
+      { source: '/api/:path*', destination: `${apiUpstream}/api/:path*` },
     ];
   },
   async headers() {
