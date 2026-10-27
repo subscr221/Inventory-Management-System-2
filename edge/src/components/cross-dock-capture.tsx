@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { t, type MessageKey } from '../i18n/locale';
+import { ScanInputBox } from './scan-field';
 
 const SYNC_LABELS: Record<string, MessageKey> = {
   online: 'sync.online',
@@ -9,6 +10,7 @@ const SYNC_LABELS: Record<string, MessageKey> = {
   captured: 'sync.captured',
   syncing: 'sync.syncing',
   error: 'sync.error',
+  unavailable: 'sync.unavailable',
 };
 
 export interface CrossDockTaskContext {
@@ -70,10 +72,14 @@ export function CrossDockCapture({
     <section className="edge-card cross-dock-capture" aria-labelledby="cross-dock-heading">
       <h2 id="cross-dock-heading">{t('crossDock.title')}</h2>
       <p>{t('crossDock.description')}</p>
-      <form onSubmit={(event) => { event.preventDefault(); void load(); }}>
-        <label htmlFor="cross-dock-task-id">{t('crossDock.taskId')}</label>
-        <input id="cross-dock-task-id" value={taskId} onChange={(event) => setTaskId(event.target.value)} required />
-        <button className="secondary-action" type="submit">{t('crossDock.load')}</button>
+      <form className="desk-form" onSubmit={(event) => { event.preventDefault(); void load(); }}>
+        <div className="desk-field desk-field-span">
+          <label htmlFor="cross-dock-task-id">{t('crossDock.taskId')}</label>
+          <input id="cross-dock-task-id" value={taskId} onChange={(event) => setTaskId(event.target.value)} required />
+        </div>
+        <div className="desk-actions">
+          <button className="secondary-action" type="submit">{t('crossDock.load')}</button>
+        </div>
       </form>
       {task ? (
         <div className="cross-dock-context">
@@ -89,10 +95,16 @@ export function CrossDockCapture({
             <div><dt>{t('crossDock.syncState')}</dt><dd><span className="operator-status">{t(SYNC_LABELS[syncState] ?? 'sync.offline')}</span></dd></div>
             <div><dt>{t('crossDock.durationLabel')}</dt><dd>{t('crossDock.durationInterval')}</dd></div>
           </dl>
-          <form onSubmit={(event) => { event.preventDefault(); void confirm(); }}>
-            <label htmlFor="cross-dock-staging-bin">{t('crossDock.scanBin')}</label>
-            <input ref={scanRef} id="cross-dock-staging-bin" value={stagingBin} onChange={(event) => setStagingBin(event.target.value)} required />
-            <button className="primary-action" type="submit">{t('crossDock.confirm')}</button>
+          <form className="desk-form" onSubmit={(event) => { event.preventDefault(); void confirm(); }}>
+            <div className="desk-field desk-field-span">
+              <label htmlFor="cross-dock-staging-bin">{t('crossDock.scanBin')}</label>
+              <ScanInputBox>
+                <input ref={scanRef} id="cross-dock-staging-bin" value={stagingBin} onChange={(event) => setStagingBin(event.target.value)} required />
+              </ScanInputBox>
+            </div>
+            <div className="desk-actions">
+              <button className="primary-action" type="submit">{t('crossDock.confirm')}</button>
+            </div>
           </form>
         </div>
       ) : null}

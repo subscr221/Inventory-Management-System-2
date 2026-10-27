@@ -13,6 +13,11 @@ const ICON_PATHS: Record<string, string> = {
   'Report damage': 'M4 21V4 M4 4h13l-2 4 2 4H4',
   'Damage cases':
     'M9 3h6v4H9z M9 5H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-3 M9 12h6 M9 16h6',
+  'Gate entry': 'M4 21V5 M4 5h16v16 M9 21v-6h6v6',
+  Stores: 'M3 8l9-4 9 4v9l-9 4-9-4z M3 8l9 4 9-4 M12 12v9',
+  'Stores issue': 'M4 7h16v12H4z M4 11h16 M12 11v8',
+  'Floor tasks': 'M8 3h8v4H8z M6 7h12v14H6z M9 12h6 M9 16h4',
+  'Standing grants': 'M12 3l2.2 4.6H19l-3.8 2.8 1.5 4.6L12 15l-4.7 3 1.5-4.6L5 7.6h4.8z',
   Workflows:
     'M6 9v6 M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M18 9a9 9 0 0 1-9 9',
   'Access control': 'M5 11h14v10H5z M8 11V7a4 4 0 0 1 8 0v4',

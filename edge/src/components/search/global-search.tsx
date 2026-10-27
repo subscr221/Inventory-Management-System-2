@@ -140,7 +140,18 @@ export function GlobalSearch({ currentRole = '', navigation = [] }: GlobalSearch
           aria-label={t('search.openLabel')}
         >
           <span aria-hidden="true" className="search-icon">
-            {t('search.icon')}
+            <svg
+              className="nav-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.9}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" />
+            </svg>
           </span>
           <span className="search-placeholder">{t('search.placeholder')}</span>
           <kbd className="search-kbd">{t('search.shortcut')}</kbd>

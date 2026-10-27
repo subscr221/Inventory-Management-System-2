@@ -29,6 +29,11 @@ export interface RefusedCapturesScreenProps {
   userId: string;
   /** From the shell: false hides every row and shows the needs-connection card (AC 5). */
   online: boolean;
+  /**
+   * False until the signed-in session exists. Cached site context mounts this screen first;
+   * an online device stays on the loading line instead of calling the list with no bearer.
+   */
+  ready: boolean;
 }
 
 type ScreenState =
@@ -97,7 +102,12 @@ function reason(row: RefusedCaptureRow): string {
  * two-tap resolve, and the resolutions already recorded. The API decides who may see and resolve
  * what; the screen only maps its `error_code` to operator copy.
  */
-export function RefusedCapturesScreen({ siteId, userId, online }: RefusedCapturesScreenProps) {
+export function RefusedCapturesScreen({
+  siteId,
+  userId,
+  online,
+  ready,
+}: RefusedCapturesScreenProps) {
   const [screen, setScreen] = useState<ScreenState>({ kind: 'loading' });
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -117,7 +127,7 @@ export function RefusedCapturesScreen({ siteId, userId, online }: RefusedCapture
         setScreen({ kind: 'needs-connection' });
         return;
       }
-      if (!siteId) {
+      if (!ready || !siteId) {
         setScreen({ kind: 'loading' });
         return;
       }
@@ -150,7 +160,7 @@ export function RefusedCapturesScreen({ siteId, userId, online }: RefusedCapture
         if (sequence === requestSequence.current && !quiet) setScreen({ kind: 'needs-connection' });
       }
     },
-    [online, siteId],
+    [online, ready, siteId],
   );
 
   // Fetch on mount, when the site becomes known, and on every online/offline change; no timer.

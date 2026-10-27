@@ -86,40 +86,55 @@ export function WorkflowManager({
         {/* Workflow List */}
         <div className="workflow-list-section">
           <h3>{t('workflow.workflows')}</h3>
-          <div className="workflow-list">
-            {workflows.map(workflow => (
-              <div 
-                key={workflow.id} 
-                className={`workflow-item ${selectedWorkflowId === workflow.id ? 'selected' : ''}`}
-                onClick={() => setSelectedWorkflowId(workflow.id)}
-              >
-                <div className="workflow-item-header">
-                  <h4>{workflow.name}</h4>
-                  <span className={`workflow-status ${getStatusColor(workflow.status)}`}>
-                    {t(`workflow.status.${workflow.status}`)}
-                  </span>
-                </div>
-                <p className="workflow-description">{workflow.description}</p>
-                <div className="workflow-meta">
-                  <span>{t('workflow.createdBy')}: {workflow.createdBy}</span>
-                  <span>{t('workflow.createdAt')}: {new Date(workflow.createdAt).toLocaleDateString()}</span>
-                </div>
-                <div className="workflow-progress">
-                  <div className="progress-bar">
-                    <div 
-                      className="progress-fill" 
-                      style={{ 
-                        width: `${(workflow.steps.filter(s => s.status === 'completed').length / workflow.steps.length) * 100}%` 
-                      }}
-                    ></div>
-                  </div>
-                  <span>
-                    {t('workflow.progress')}: {workflow.steps.filter(s => s.status === 'completed').length}/{workflow.steps.length}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+          <table className="workflow-table">
+            <thead>
+              <tr>
+                <th scope="col">{t('workflow.workflows')}</th>
+                <th scope="col">{t('filter.status')}</th>
+                <th scope="col">{t('workflow.progress')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {workflows.map(workflow => {
+                const completed = workflow.steps.filter(s => s.status === 'completed').length;
+                const total = workflow.steps.length;
+                return (
+                  <tr
+                    key={workflow.id}
+                    className={selectedWorkflowId === workflow.id ? 'selected' : undefined}
+                    onClick={() => setSelectedWorkflowId(workflow.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedWorkflowId(workflow.id);
+                      }
+                    }}
+                    tabIndex={0}
+                  >
+                    <th scope="row">{workflow.name}</th>
+                    <td>
+                      <span className={`workflow-status ${getStatusColor(workflow.status)}`}>
+                        {t(`workflow.status.${workflow.status}`)}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="workflow-progress">
+                        <div className="progress-bar">
+                          <div
+                            className="progress-fill"
+                            style={{ width: `${total === 0 ? 0 : (completed / total) * 100}%` }}
+                          />
+                        </div>
+                        <span>
+                          {t('workflow.progress')}: {completed}/{total}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
 
         {/* Workflow Detail */}
@@ -133,6 +148,16 @@ export function WorkflowManager({
                 </span>
               </div>
               <p className="workflow-detail-description">{selectedWorkflow.description}</p>
+              <dl className="workflow-detail-meta">
+                <div>
+                  <dt>{t('workflow.createdBy')}</dt>
+                  <dd>{selectedWorkflow.createdBy}</dd>
+                </div>
+                <div>
+                  <dt>{t('workflow.createdAt')}</dt>
+                  <dd>{new Date(selectedWorkflow.createdAt).toLocaleDateString()}</dd>
+                </div>
+              </dl>
               
               <div className="workflow-steps">
                 <h4>{t('workflow.steps')}</h4>

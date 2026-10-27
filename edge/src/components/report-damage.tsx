@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { t, type MessageKey } from '../i18n/locale';
+import { ScanInputBox } from './scan-field';
 import {
   DAMAGE_REASON_CODES,
   MAX_DAMAGE_NOTE_LENGTH,
@@ -276,35 +277,39 @@ export function ReportDamage({ onSubmit, settlementOf, outboxVersion = '' }: Rep
         <fieldset className="edge-card damage-step">
           <legend>{t('damage.step1')}</legend>
           <label htmlFor="damage-sku">{t('damage.skuLabel')}</label>
-          <input
-            id="damage-sku"
-            ref={skuRef}
-            className="scan-input"
-            name="sku"
-            autoComplete="off"
-            autoCapitalize="characters"
-            maxLength={64}
-            required
-            value={sku}
-            disabled={submitting}
-            aria-describedby="damage-sku-hint"
-            onChange={(event) => setSku(event.target.value)}
-          />
+          <ScanInputBox>
+            <input
+              id="damage-sku"
+              ref={skuRef}
+              className="scan-input"
+              name="sku"
+              autoComplete="off"
+              autoCapitalize="characters"
+              maxLength={64}
+              required
+              value={sku}
+              disabled={submitting}
+              aria-describedby="damage-sku-hint"
+              onChange={(event) => setSku(event.target.value)}
+            />
+          </ScanInputBox>
           <p id="damage-sku-hint" className="base-hint">
             {t('damage.skuHint')}
           </p>
           <label htmlFor="damage-lot">{t('damage.lotLabel')}</label>
-          <input
-            id="damage-lot"
-            className="scan-input"
-            name="lot"
-            autoComplete="off"
-            maxLength={128}
-            value={lotNumber}
-            disabled={submitting}
-            aria-describedby="damage-lot-hint"
-            onChange={(event) => setLotNumber(event.target.value)}
-          />
+          <ScanInputBox>
+            <input
+              id="damage-lot"
+              className="scan-input"
+              name="lot"
+              autoComplete="off"
+              maxLength={128}
+              value={lotNumber}
+              disabled={submitting}
+              aria-describedby="damage-lot-hint"
+              onChange={(event) => setLotNumber(event.target.value)}
+            />
+          </ScanInputBox>
           <p id="damage-lot-hint" className="base-hint">
             {t('damage.lotHint')}
           </p>
@@ -338,17 +343,19 @@ export function ReportDamage({ onSubmit, settlementOf, outboxVersion = '' }: Rep
           {foundAt === 'stock' ? (
             <>
               <label htmlFor="damage-bin">{t('damage.binLabel')}</label>
-              <input
-                id="damage-bin"
-                className="scan-input"
-                name="bin"
-                autoComplete="off"
-                maxLength={64}
-                required
-                value={binCode}
-                disabled={submitting}
-                onChange={(event) => setBinCode(event.target.value)}
-              />
+              <ScanInputBox>
+                <input
+                  id="damage-bin"
+                  className="scan-input"
+                  name="bin"
+                  autoComplete="off"
+                  maxLength={64}
+                  required
+                  value={binCode}
+                  disabled={submitting}
+                  onChange={(event) => setBinCode(event.target.value)}
+                />
+              </ScanInputBox>
             </>
           ) : null}
         </fieldset>

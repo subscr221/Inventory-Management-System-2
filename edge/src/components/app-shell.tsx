@@ -1,6 +1,6 @@
 'use client';
 
-import { SyncStatusBadge } from './sync-status-badge';
+import { SyncStatusBadge, syncStatusMessage } from './sync-status-badge';
 import { BottomNav } from './bottom-nav';
 import { IconRail } from './icon-rail';
 import { TestCaptureButton } from './test-capture-button';
@@ -40,6 +40,7 @@ import { StoresIssue } from './stores-issue';
 import { PutawayTask } from './putaway-task';
 import { GrnRead } from './grn-read';
 import { FloorTasks, type FloorTasksProps } from './floor-tasks';
+import { NavIcon } from './navigation/nav-icons';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import { useDeviceClass, type DeviceClass } from '../lib/use-device-class';
@@ -183,6 +184,12 @@ function isBaseView(view: string): view is BaseView {
   return view in BASE_VIEW_ENTRY;
 }
 
+function isEnterpriseView(
+  view: NonNullable<AppShellProps['view']>,
+): view is 'workflows' | 'access-control' | 'reports' {
+  return view === 'workflows' || view === 'access-control' || view === 'reports';
+}
+
 /** The nav registry entry each view belongs to (null: reached from a link, not from the nav). */
 const VIEW_NAV_ENTRY: Record<NonNullable<AppShellProps['view']>, string | null> = {
   ...BASE_VIEW_ENTRY,
@@ -269,25 +276,33 @@ export function AppShell({
         {navSurface === 'sidebar' ? (
           <aside className="edge-sidebar">
             <div className="edge-sidebar-brand">
+              <span className="brand-mark" aria-hidden="true">
+                {t('app.mark')}
+              </span>
               <h1 className="brand-name">{t('app.title')}</h1>
             </div>
-            <p className="edge-sidebar-site">{siteName}</p>
-            <div className="edge-sidebar-section">
-              <p className="edge-sidebar-caption">{userName}</p>
+            <nav className="edge-sidebar-section" aria-label={t('nav.label')}>
               {navEntries.length > 0 ? (
                 <ul className="edge-sidebar-nav">
                   {navEntries.map((link) => (
                     <li key={link.href}>
-                      <a className="edge-sidebar-item" href={link.href}>
+                      <a
+                        className="edge-sidebar-item"
+                        href={link.href}
+                        aria-current={link.href === activeHref ? 'page' : undefined}
+                      >
+                        <NavIcon name={link.name} />
                         {t(link.label as MessageKey)}
                       </a>
                     </li>
                   ))}
                 </ul>
               ) : null}
-            </div>
-            {onSignOut ? (
-              <div className="edge-sidebar-footer">
+            </nav>
+            <div className="edge-sidebar-footer">
+              <p className="edge-sidebar-caption">{userName}</p>
+              <p className="edge-sidebar-site">{siteName}</p>
+              {onSignOut ? (
                 <button
                   type="button"
                   className="edge-sidebar-item"
@@ -295,10 +310,11 @@ export function AppShell({
                   disabled={signingOut}
                   aria-busy={signingOut}
                 >
+                  <NavIcon name="sign-out" />
                   {t('auth.signOut')}
                 </button>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </aside>
         ) : null}
         <div className="edge-content">
@@ -332,15 +348,6 @@ export function AppShell({
               )}
             </p>
           ))}
-          {navEntries.length > 0 ? (
-            <nav className="edge-nav" aria-label={t('nav.label')}>
-              {navEntries.map((link) => (
-                <a key={link.href} href={link.href}>
-                  {t(link.label as MessageKey)}
-                </a>
-              ))}
-            </nav>
-          ) : null}
           <main id="main-content" className="edge-main" tabIndex={-1}>
             {authRequired ? (
               <div className="auth-required" role="alert">
@@ -385,6 +392,15 @@ export function AppShell({
             ) : isBaseView(view) &&
               navigationConfirmed &&
               !navigation.includes(BASE_VIEW_ENTRY[view]) ? (
+              <section className="edge-card" role="alert" aria-labelledby="base-denied-heading">
+                <h2 id="base-denied-heading">{t('nav.deniedTitle')}</h2>
+                <p>{t('nav.deniedBody')}</p>
+                <a className="secondary-action" href="/">
+                  {t('nav.home')}
+                </a>
+              </section>
+            ) : isEnterpriseView(view) && !navigationConfirmed ? null : isEnterpriseView(view) &&
+              !navigation.includes(VIEW_NAV_ENTRY[view] ?? '') ? (
               <section className="edge-card" role="alert" aria-labelledby="base-denied-heading">
                 <h2 id="base-denied-heading">{t('nav.deniedTitle')}</h2>
                 <p>{t('nav.deniedBody')}</p>
@@ -551,10 +567,10 @@ export function AppShell({
                 <ReportsView currentUserName={userName} />
               </>
             ) : (
-              <div className="card-grid">
-                <section className="edge-card" id="dashboard" aria-labelledby="ready-heading">
+              <div className="frontline-page">
+                <section className="edge-card frontline-status" id="dashboard" aria-labelledby="ready-heading">
                   <h2 id="ready-heading">{t('bootstrap.readyTitle')}</h2>
-                  <p>{t('sync.offline')}</p>
+                  <p>{t(syncStatusMessage(syncState))}</p>
                   <dl className="sync-counts">
                     <div>
                       <dt>{t('sync.pendingCount')}</dt>
@@ -566,7 +582,7 @@ export function AppShell({
                     </div>
                   </dl>
                 </section>
-                <section id="frontline">
+                <section id="frontline" className="frontline-stack">
                   <CrossDockCapture
                     syncState={syncState}
                     {...(onLoadCrossDockTask ? { onLoad: onLoadCrossDockTask } : {})}

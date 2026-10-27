@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../i18n/locale';
 import { isScanSubmitKey, normalizeScanValue } from '../capture/scan';
 
@@ -30,6 +30,43 @@ export interface ScanFieldProps {
  * The wedge finishes a scan with Enter; the trimmed value is the scanned code. Both rules live in
  * ../capture/scan so they are unit-testable without a DOM.
  */
+
+/** Viewfinder mark used inside every scan box (key-desk scan glyph). Decorative only. */
+export function ScanMark() {
+  return (
+    <svg
+      className="scan-mark"
+      width={18}
+      height={18}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.9}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 8V5a1 1 0 0 1 1-1h3" />
+      <path d="M16 4h3a1 1 0 0 1 1 1v3" />
+      <path d="M20 16v3a1 1 0 0 1-1 1h-3" />
+      <path d="M8 20H5a1 1 0 0 1-1-1v-3" />
+      <path d="M7 12h10" />
+    </svg>
+  );
+}
+
+/** Scan control chrome: the mark sits inside the box, to the left of the text. */
+export function ScanInputBox({ children }: { children: ReactNode }) {
+  return (
+    <div className="scan-input-box">
+      <span className="scan-input-icon" aria-hidden="true">
+        <ScanMark />
+      </span>
+      {children}
+    </div>
+  );
+}
 
 export function ScanField({
   id,
@@ -131,24 +168,26 @@ export function ScanField({
   return (
     <div className="scan-field">
       <label htmlFor={id}>{label}</label>
-      <input
-        id={id}
-        ref={inputRef}
-        className="scan-input"
-        name={id}
-        autoComplete="off"
-        autoCapitalize="characters"
-        value={value}
-        placeholder={placeholder}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (isScanSubmitKey(event.key, event.shiftKey)) {
-            event.preventDefault();
-            accept(event.currentTarget.value);
-          }
-        }}
-      />
+      <ScanInputBox>
+        <input
+          id={id}
+          ref={inputRef}
+          className="scan-input"
+          name={id}
+          autoComplete="off"
+          autoCapitalize="characters"
+          value={value}
+          placeholder={placeholder}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (isScanSubmitKey(event.key, event.shiftKey)) {
+              event.preventDefault();
+              accept(event.currentTarget.value);
+            }
+          }}
+        />
+      </ScanInputBox>
       <div className="scan-field-actions">
         <button
           type="button"

@@ -11,6 +11,7 @@ interface StockLine {
   nameKey: MessageKey;
   locationKey: MessageKey;
   uomKey: MessageKey;
+  image: string;
   onHand: string;
   reserved: string;
   available: string;
@@ -19,40 +20,44 @@ interface StockLine {
 
 const LINES: readonly StockLine[] = [
   {
-    sku: 'RM-ALU-1201',
+    sku: 'MK-ALU-1201',
     nameKey: 'dashboard.item.aluminiumSheet',
     locationKey: 'dashboard.loc.binA14',
     uomKey: 'dashboard.uom.sheet',
+    image: '/items/aluminium-sheet.jpg',
     onHand: '42',
     reserved: '6',
     available: '36',
     status: 'below-min',
   },
   {
-    sku: 'FG-PNL-088',
+    sku: 'MK-PNL-088',
     nameKey: 'dashboard.item.panelAssembly',
     locationKey: 'dashboard.loc.fgStore',
     uomKey: 'dashboard.uom.each',
+    image: '/items/panel-assembly.jpg',
     onHand: '120',
     reserved: '18',
     available: '102',
     status: 'available',
   },
   {
-    sku: 'JW-CST-014',
+    sku: 'MK-CST-014',
     nameKey: 'dashboard.item.customerCoil',
     locationKey: 'dashboard.loc.quarantine',
     uomKey: 'dashboard.uom.kg',
+    image: '/items/customer-coil.jpg',
     onHand: '850',
     reserved: '850',
     available: '0',
     status: 'on-hold',
   },
   {
-    sku: 'INT-4412',
+    sku: 'MK-TRF-4412',
     nameKey: 'dashboard.item.transferPlant',
     locationKey: 'dashboard.loc.inTransit',
     uomKey: 'dashboard.uom.each',
+    image: '/items/transfer-plant.jpg',
     onHand: '24',
     reserved: '24',
     available: '0',
@@ -250,9 +255,20 @@ export function EnhancedDashboard({
 
         {selected ? (
           <aside className="inventory-desk-detail" aria-labelledby="inventory-desk-detail-title">
-            <p className="inventory-desk-sku">{selected.sku}</p>
-            <h3 id="inventory-desk-detail-title">{t(selected.nameKey)}</h3>
-            <p className={`inventory-desk-pill is-${selected.status}`}>{statusLabel(selected.status)}</p>
+            <div className="inventory-desk-detail-head">
+              <img
+                className="inventory-desk-photo"
+                src={selected.image}
+                alt={t(selected.nameKey)}
+                width={96}
+                height={96}
+              />
+              <div>
+                <p className="inventory-desk-sku">{selected.sku}</p>
+                <h3 id="inventory-desk-detail-title">{t(selected.nameKey)}</h3>
+                <p className={`inventory-desk-pill is-${selected.status}`}>{statusLabel(selected.status)}</p>
+              </div>
+            </div>
             <dl>
               <div>
                 <dt>{t('dashboard.detailOnHand')}</dt>

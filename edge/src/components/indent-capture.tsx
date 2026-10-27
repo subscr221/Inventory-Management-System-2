@@ -97,30 +97,52 @@ export function IndentCapture({
     <section className="edge-card indent-capture" aria-labelledby="indent-heading">
       <h2 id="indent-heading">{t('indent.title')}</h2>
       <p>{t('indent.description')}</p>
-      <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <label htmlFor="indent-sku">{t('indent.sku')}</label>
-        <input ref={skuRef} id="indent-sku" value={sku} onChange={(event) => setSku(event.target.value)} required />
-        <label htmlFor="indent-item-category">{t('indent.itemCategory')}</label>
-        <input id="indent-item-category" value={itemCategory} onChange={(event) => setItemCategory(event.target.value)} required />
-        <label htmlFor="indent-quantity">{t('indent.quantity')}</label>
-        <input id="indent-quantity" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
-        <label htmlFor="indent-uom">{t('indent.uom')}</label>
-        <input id="indent-uom" value={uom} onChange={(event) => setUom(event.target.value)} required />
-        <label htmlFor="indent-unit-price">{t('indent.unitPriceEstimate')}</label>
-        <input id="indent-unit-price" inputMode="decimal" value={unitPrice} onChange={(event) => setUnitPrice(event.target.value)} />
-        <label htmlFor="indent-need-by">{t('indent.needByDate')}</label>
-        <input id="indent-need-by" type="date" value={needByDate} onChange={(event) => setNeedByDate(event.target.value)} required />
-        <label htmlFor="indent-department">{t('indent.departmentCode')}</label>
-        <input id="indent-department" value={departmentCode} onChange={(event) => setDepartmentCode(event.target.value)} required />
-        <label htmlFor="indent-business-stream">{t('indent.businessStream')}</label>
-        <input id="indent-business-stream" value={businessStream} onChange={(event) => setBusinessStream(event.target.value)} required />
-        <label htmlFor="indent-urgent">
-          <input id="indent-urgent" type="checkbox" checked={urgent} onChange={(event) => setUrgent(event.target.checked)} />
-          {t('indent.urgent')}
-        </label>
-        <label htmlFor="indent-reason">{t('indent.reason')}</label>
-        <input id="indent-reason" value={reason} onChange={(event) => setReason(event.target.value)} />
-        <button className="primary-action" type="submit" disabled={isSubmitting}>{t('indent.submit')}</button>
+      <form className="desk-form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+        <div className="desk-field">
+          <label htmlFor="indent-sku">{t('indent.sku')}</label>
+          <input ref={skuRef} id="indent-sku" value={sku} onChange={(event) => setSku(event.target.value)} required />
+        </div>
+        <div className="desk-field">
+          <label htmlFor="indent-item-category">{t('indent.itemCategory')}</label>
+          <input id="indent-item-category" value={itemCategory} onChange={(event) => setItemCategory(event.target.value)} required />
+        </div>
+        <div className="desk-field">
+          <label htmlFor="indent-quantity">{t('indent.quantity')}</label>
+          <input id="indent-quantity" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
+        </div>
+        <div className="desk-field">
+          <label htmlFor="indent-uom">{t('indent.uom')}</label>
+          <input id="indent-uom" value={uom} onChange={(event) => setUom(event.target.value)} required />
+        </div>
+        <div className="desk-field">
+          <label htmlFor="indent-unit-price">{t('indent.unitPriceEstimate')}</label>
+          <input id="indent-unit-price" inputMode="decimal" value={unitPrice} onChange={(event) => setUnitPrice(event.target.value)} />
+        </div>
+        <div className="desk-field">
+          <label htmlFor="indent-need-by">{t('indent.needByDate')}</label>
+          <input id="indent-need-by" type="date" value={needByDate} onChange={(event) => setNeedByDate(event.target.value)} required />
+        </div>
+        <div className="desk-field">
+          <label htmlFor="indent-department">{t('indent.departmentCode')}</label>
+          <input id="indent-department" value={departmentCode} onChange={(event) => setDepartmentCode(event.target.value)} required />
+        </div>
+        <div className="desk-field">
+          <label htmlFor="indent-business-stream">{t('indent.businessStream')}</label>
+          <input id="indent-business-stream" value={businessStream} onChange={(event) => setBusinessStream(event.target.value)} required />
+        </div>
+        <div className="desk-field desk-field-span">
+          <label className="desk-check" htmlFor="indent-urgent">
+            <input id="indent-urgent" type="checkbox" checked={urgent} onChange={(event) => setUrgent(event.target.checked)} />
+            <span>{t('indent.urgent')}</span>
+          </label>
+        </div>
+        <div className="desk-field desk-field-span">
+          <label htmlFor="indent-reason">{t('indent.reason')}</label>
+          <input id="indent-reason" value={reason} onChange={(event) => setReason(event.target.value)} />
+        </div>
+        <div className="desk-actions">
+          <button className="primary-action" type="submit" disabled={isSubmitting}>{t('indent.submit')}</button>
+        </div>
       </form>
       <p role="status" aria-live="polite" aria-label={t('indent.resultLabel')}>{result}</p>
     </section>

@@ -68,16 +68,6 @@ export function ReportGenerator({
     }
   };
 
-  const getCategoryIcon = (category: string) => {
-    switch (category) {
-      case 'inventory': return '📦';
-      case 'finance': return '💰';
-      case 'operations': return '⚙️';
-      case 'quality': return '✅';
-      default: return '📊';
-    }
-  };
-
   return (
     <div className="report-generator">
       <div className="report-header">
@@ -110,10 +100,14 @@ export function ReportGenerator({
                   key={template.id} 
                   className={`template-item ${selectedTemplateId === template.id ? 'selected' : ''}`}
                   onClick={() => setSelectedTemplateId(template.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setSelectedTemplateId(template.id);
+                    }
+                  }}
+                  tabIndex={0}
                 >
-                  <div className="template-icon">
-                    {getCategoryIcon(template.category)}
-                  </div>
                   <div className="template-info">
                     <h4>{template.name}</h4>
                     <p>{template.description}</p>
@@ -199,39 +193,43 @@ export function ReportGenerator({
               <p>{t('report.noGeneratedReports')}</p>
             </div>
           ) : (
-            <div className="reports-table">
-              <div className="table-header">
-                <div className="table-cell">{t('report.reportName')}</div>
-                <div className="table-cell">{t('report.generatedAt')}</div>
-                <div className="table-cell">{t('report.format')}</div>
-                <div className="table-cell">{t('report.size')}</div>
-                <div className="table-cell">{t('report.createdBy')}</div>
-                <div className="table-cell">{t('report.actions')}</div>
-              </div>
-              {generatedReports.map(report => (
-                <div key={report.id} className="table-row">
-                  <div className="table-cell">{report.name}</div>
-                  <div className="table-cell">{new Date(report.generatedAt).toLocaleDateString()}</div>
-                  <div className="table-cell">{report.format.toUpperCase()}</div>
-                  <div className="table-cell">{report.size}</div>
-                  <div className="table-cell">{report.createdBy}</div>
-                  <div className="table-cell actions-cell">
-                    <button 
-                      className="secondary-action small"
-                      onClick={() => onDownloadReport(report.id)}
-                    >
-                      {t('report.download')}
-                    </button>
-                    <button 
-                      className="secondary-action small danger"
-                      onClick={() => onDeleteReport(report.id)}
-                    >
-                      {t('report.delete')}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <table className="reports-table">
+              <thead>
+                <tr>
+                  <th scope="col">{t('report.reportName')}</th>
+                  <th scope="col">{t('report.generatedAt')}</th>
+                  <th scope="col">{t('report.format')}</th>
+                  <th scope="col">{t('report.size')}</th>
+                  <th scope="col">{t('report.createdBy')}</th>
+                  <th scope="col">{t('report.actions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {generatedReports.map(report => (
+                  <tr key={report.id}>
+                    <th scope="row">{report.name}</th>
+                    <td>{new Date(report.generatedAt).toLocaleDateString()}</td>
+                    <td>{report.format.toUpperCase()}</td>
+                    <td>{report.size}</td>
+                    <td>{report.createdBy}</td>
+                    <td className="actions-cell">
+                      <button
+                        className="secondary-action"
+                        onClick={() => onDownloadReport(report.id)}
+                      >
+                        {t('report.download')}
+                      </button>
+                      <button
+                        className="secondary-action danger"
+                        onClick={() => onDeleteReport(report.id)}
+                      >
+                        {t('report.delete')}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       )}

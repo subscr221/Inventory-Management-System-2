@@ -94,6 +94,13 @@ export function RBACManager({
                 key={role.id} 
                 className={`role-item ${selectedRoleId === role.id ? 'selected' : ''}`}
                 onClick={() => setSelectedRoleId(role.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setSelectedRoleId(role.id);
+                  }
+                }}
+                tabIndex={0}
               >
                 <h4>{role.name}</h4>
                 <p>{role.description}</p>
