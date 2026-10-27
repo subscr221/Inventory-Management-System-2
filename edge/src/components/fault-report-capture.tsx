@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../i18n/locale';
+import { ScanInputBox } from './scan-field';
 
 export interface FaultReportSubmitInput {
   assetTag: string;
@@ -61,16 +62,18 @@ export function FaultReportCapture({
       <p>{t('maintenance.fault.description')}</p>
       <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         <label htmlFor="fault-asset-tag">{t('maintenance.fault.assetTag')}</label>
-        <input
-          ref={tagRef}
-          id="fault-asset-tag"
-          className="scan-input"
-          style={{ minHeight: '56px' }}
-          value={assetTag}
-          onChange={(event) => setAssetTag(event.target.value)}
-          autoComplete="off"
-          required
-        />
+        <ScanInputBox>
+          <input
+            ref={tagRef}
+            id="fault-asset-tag"
+            className="scan-input"
+            style={{ minHeight: '56px' }}
+            value={assetTag}
+            onChange={(event) => setAssetTag(event.target.value)}
+            autoComplete="off"
+            required
+          />
+        </ScanInputBox>
         <label htmlFor="fault-description">{t('maintenance.fault.faultDescription')}</label>
         <textarea
           id="fault-description"

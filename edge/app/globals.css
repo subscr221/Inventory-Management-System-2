@@ -689,6 +689,46 @@ textarea:focus-visible {
   font-size: var(--label-size);
 }
 
+/* Scan boxes carry the viewfinder mark inside the control, left of the text. */
+.scan-input-box {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  min-width: 0;
+}
+
+.scan-input-icon {
+  position: absolute;
+  left: 10px;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.scan-mark {
+  width: 18px;
+  height: 18px;
+}
+
+.scan-input-box > input,
+.desk-field .scan-input-box > input,
+#gate-entry .scan-input-box > input,
+.damage-form .scan-input-box > input {
+  padding-left: 36px;
+}
+
+.scan-field .scan-input-box > input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
 .desk-field textarea {
   height: auto;
   min-height: 60px;

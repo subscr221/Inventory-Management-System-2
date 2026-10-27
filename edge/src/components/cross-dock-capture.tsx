@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { t, type MessageKey } from '../i18n/locale';
+import { ScanInputBox } from './scan-field';
 
 const SYNC_LABELS: Record<string, MessageKey> = {
   online: 'sync.online',
@@ -97,7 +98,9 @@ export function CrossDockCapture({
           <form className="desk-form" onSubmit={(event) => { event.preventDefault(); void confirm(); }}>
             <div className="desk-field desk-field-span">
               <label htmlFor="cross-dock-staging-bin">{t('crossDock.scanBin')}</label>
-              <input ref={scanRef} id="cross-dock-staging-bin" value={stagingBin} onChange={(event) => setStagingBin(event.target.value)} required />
+              <ScanInputBox>
+                <input ref={scanRef} id="cross-dock-staging-bin" value={stagingBin} onChange={(event) => setStagingBin(event.target.value)} required />
+              </ScanInputBox>
             </div>
             <div className="desk-actions">
               <button className="primary-action" type="submit">{t('crossDock.confirm')}</button>
