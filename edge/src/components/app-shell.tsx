@@ -567,8 +567,8 @@ export function AppShell({
                 <ReportsView currentUserName={userName} />
               </>
             ) : (
-              <div className="card-grid">
-                <section className="edge-card" id="dashboard" aria-labelledby="ready-heading">
+              <div className="frontline-page">
+                <section className="edge-card frontline-status" id="dashboard" aria-labelledby="ready-heading">
                   <h2 id="ready-heading">{t('bootstrap.readyTitle')}</h2>
                   <p>{t(syncStatusMessage(syncState))}</p>
                   <dl className="sync-counts">
@@ -582,7 +582,7 @@ export function AppShell({
                     </div>
                   </dl>
                 </section>
-                <section id="frontline">
+                <section id="frontline" className="frontline-stack">
                   <CrossDockCapture
                     syncState={syncState}
                     {...(onLoadCrossDockTask ? { onLoad: onLoadCrossDockTask } : {})}

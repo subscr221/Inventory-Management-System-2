@@ -597,6 +597,148 @@ textarea:focus-visible {
   gap: var(--space-4);
 }
 
+/* Frontline is a full-width desk page. A two-column card grid squeezed the
+   requisition into a narrow cell and let labels collide with controls. */
+.frontline-page,
+.frontline-stack {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.frontline-status .sync-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 180px));
+  gap: var(--space-3);
+}
+
+.frontline-status .sync-counts div {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-sm);
+  background: var(--bg);
+}
+
+.frontline-stack .edge-card,
+.indent-capture,
+.cross-dock-capture {
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.frontline-stack .edge-card h2,
+.indent-capture h2,
+.cross-dock-capture h2 {
+  margin: 0 0 var(--space-2);
+  font-size: 14px;
+  font-weight: var(--label-weight);
+  line-height: 1.3;
+}
+
+.frontline-stack .edge-card > p,
+.indent-capture > p:not([role='status']),
+.cross-dock-capture > p:not([role='status']) {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--text-muted);
+  font-size: var(--caption-size);
+}
+
+.frontline-stack > .secondary-action {
+  justify-self: start;
+  width: auto;
+}
+
+/* Desk form, matching key-desk .saform / .fl: label above the control,
+   two columns on a wide card, one column when the card is narrow. */
+.desk-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 720px;
+  margin-top: var(--space-3);
+}
+
+.desk-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  font-size: var(--caption-size);
+  font-weight: var(--label-weight);
+  color: var(--text-muted);
+}
+
+.desk-field-span,
+.desk-actions {
+  grid-column: 1 / -1;
+}
+
+.desk-field input,
+.desk-field select,
+.desk-field textarea {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-height-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-sm);
+  padding: 0 var(--space-2);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: var(--body-weight);
+  font-size: var(--label-size);
+}
+
+.desk-field textarea {
+  height: auto;
+  min-height: 60px;
+  padding: 6px var(--space-2);
+  resize: vertical;
+}
+
+.desk-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-secondary);
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  color: var(--text);
+}
+
+.desk-check input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  flex: none;
+}
+
+.desk-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.desk-actions .primary-action,
+.desk-actions .secondary-action {
+  position: static;
+  width: auto;
+  height: var(--control-height-secondary);
+  min-height: var(--control-height-secondary);
+  border-radius: var(--rounded-sm);
+  padding: 0 12px;
+  box-shadow: none;
+  font-size: var(--label-size);
+}
+
+@container (max-width: 640px) {
+  .desk-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .edge-card {
   padding: var(--space-4);
   background: var(--surface);
@@ -683,21 +825,9 @@ textarea:focus-visible {
   background: var(--accent-soft);
 }
 
-/* Form controls: surface fill, border, compact desktop height, accent focus halo. */
-.cross-dock-capture form {
-  display: grid;
-  gap: var(--space-2);
-  margin-top: var(--space-4);
-}
-
-.cross-dock-capture input {
+.cross-dock-capture input:not([type='checkbox']) {
   width: 100%;
-  border: 1px solid var(--border);
-  border-radius: var(--rounded);
-  padding: 0 var(--space-3);
-  min-height: var(--control-height-secondary);
-  background: var(--surface);
-  color: var(--text);
+  min-width: 0;
 }
 
 .cross-dock-context dl {
@@ -1363,6 +1493,25 @@ textarea:focus-visible {
     align-items: center;
     justify-content: center;
     width: 100%;
+  }
+
+  /* Desk actions stay at the end of the form. A sticky primary overlaps the fields. */
+  .desk-actions .primary-action,
+  .desk-actions .secondary-action {
+    position: static;
+    width: 100%;
+    box-shadow: none;
+  }
+
+  .frontline-stack > .secondary-action {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .desk-check input {
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
   }
 }
 
