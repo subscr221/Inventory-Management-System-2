@@ -20,7 +20,7 @@ interface StockLine {
 
 const LINES: readonly StockLine[] = [
   {
-    sku: 'RM-ALU-1201',
+    sku: 'MK-ALU-1201',
     nameKey: 'dashboard.item.aluminiumSheet',
     locationKey: 'dashboard.loc.binA14',
     uomKey: 'dashboard.uom.sheet',
@@ -31,7 +31,7 @@ const LINES: readonly StockLine[] = [
     status: 'below-min',
   },
   {
-    sku: 'FG-PNL-088',
+    sku: 'MK-PNL-088',
     nameKey: 'dashboard.item.panelAssembly',
     locationKey: 'dashboard.loc.fgStore',
     uomKey: 'dashboard.uom.each',
@@ -42,7 +42,7 @@ const LINES: readonly StockLine[] = [
     status: 'available',
   },
   {
-    sku: 'JW-CST-014',
+    sku: 'MK-CST-014',
     nameKey: 'dashboard.item.customerCoil',
     locationKey: 'dashboard.loc.quarantine',
     uomKey: 'dashboard.uom.kg',
@@ -53,7 +53,7 @@ const LINES: readonly StockLine[] = [
     status: 'on-hold',
   },
   {
-    sku: 'INT-4412',
+    sku: 'MK-TRF-4412',
     nameKey: 'dashboard.item.transferPlant',
     locationKey: 'dashboard.loc.inTransit',
     uomKey: 'dashboard.uom.each',

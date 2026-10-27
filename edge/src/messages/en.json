@@ -571,7 +571,7 @@
   "dashboard.uom.each": "each",
   "dashboard.uom.kg": "kg",
   "sampleData.label": "Sample data.",
-  "sampleData.body": "The figures on this page are examples, not live stock. Do not act on them.",
+  "sampleData.body": "Practice stock for this trial. The same MK- codes work in Check stock. Nothing here is the live ERP.",
   "roles.warehouseManager": "Warehouse Manager",
   "roles.procurementSpecialist": "Procurement Specialist",
   "roles.logisticsCoordinator": "Logistics Coordinator",
