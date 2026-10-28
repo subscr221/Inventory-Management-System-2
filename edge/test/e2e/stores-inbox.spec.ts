@@ -8,7 +8,7 @@ test('the storekeeper sees the four inbox groups and one actionable arrival', as
   await page.goto('/stores');
 
   const nav = page.getByRole('navigation', { name: 'Primary navigation' });
-  await expect(nav.getByRole('link', { name: 'Stores' })).toHaveAttribute('href', '/stores');
+  await expect(nav.getByRole('link', { name: 'Stores', exact: true })).toHaveAttribute('href', '/stores');
 
   await expect(page.getByRole('heading', { name: 'Arrived - awaiting acceptance' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Cleared by QC - put away' })).toBeVisible();
@@ -30,7 +30,7 @@ test('an unrecognised scan is announced, and a lot offer opens the damage sheet'
 }) => {
   await provisionStores(page);
   await page.goto('/stores');
-  const scan = page.getByLabel('Scan anything');
+  const scan = page.getByRole('textbox', { name: 'Scan anything' });
   await scan.fill('NOPE-123');
   await scan.press('Enter');
   await expect(
