@@ -56,7 +56,9 @@ export function FloorTasks({
       return;
     }
     if (!online) return;
-    setState({ kind: 'loading' });
+    // A refresh after a pick completes must not unmount the open PickLine (it holds the
+    // device-confirmed lines the server may not have yet), so only the first load shows loading.
+    setState((current) => (current.kind === 'ready' ? current : { kind: 'loading' }));
     try {
       const site = encodeURIComponent(siteId);
       const [pendingRes, inProgressRes] = await Promise.all([
