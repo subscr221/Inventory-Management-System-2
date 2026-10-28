@@ -37,7 +37,7 @@ test('another rack asks for a fixed reason and confidence', async ({ page }) => 
 
   await expect(page.getByRole('heading', { name: 'Why another rack?' })).toBeVisible();
   await page.getByRole('button', { name: 'Nearer bay' }).click();
-  await page.getByRole('button', { name: 'Certain' }).click();
+  await page.getByRole('button', { name: 'Certain', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm putaway' }).click();
   await expect(page.getByRole('heading', { name: 'Put away complete' })).toBeVisible();
 });

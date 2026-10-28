@@ -50,6 +50,7 @@ export async function provisionFloor(page: Page, options: FloorStubOptions = {})
       if (path.pathname === '/api/v1/edge/powersync-credentials') {
         return json({ endpoint: 'http://127.0.0.1:1', token: 'test-token' });
       }
+      if (path.pathname === '/api/v1/edge/events') throw new TypeError('offline');
       if (path.pathname === '/api/v1/pick-tasks') {
         const status = path.searchParams.get('status');
         if (cfg.task === null) return json({ pick_tasks: [] });
