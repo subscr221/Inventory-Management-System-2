@@ -275,15 +275,21 @@ export function AppShell({
             <div className="edge-sidebar-section">
               <p className="edge-sidebar-caption">{userName}</p>
               {navEntries.length > 0 ? (
-                <ul className="edge-sidebar-nav">
-                  {navEntries.map((link) => (
-                    <li key={link.href}>
-                      <a className="edge-sidebar-item" href={link.href}>
-                        {t(link.label as MessageKey)}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
+                <nav aria-label={t('nav.label')}>
+                  <ul className="edge-sidebar-nav">
+                    {navEntries.map((link) => (
+                      <li key={link.href}>
+                        <a
+                          className={`edge-sidebar-item${link.href === activeHref ? ' active' : ''}`}
+                          href={link.href}
+                          aria-current={link.href === activeHref ? 'page' : undefined}
+                        >
+                          {t(link.label as MessageKey)}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </nav>
               ) : null}
             </div>
             {onSignOut ? (
@@ -332,15 +338,6 @@ export function AppShell({
               )}
             </p>
           ))}
-          {navEntries.length > 0 ? (
-            <nav className="edge-nav" aria-label={t('nav.label')}>
-              {navEntries.map((link) => (
-                <a key={link.href} href={link.href}>
-                  {t(link.label as MessageKey)}
-                </a>
-              ))}
-            </nav>
-          ) : null}
           <main id="main-content" className="edge-main" tabIndex={-1}>
             {authRequired ? (
               <div className="auth-required" role="alert">

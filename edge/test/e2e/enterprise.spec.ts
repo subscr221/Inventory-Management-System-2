@@ -1,15 +1,30 @@
 import { test, expect } from '@playwright/test';
 import { provisionEnterprise } from '../fixtures/enterprise-stub';
 
-test('dashboard route renders KPI widgets, a chart, and recent activity', async ({ page }) => {
+test('dashboard route filters the items desk and opens the selected line', async ({ page }) => {
   await provisionEnterprise(page);
   await page.goto('/dashboard');
   await expect(page.getByText('Asha Operations Lead')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Inventory Management Dashboard' })).toBeVisible();
-  await expect(page.getByText('Storage Utilization')).toBeVisible();
-  await expect(page.getByRole('img', { name: 'Inventory Trend' })).toBeVisible();
-  await expect(page.getByText('Recent Activity')).toBeVisible();
-  await expect(page.getByText('Cross-dock task completed')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Items' })).toBeVisible();
+  await expect(page.getByText('Sample data.')).toBeVisible();
+  await expect(page.getByRole('row', { name: /RM-ALU-1201/ })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'In transit' }).click();
+  await expect(page.getByRole('row', { name: /INT-4412/ })).toBeVisible();
+  await expect(page.getByRole('row', { name: /RM-ALU-1201/ })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Transfer to Plant 2' })).toBeVisible();
+
+  await page.getByRole('button', { name: /On hold/ }).click();
+  await expect(page.getByRole('row', { name: /JW-CST-014/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Customer coil' })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'All items' }).click();
+  await page.getByRole('searchbox', { name: 'Search items' }).fill('panel');
+  await expect(page.getByRole('row', { name: /FG-PNL-088/ })).toBeVisible();
+  await expect(page.getByRole('row', { name: /JW-CST-014/ })).toHaveCount(0);
+
+  await page.getByRole('searchbox', { name: 'Search items' }).fill('no-such-sku');
+  await expect(page.getByText('No items in this view.')).toBeVisible();
 });
 
 test('dashboard nav link points at the dashboard route', async ({ page }) => {

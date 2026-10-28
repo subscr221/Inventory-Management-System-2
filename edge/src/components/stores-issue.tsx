@@ -178,7 +178,7 @@ export function StoresIssue() {
   return (
     <section className="card" aria-labelledby="stores-issue-heading">
       <style>{PRINT_CSS}</style>
-      <h1 id="stores-issue-heading">{t('storesIssue.title')}</h1>
+      <h2 id="stores-issue-heading" className="base-screen-title">{t('storesIssue.title')}</h2>
       <p>
         <a className="secondary-action" href="/">
           {t('storesIssue.back')}
