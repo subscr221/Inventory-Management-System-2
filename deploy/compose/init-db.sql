@@ -846,6 +846,34 @@ CREATE TABLE IF NOT EXISTS item_group_recipient (
   added_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Story 2.10: the granting and adding person must be a real user (restored 2026-11-19, code
+-- review of Story 3.14 found both keys lost in a merge).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_item_group_right_granted_by'
+      AND conrelid = 'item_group_right'::regclass
+  ) THEN
+    ALTER TABLE item_group_right
+      ADD CONSTRAINT fk_item_group_right_granted_by FOREIGN KEY (granted_by)
+        REFERENCES users (user_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_item_group_recipient_added_by'
+      AND conrelid = 'item_group_recipient'::regclass
+  ) THEN
+    ALTER TABLE item_group_recipient
+      ADD CONSTRAINT fk_item_group_recipient_added_by FOREIGN KEY (added_by)
+        REFERENCES users (user_id);
+  END IF;
+END $$;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN

@@ -64,14 +64,14 @@ const EXPECTED = [
   {
     canonical: 'read/projections/item_master.sql',
     table: 'item_group_right',
-    constraints: [] as string[],
+    constraints: ['fk_item_group_right_granted_by'],
     indexes: [] as string[],
     appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
   },
   {
     canonical: 'read/projections/item_master.sql',
     table: 'item_group_recipient',
-    constraints: [] as string[],
+    constraints: ['fk_item_group_recipient_added_by'],
     indexes: [] as string[],
     appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
   },
