@@ -89,7 +89,9 @@ export interface GoodQuantityResult {
 /** The quantity of a draft that may actually post as GOOD, and the excess returned with the truck. */
 export function goodQuantity(draft: ReceiptLineDraft): GoodQuantityResult {
   const good = toMicros(draft.good);
-  const allowed = remainingBand(draft);
+  // The band counts GOOD and DAMAGED, so this receipt's damaged units use it up first.
+  const band = remainingBand(draft) - toMicros(draft.damaged);
+  const allowed = band > 0n ? band : 0n;
   const posted = good < allowed ? good : allowed;
   return { posted, excess: good - posted };
 }

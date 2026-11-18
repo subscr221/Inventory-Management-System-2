@@ -135,3 +135,44 @@ test('inspect-on-opening fields travel only when set', () => {
   assert.equal(inspected[0]!.body['inspect_note'], 'dent on the side');
   assert.equal(inspected[0]!.body['inspect_photo_ref'], 'photo-3');
 });
+
+// Code review 2026-11-19.
+test("this receipt's damaged units use up the over-receipt band before GOOD", () => {
+  // Ceiling 110, 90 already received: 20 left. 15 damaged leaves 5 for GOOD.
+  const capped = goodQuantity(draft({ good: '10', damaged: '15' }));
+  assert.equal(fromMicros(capped.posted), '5');
+  assert.equal(fromMicros(capped.excess), '5');
+});
+
+test('a zero condition builds no row, and an all-zero receipt builds none at all', () => {
+  const rows = buildReceiptRows(submission([draft({ good: '0', damaged: '2', rejected: '0' })]));
+  assert.deepEqual(
+    rows.map((row) => row.condition),
+    ['DAMAGED'],
+  );
+  assert.equal(
+    buildReceiptRows(submission([draft({ good: '0', damaged: '0', rejected: '0' })])).length,
+    0,
+  );
+});
+
+test('a short line with no GOOD quantity carries no short reason on any row', () => {
+  const line = draft({
+    cumulativeReceived: '0',
+    good: '0',
+    damaged: '3',
+    rejected: '2',
+    shortDetail: 'SUPPLIER_SHORT_SHIPPED',
+  });
+  assert.equal(lineIsShort(line), true);
+  assert.equal(goodQuantity(line).posted, 0n);
+  const rows = buildReceiptRows(submission([line]));
+  assert.deepEqual(
+    rows.map((row) => row.body['reason_code']),
+    ['REJECTED', 'DAMAGED'],
+  );
+});
+
+test('quantity text that is not a plain positive decimal reads as zero', () => {
+  for (const text of ['-5', '1e3', '.5', '5.', '']) assert.equal(toMicros(text), 0n, text);
+});

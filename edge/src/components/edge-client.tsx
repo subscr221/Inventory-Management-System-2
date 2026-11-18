@@ -339,7 +339,10 @@ export function EdgeClient({
         pendingReceipts: pendingReceipts.map((row) => ({
           id: row.grnId,
           title: row.challan ?? row.grnId,
-          statusKey: 'stores.done.captured' as const,
+          statusKey: row.pending
+            ? ('stores.done.captured' as const)
+            : ('stores.done.synced' as const),
+          bindingToken: row.bindingToken,
         })),
         // Story 1.12 (AC4): once nothing is left to upload, the sign-out gate notice goes away.
         signOutBlockedCount: ownUnsettled === 0 ? 0 : current.signOutBlockedCount,
@@ -987,6 +990,9 @@ export function EdgeClient({
 
   const submitReceipt = useCallback(
     async (submission: ReceiptSubmission, rows: ReceiptRow[]): Promise<ReceiptSubmitResult> => {
+      // A fetch that throws mid-way means the connection dropped: fall through and queue every
+      // row. Both paths use one idempotency key per row, so a row that already posted replays.
+      let dropped = false;
       if (navigator.onLine) {
         for (const row of rows) {
           const response = await authorizedFetch('/api/v1/grn-lines', {
@@ -997,7 +1003,10 @@ export function EdgeClient({
               idempotency_key: `stores-receipt-${row.grn_line_id}`,
             }),
           }).catch(() => null);
-          if (!response) return { kind: 'error', errorCode: 'STORES_OFFLINE' };
+          if (!response) {
+            dropped = true;
+            break;
+          }
           if (response.ok) continue;
           const body = (await response.json().catch(() => null)) as {
             error_code?: unknown;
@@ -1008,9 +1017,11 @@ export function EdgeClient({
               typeof body?.error_code === 'string' ? body.error_code : 'INVALID_EVENT_ENVELOPE',
           };
         }
-        const current = database.current;
-        if (current) await refreshLocalState(current);
-        return { kind: 'posted', grnId: submission.grnId };
+        if (!dropped) {
+          const current = database.current;
+          if (current) await refreshLocalState(current);
+          return { kind: 'posted', grnId: submission.grnId };
+        }
       }
       const db = requireReady();
       const occurredAt = new Date().toISOString();
@@ -1029,7 +1040,7 @@ export function EdgeClient({
             siteId: state.siteId,
             correlationId: submission.bindingToken,
             deviceId: deviceId(),
-            idempotencyKey: `edge-receipt-${row.grn_line_id}`,
+            idempotencyKey: `stores-receipt-${row.grn_line_id}`,
             occurredAt,
             captureMethod: 'MANUAL',
           }),

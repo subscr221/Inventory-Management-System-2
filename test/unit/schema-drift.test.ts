@@ -2733,7 +2733,9 @@ describe('Story 2.1 schema drift guard', () => {
     ]) {
       assert.ok(inspectSql.includes(fragment), `grn_line_inspect.sql missing ${fragment}`);
     }
-    const body = inspectSql.slice(inspectSql.indexOf('ALTER TABLE grn_line ADD COLUMN'));
+    const bodyAt = inspectSql.indexOf('ALTER TABLE grn_line ADD COLUMN');
+    assert.ok(bodyAt >= 0, 'grn_line_inspect.sql has no ALTER TABLE grn_line ADD COLUMN');
+    const body = inspectSql.slice(bodyAt);
     const mirrorAt = normalizeSql(initDb).indexOf(normalizeSql(body));
     assert.ok(mirrorAt >= 0, 'init-db.sql does not mirror grn_line_inspect.sql verbatim');
     const grnLineAt = normalizeSql(initDb)
@@ -2741,9 +2743,11 @@ describe('Story 2.1 schema drift guard', () => {
       .indexOf('create table if not exists grn_line(');
     assert.ok(grnLineAt >= 0, 'init-db.sql defines grn_line');
     assert.ok(mirrorAt > grnLineAt, 'the mirror must follow the grn_line definition it alters');
+    const conditionAt = migrateSource.indexOf("'../../read/projections/grn_line_condition.sql'");
+    assert.ok(conditionAt >= 0, 'migrate.ts applies grn_line_condition.sql');
     assert.ok(
-      migrateSource.indexOf("'../../read/projections/grn_line_inspect.sql'") >
-        migrateSource.indexOf("'../../read/projections/grn_line_condition.sql'"),
+      migrateSource.indexOf("'../../read/projections/grn_line_inspect.sql'") > conditionAt,
+      'grn_line_inspect.sql must run after grn_line_condition.sql',
     );
   });
 

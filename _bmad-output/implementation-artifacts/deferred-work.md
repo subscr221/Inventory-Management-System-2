@@ -1360,3 +1360,15 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - Integration coverage for AC 6 exercises the direct confirm route (POST /api/v1/pick-tasks/:id/lines/:lineId/confirm) rather than the edge outbox replay path the PWA actually uses (pick_line.confirmed through src/api/v1/edge.ts ingest and inline finalize). The outbox ingest plus finalize-after-last-line path is unit-tested for payload shape only; an end-to-end outbox replay test would close the gap.
 - Offline inbox refresh after completion relies on the next sync pass: eload() cannot fetch while offline, so the two-pane list reconciles only after connectivity returns.
 
+
+## Deferred from: code review of story-3.14 (2026-11-19)
+- Arrivals read (GET /api/v1/receiving/arrivals) has no limit or pagination; open gate events that are never closed grow the payload. Pilot volume is small.
+- Arrivals read picks the oldest GRN per correlation id with no status filter; a void earlier GRN would mask a live one once a void status exists.
+- Arrivals PO summary sums open_qty across units of measure and joins on PO number only; display value only.
+- inspect_photo_ref and material_photo_ref are length-checked only, not checked for existence or site ownership; same pattern as reason_photo_ref.
+- Rehearsal setup reports exists for any IB-01 without checking that it is an active staging zone under the site; follows the inspection bay provisioning decision.
+- Stores inbox treats a 403 or 500 on indents, GRNs or putaway as an empty group and shows Nothing waiting.
+- Lot and expiry inputs on the stores acceptance screen (owner ruling 2b, 2026-11-19): follow-up story; pilot receipts taken as not lot-controlled, not confirmed by the owner. A plain-language refusal ships meanwhile.
+- Server-side enforcement of material_photo_ref on goods.received (owner ruling 3b): a server rule affects ERP inbound and every other caller.
+- Counted stepper, Damaged and Rejected reason tiles, and a Match supplier action on the unmatched arrival card (owner ruling 6b): UX pass.
+- Per-site inspection bay codes and a bay for assignments below site level (owner ruling 4b): location_code is globally unique, so only one site can own IB-01; single pilot site for now.

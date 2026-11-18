@@ -28,7 +28,10 @@ export interface StoresAcceptProps {
   online: boolean;
   siteCodeExt: string | null;
   inspectionBayCode: string | null;
-  onSubmitReceipt: (submission: ReceiptSubmission, rows: ReceiptRow[]) => Promise<ReceiptSubmitResult>;
+  onSubmitReceipt: (
+    submission: ReceiptSubmission,
+    rows: ReceiptRow[],
+  ) => Promise<ReceiptSubmitResult>;
   storePhoto: (file: File) => Promise<string>;
 }
 
@@ -77,10 +80,12 @@ function emptyLine(): LineState {
     shortDetail: '',
     otherNote: '',
     otherPhotoRef: '',
-    damagedDetail: 'TRANSIT_DAMAGE',
-    rejectedDetail: 'WRONG_ITEM',
+    damagedDetail: '',
+    rejectedDetail: '',
   };
 }
+
+const QUANTITY = /^\d+(\.\d+)?$/;
 
 function quantity(value: string): string {
   return value.trim() || '0';
@@ -112,7 +117,12 @@ export function StoresAccept({
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<ReceiptRow[] | null>(null);
   const [submittedGrnId, setSubmittedGrnId] = useState('');
-  const submissionRef = useRef<{ submission: ReceiptSubmission; rows: ReceiptRow[] } | null>(null);
+  const [gatePhotoUrl, setGatePhotoUrl] = useState('');
+  // One GRN id and one id per (PO line, condition) for the life of the screen: a retry replays the
+  // same ids, and the rows are rebuilt from the current inputs so an edit after a refusal is sent.
+  const idsRef = useRef<{ grnId: string; rows: Map<string, string> } | null>(null);
+  const inFlight = useRef(false);
+  const loaded = useRef(false);
 
   const gateId = useMemo(() => {
     if (typeof window === 'undefined') return '';
@@ -120,6 +130,7 @@ export function StoresAccept({
   }, []);
 
   useEffect(() => {
+    if (loaded.current) return;
     if (!online) {
       setLoading(false);
       setMessage(t('stores.needsConnection'));
@@ -139,7 +150,13 @@ export function StoresAccept({
         if (!arrivalsRes.ok) throw new Error('arrivals');
         const arrivals = ((await arrivalsRes.json()) as { arrivals?: ArrivalRow[] }).arrivals ?? [];
         const hit = arrivals.find((row) => row.gate_event_id === gateId) ?? null;
-        if (!hit || !hit.po_ref_ext) {
+        if (
+          !hit ||
+          !hit.po_ref_ext ||
+          hit.grn_id ||
+          hit.binding_status !== 'matched' ||
+          !hit.has_accepted_weighment
+        ) {
           if (!cancelled) {
             setLoading(false);
             setMessage(t('stores.accept.notFound'));
@@ -164,6 +181,7 @@ export function StoresAccept({
           }),
         );
         if (!cancelled) {
+          loaded.current = true;
           setUoms(Object.fromEntries(uomPairs));
           setArrival(hit);
           setPo(poBody);
@@ -203,7 +221,11 @@ export function StoresAccept({
       sku: line.sku,
       uom: uoms[line.sku] ?? 'EA',
       ordered: line.ordered_qty,
-      cumulativeReceived: Math.max(line.ordered_qty - line.open_qty, 0),
+      cumulativeReceived: fromMicros(
+        toMicros(line.ordered_qty) > toMicros(line.open_qty)
+          ? toMicros(line.ordered_qty) - toMicros(line.open_qty)
+          : 0n,
+      ),
       overReceiptTolerancePct: line.over_receipt_tolerance_pct,
       good: quantity(state.good),
       damaged: quantity(state.damaged),
@@ -216,11 +238,15 @@ export function StoresAccept({
     };
   }
 
+  // The server asks for SHORT or OTHER only on a GOOD row, so a line with no GOOD quantity has
+  // no row that could carry a short reason.
+  const needsShortReason = (draft: ReceiptLineDraft) =>
+    lineIsShort(draft) && goodQuantity(draft).posted > 0n;
   const shortMissing = openLines.some((line) => {
     const state = lines[line.line_no] ?? emptyLine();
     if (state.counted === '') return false;
     const draft = draftFor(line);
-    if (!lineIsShort(draft)) return false;
+    if (!needsShortReason(draft)) return false;
     if (!state.shortDetail) return true;
     if (state.shortDetail === 'OTHER') return !state.otherPhotoRef || !state.otherNote.trim();
     return false;
@@ -234,6 +260,20 @@ export function StoresAccept({
     materialPhoto: Boolean(materialPhotoRef),
     shortDetailsComplete: !shortMissing,
     otherEvidenceComplete: true,
+    quantitiesValid: openLines.every((line) => {
+      const state = lines[line.line_no] ?? emptyLine();
+      return [state.good, state.damaged, state.rejected].every(
+        (value) => value.trim() === '' || QUANTITY.test(value.trim()),
+      );
+    }),
+    conditionReasonsComplete: openLines.every((line) => {
+      const state = lines[line.line_no] ?? emptyLine();
+      return (
+        (toMicros(quantity(state.damaged)) === 0n || Boolean(state.damagedDetail)) &&
+        (toMicros(quantity(state.rejected)) === 0n || Boolean(state.rejectedDetail))
+      );
+    }),
+    inspectionBay: Boolean(inspectionBayCode),
   });
   const canSubmit =
     !submitting &&
@@ -249,50 +289,75 @@ export function StoresAccept({
     input.onchange = () => {
       const file = input.files?.[0];
       if (!file) return;
-      void storePhoto(file).then((ref) => {
-        if (target === 'material') setMaterialPhotoRef(ref);
-        else if (target === 'inspect') setInspectPhotoRef(ref);
-        else if (lineNo !== undefined) update(lineNo, { otherPhotoRef: ref });
-      });
+      void storePhoto(file)
+        .then((ref) => {
+          if (target === 'material') setMaterialPhotoRef(ref);
+          else if (target === 'inspect') setInspectPhotoRef(ref);
+          else if (lineNo !== undefined) update(lineNo, { otherPhotoRef: ref });
+        })
+        .catch(() => setMessage(t('stores.accept.photoFailed')));
     };
     input.click();
   }
 
-async function submit() {
-    if (!arrival || !po || !inspectionBayCode) return;
+  async function openGatePhoto() {
+    if (!arrival) return;
+    const response = await authorizedFetch(
+      `/api/v1/attachments/${encodeURIComponent(arrival.challan_photo_ref)}`,
+    ).catch(() => null);
+    if (!response?.ok) {
+      setMessage(t('stores.accept.photoFailed'));
+      return;
+    }
+    setGatePhotoUrl(URL.createObjectURL(await response.blob()));
+  }
+
+  async function submit() {
+    if (!arrival || !po || !inspectionBayCode || inFlight.current) return;
+    inFlight.current = true;
     setSubmitting(true);
     setMessage('');
     try {
-      // Build the rows once so a retry after a partial online failure replays the same GRN line ids
-      // and the same material/inspection evidence instead of minting new ones.
-      let prepared = submissionRef.current;
-      if (!prepared) {
-        const submission: ReceiptSubmission = {
-          grnId: crypto.randomUUID(),
-          bindingToken: arrival.binding_token,
-          inspectionBayCode,
-          materialPhotoRef,
-          ...(inspectOnOpening ? { inspectOnOpening } : {}),
-          ...(inspectNote.trim() ? { inspectNote: inspectNote.trim() } : {}),
-          ...(inspectPhotoRef ? { inspectPhotoRef } : {}),
-          lines: openLines.map(draftFor),
-        };
-        prepared = { submission, rows: buildReceiptRows(submission) };
-        submissionRef.current = prepared;
+      const ids = (idsRef.current ??= { grnId: crypto.randomUUID(), rows: new Map() });
+      const submission: ReceiptSubmission = {
+        grnId: ids.grnId,
+        bindingToken: arrival.binding_token,
+        inspectionBayCode,
+        materialPhotoRef,
+        ...(inspectOnOpening ? { inspectOnOpening } : {}),
+        ...(inspectNote.trim() ? { inspectNote: inspectNote.trim() } : {}),
+        ...(inspectPhotoRef ? { inspectPhotoRef } : {}),
+        lines: openLines.map(draftFor),
+      };
+      const rows = buildReceiptRows(submission);
+      for (const row of rows) {
+        const key = `${String(row.body['line_no'])}:${row.condition}`;
+        const id = ids.rows.get(key) ?? row.grn_line_id;
+        ids.rows.set(key, id);
+        row.grn_line_id = id;
+        row.body['grn_line_id'] = id;
       }
-setSubmittedGrnId(prepared.submission.grnId);
-  const response = await onSubmitReceipt(prepared.submission, prepared.rows);
-  if (response.kind === 'error') {
-    setMessage(errorMessage(response.errorCode));
-    return;
-  }
-      setResult(prepared.rows);
-      void labelStore
-        .putMany(buildLabels(prepared.submission.grnId, prepared.rows))
-        .catch(() => {
-          setMessage(t('labels.queuedFailed'));
-        });
+      if (rows.length === 0) {
+        setMessage(t('stores.missing.nothingReceived'));
+        return;
+      }
+      setSubmittedGrnId(submission.grnId);
+      const response = await onSubmitReceipt(submission, rows);
+      if (response.kind === 'error') {
+        // Lot and expiry capture is a follow-up story; say what to do instead of a raw code.
+        setMessage(
+          /^LOT_|EXPIRY/.test(response.errorCode)
+            ? t('stores.accept.lotRequired')
+            : errorMessage(response.errorCode),
+        );
+        return;
+      }
+      setResult(rows);
+      void labelStore.putMany(buildLabels(submission.grnId, rows)).catch(() => {
+        setMessage(t('labels.queuedFailed'));
+      });
     } finally {
+      inFlight.current = false;
       setSubmitting(false);
     }
   }
@@ -361,9 +426,13 @@ setSubmittedGrnId(prepared.submission.grnId);
         <p>
           {t('stores.accept.arrived')}: {new Date(arrival.entered_at).toLocaleString()}
         </p>
-        <a href={`/api/v1/attachments/${encodeURIComponent(arrival.challan_photo_ref)}`}>
-          {t('stores.accept.gatePhoto')}
-        </a>
+        {gatePhotoUrl ? (
+          <img src={gatePhotoUrl} alt={t('stores.accept.gatePhoto')} />
+        ) : (
+          <button className="secondary-action" type="button" onClick={() => void openGatePhoto()}>
+            {t('stores.accept.gatePhoto')}
+          </button>
+        )}
         <p className="stores-banner">
           {t('stores.accept.bayBanner').replace('{bay}', inspectionBayCode ?? '—')}
         </p>
@@ -378,7 +447,7 @@ setSubmittedGrnId(prepared.submission.grnId);
             const draft = draftFor(line);
             const chip = lineChip(draft);
             const capped = goodQuantity(draft);
-            const short = lineIsShort(draft);
+            const short = needsShortReason(draft);
             return (
               <li key={line.line_no} className="edge-card stores-line">
                 <h2>
@@ -445,11 +514,11 @@ setSubmittedGrnId(prepared.submission.grnId);
                   className="secondary-action"
                   type="button"
                   onClick={() => {
-                    const remaining = fromMicros(
-                      toMicros(line.ordered_qty) -
-                        toMicros(quantity(state.damaged)) -
-                        toMicros(quantity(state.rejected)),
-                    );
+                    const open =
+                      toMicros(line.open_qty) -
+                      toMicros(quantity(state.damaged)) -
+                      toMicros(quantity(state.rejected));
+                    const remaining = fromMicros(open > 0n ? open : 0n);
                     update(line.line_no, {
                       good: remaining,
                       counted: sum(remaining, state.damaged, state.rejected),
@@ -472,6 +541,7 @@ setSubmittedGrnId(prepared.submission.grnId);
                         update(line.line_no, { damagedDetail: event.target.value })
                       }
                     >
+                      <option value="">{t('stores.accept.chooseReason')}</option>
                       {DAMAGED_DETAILS.map((detail) => (
                         <option key={detail} value={detail}>
                           {t(`stores.reason.${detail}`)}
@@ -489,6 +559,7 @@ setSubmittedGrnId(prepared.submission.grnId);
                         update(line.line_no, { rejectedDetail: event.target.value })
                       }
                     >
+                      <option value="">{t('stores.accept.chooseReason')}</option>
                       {REJECTED_DETAILS.map((detail) => (
                         <option key={detail} value={detail}>
                           {t(`stores.reason.${detail}`)}

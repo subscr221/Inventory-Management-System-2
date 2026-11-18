@@ -18,12 +18,18 @@ export interface StoresStubOptions {
   navigation?: string[];
   hasMaterialPhoto?: boolean;
   withPutaway?: boolean;
+  /** Answer the first POST /grn-lines with a 400 RECEIVING_REASON_REQUIRED. */
+  refuseFirstPost?: boolean;
+  /** A lot code the lot location read recognises. */
+  knownLot?: string;
 }
 
 export async function provisionStores(page: Page, options: StoresStubOptions = {}) {
   const config = {
     navigation: options.navigation ?? STORES_NAVIGATION,
     withPutaway: options.withPutaway ?? false,
+    refuseFirstPost: options.refuseFirstPost ?? false,
+    knownLot: options.knownLot ?? '',
   };
   await page.addInitScript((cfg) => {
     const json = (body: unknown, status = 200) =>
@@ -126,8 +132,7 @@ export async function provisionStores(page: Page, options: StoresStubOptions = {
         });
       }
       if (
-        path.pathname ===
-        '/api/v1/putaway-tasks/77777777-7777-4777-8777-777777777771/suggestion'
+        path.pathname === '/api/v1/putaway-tasks/77777777-7777-4777-8777-777777777771/suggestion'
       ) {
         return json({
           suggestion: {
@@ -137,10 +142,7 @@ export async function provisionStores(page: Page, options: StoresStubOptions = {
           },
         });
       }
-      if (
-        path.pathname ===
-        '/api/v1/putaway-tasks/77777777-7777-4777-8777-777777777771/complete'
-      ) {
+      if (path.pathname === '/api/v1/putaway-tasks/77777777-7777-4777-8777-777777777771/complete') {
         return json({
           event_id: '99999999-9999-4999-8999-999999999999',
           task: {
@@ -202,6 +204,18 @@ export async function provisionStores(page: Page, options: StoresStubOptions = {
       }
       if (path.pathname.startsWith('/api/v1/items/')) {
         return json({ item: { sku: 'SKU-1', uom: 'EA' } });
+      }
+      if (path.pathname === '/api/v1/grn-lines' && init?.method === 'POST') {
+        const store = window as unknown as { __grnLinePosts?: unknown[] };
+        const posts = (store.__grnLinePosts ??= []);
+        posts.push(JSON.parse(String(init.body)));
+        if (cfg.refuseFirstPost && posts.length === 1) {
+          return json({ error_code: 'RECEIVING_REASON_REQUIRED' }, 400);
+        }
+        return json({ ok: true }, 201);
+      }
+      if (cfg.knownLot && path.pathname === `/api/v1/lots/${cfg.knownLot}/location`) {
+        return json({ location_code: 'BIN-A-01' });
       }
       if (path.pathname.startsWith('/api/v1/lots/')) return json({ error: 'not_found' }, 404);
       return nativeFetch(input, init);

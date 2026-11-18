@@ -45,6 +45,8 @@ export interface DoneRow {
   title: string;
   statusKey: 'stores.done.captured' | 'stores.done.synced';
   href?: string;
+  /** Set on a receipt still in this device's outbox: the arrival it accepts. */
+  bindingToken?: string | null;
 }
 
 export interface InboxCard {
@@ -82,7 +84,8 @@ export function acceptedToday(rows: ArrivalRow[]): DoneRow[] {
     .map((row) => ({
       id: row.grn_id as string,
       title: row.challan_number_ext ?? row.gate_event_id,
-      statusKey: 'stores.done.captured' as const,
+      // The server already holds this GRN, so it is synced, not pending.
+      statusKey: 'stores.done.synced' as const,
     }));
 }
 
@@ -140,9 +143,7 @@ export function buildInbox(input: InboxInput): InboxGroup[] {
             detail: [task.quantity, task.lot_id, task.from_location_code]
               .filter(Boolean)
               .join(' · '),
-            pillKey: task.directed_location_code
-              ? 'putaway.card.suggested'
-              : 'putaway.pill.ready',
+            pillKey: task.directed_location_code ? 'putaway.card.suggested' : 'putaway.pill.ready',
             ...(task.directed_location_code ? { pillValue: task.directed_location_code } : {}),
             actionKey: 'putaway.action.open',
             actionHref: `/stores/putaway?task=${encodeURIComponent(task.putaway_task_id)}`,
@@ -195,9 +196,15 @@ export function acceptanceMissing(args: {
   materialPhoto: boolean;
   shortDetailsComplete: boolean;
   otherEvidenceComplete: boolean;
+  quantitiesValid?: boolean;
+  conditionReasonsComplete?: boolean;
+  inspectionBay?: boolean;
 }): string[] {
   const missing: string[] = [];
+  if (args.inspectionBay === false) missing.push('stores.missing.inspectionBay');
+  if (args.quantitiesValid === false) missing.push('stores.missing.invalidQuantity');
   if (args.countedLines < args.openLines) missing.push('stores.missing.lines');
+  if (args.conditionReasonsComplete === false) missing.push('stores.missing.conditionReason');
   if (!args.materialPhoto) missing.push('stores.missing.materialPhoto');
   if (!args.shortDetailsComplete) missing.push('stores.missing.shortReason');
   if (!args.otherEvidenceComplete) missing.push('stores.missing.otherEvidence');

@@ -398,4 +398,79 @@ describe('Story 3.14 Stores Inbox and Acceptance', () => {
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.equal(res.body['error_code'], 'RECEIVING_INSPECT_INVALID');
   });
+
+  // Code review 2026-11-19: every refusal branch of the inspect validators, and the write path.
+  for (const [name, fields] of [
+    ['an unknown inspect_on_opening value', { inspect_on_opening: 'maybe' }],
+    ['a blank inspect_note', { inspect_on_opening: 'observed', inspect_note: '   ' }],
+    ['a two-line inspect_note', { inspect_on_opening: 'observed', inspect_note: 'a\nb' }],
+    [
+      'an over-long inspect_note',
+      { inspect_on_opening: 'observed', inspect_note: 'x'.repeat(2000) },
+    ],
+    ['a non-text inspect_photo_ref', { inspect_on_opening: 'observed', inspect_photo_ref: 7 }],
+    ['an inspect_photo_ref without the toggle', { inspect_photo_ref: 'photo-x' }],
+    ['a blank material_photo_ref', { material_photo_ref: ' ' }],
+  ] as Array<[string, Record<string, unknown>]>) {
+    it(`AC8: ${name} is refused`, async () => {
+      const res = await makeRequest(
+        port,
+        'POST',
+        '/api/v1/grn-lines',
+        {
+          grn_id: randomUUID(),
+          grn_line_id: randomUUID(),
+          source_document: 'PO',
+          po_ref_ext: PO_REF,
+          line_no: 1,
+          sku: 'SKU-3-14',
+          received_qty: '1',
+          uom: 'EA',
+          correlation_id: TOKEN_OPEN,
+          target_location_code: 'IB-01',
+          ...fields,
+        },
+        storeHeaders,
+      );
+      assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+      assert.equal(res.body['error_code'], 'RECEIVING_INSPECT_INVALID');
+    });
+  }
+
+  it('AC8: a posted line persists the inspect fields and GET /grns/:id reads them back', async () => {
+    const grnId = randomUUID();
+    const posted = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/grn-lines',
+      {
+        grn_id: grnId,
+        grn_line_id: randomUUID(),
+        source_document: 'PO',
+        po_ref_ext: PO_REF,
+        line_no: 1,
+        sku: 'SKU-3-14',
+        received_qty: '1',
+        uom: 'EA',
+        correlation_id: TOKEN_OPEN,
+        target_location_code: 'IB-01',
+        line_condition: 'GOOD',
+        reason_code: 'SHORT',
+        reason_detail: 'SUPPLIER_SHORT_SHIPPED',
+        inspect_on_opening: 'suspected',
+        inspect_note: '  carton crushed  ',
+        inspect_photo_ref: 'photo-inspect-2',
+        material_photo_ref: 'photo-material-2',
+      },
+      storeHeaders,
+    );
+    assert.ok(posted.status === 200 || posted.status === 201, JSON.stringify(posted.body));
+    const res = await makeRequest(port, 'GET', `/api/v1/grns/${grnId}`, undefined, storeHeaders);
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    const line = (res.body['lines'] as Array<Record<string, unknown>>)[0]!;
+    assert.equal(line['inspect_on_opening'], 'suspected');
+    assert.equal(line['inspect_note'], 'carton crushed');
+    assert.equal(line['inspect_photo_ref'], 'photo-inspect-2');
+    assert.equal(line['material_photo_ref'], 'photo-material-2');
+  });
 });

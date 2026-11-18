@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  acceptanceMissing,
   acceptedToday,
   buildInbox,
   openArrivals,
@@ -122,4 +123,53 @@ test('a challan scan opens acceptance; a challan already accepted is a done card
   assert.deepEqual(resolveScan('ch-1', [open, accepted]), { kind: 'accept', arrival: open });
   assert.deepEqual(resolveScan('CH-2', [open, accepted]), { kind: 'done', arrival: accepted });
   assert.deepEqual(resolveScan('LOT-9', [open, accepted]), { kind: 'unknown' });
+});
+
+// Code review 2026-11-19.
+test('acceptanceMissing lists every gap in display order and is empty when complete', () => {
+  const complete = {
+    countedLines: 2,
+    openLines: 2,
+    materialPhoto: true,
+    shortDetailsComplete: true,
+    otherEvidenceComplete: true,
+    quantitiesValid: true,
+    conditionReasonsComplete: true,
+    inspectionBay: true,
+  };
+  assert.deepEqual(acceptanceMissing(complete), []);
+  assert.deepEqual(
+    acceptanceMissing({
+      countedLines: 1,
+      openLines: 2,
+      materialPhoto: false,
+      shortDetailsComplete: false,
+      otherEvidenceComplete: false,
+      quantitiesValid: false,
+      conditionReasonsComplete: false,
+      inspectionBay: false,
+    }),
+    [
+      'stores.missing.inspectionBay',
+      'stores.missing.invalidQuantity',
+      'stores.missing.lines',
+      'stores.missing.conditionReason',
+      'stores.missing.materialPhoto',
+      'stores.missing.shortReason',
+      'stores.missing.otherEvidence',
+    ],
+  );
+});
+
+test('a scan is trimmed and case-folded, and an empty scan is unknown', () => {
+  const rows = [arrival()];
+  assert.equal(resolveScan('  ch-1\n', rows).kind, 'accept');
+  assert.equal(resolveScan('   ', rows).kind, 'unknown');
+  assert.equal(resolveScan('CH-1', [arrival({ grn_id: 'grn-9' })]).kind, 'done');
+});
+
+test('an arrival the server already holds a GRN for reads as synced', () => {
+  assert.deepEqual(acceptedToday([arrival({ grn_id: 'grn-9' })]), [
+    { id: 'grn-9', title: 'CH-1', statusKey: 'stores.done.synced' },
+  ]);
 });

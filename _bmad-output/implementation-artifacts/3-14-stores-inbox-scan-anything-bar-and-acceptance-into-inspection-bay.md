@@ -47,6 +47,48 @@ so that UJ-PUT-01 steps 1 to 3 and the acceptance half of step 4 run on the PWA 
 - [x] 4.2 Author the Playwright e2e and axe specs.
 - [x] 4.3 Run server integration/unit suites, edge typecheck/lint/unit, and the full backend suite.
 
+### Review Findings
+
+Code review of 2026-11-19, diff `a07e22f` to HEAD `e8d0f3c` over the File List, three layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor).
+
+Patches applied 2026-11-19: edge unit 212 of 212, story-3-14 integration 15 of 15, schema-drift 202 of 202, stores Playwright and axe 11 of 11; full edge Playwright 105 of 106, the one failure being an ambiguous locator in `floor-tasks.spec.ts` line 47 (Story 3.16, untouched here).
+
+Decisions ruled by the owner on 2026-11-19 after a party-mode round (1b, 2b, 3b, 4b, 5a, 6b with three riders):
+
+- [x] [Review][Patch] Do not ask for a short reason on a line that posts no GOOD row - ruled 1b; the server requires `SHORT` or `OTHER` only on a GOOD line and refuses a reason code that does not match the row condition (`src/compliance/receiving.ts` lines 508 and 1136) [edge/src/components/stores-accept.tsx:219]
+- [x] [Review][Patch] Plain-language refusal when a lot-controlled item is received without a lot - rider on 2b [edge/src/components/stores-accept.tsx]
+- [x] [Review][Patch] Inspection bay as a hard gate in the cutover runbook - ruled 4b with rider; one pilot site, no per-site bay codes [docs/migration/pilot-cutover-runbook.md]
+- [x] [Review][Patch] Restore `fk_item_group_right_granted_by` and `fk_item_group_recipient_added_by` and their schema-drift pins - ruled 5a; Story 2.10 scope, separate commit [deploy/compose/init-db.sql:832]
+- [x] [Review][Patch] Damaged and Rejected reason selects start empty and block Complete acceptance until chosen - rider on 6b [edge/src/components/stores-accept.tsx]
+- [x] [Review][Defer] Lot and expiry inputs on the acceptance screen [edge/src/components/stores-accept.tsx] - deferred, ruled 2b; follow-up story, pilot receipts taken as not lot-controlled (owner did not confirm)
+- [x] [Review][Defer] Server-side enforcement of `material_photo_ref` [src/compliance/receiving.ts] - deferred, ruled 3b; a server rule affects ERP inbound and every other `goods.received` caller
+- [x] [Review][Defer] Counted stepper, reason tiles and a Match supplier action on the unmatched card - deferred, ruled 6b; UX pass
+- [x] [Review][Defer] Per-site inspection bay codes and a bay for assignments below site level [src/api/v1/edge.ts:524] - deferred, ruled 4b; single pilot site
+- [x] [Review][Patch] Edits after a refused submit are never sent; `submissionRef` is built once and never cleared [edge/src/components/stores-accept.tsx:261]
+- [x] [Review][Patch] Online rows use `stores-receipt-` and outbox rows use `edge-receipt-` as idempotency key; a thrown fetch returns `STORES_OFFLINE` without queueing although the message says the lines were kept [edge/src/components/edge-client.tsx:997]
+- [x] [Review][Patch] A count of zero on every line passes as counted, builds no rows and shows a completed GRN that does not exist; invalid quantity text becomes zero silently [edge/src/components/stores-accept.tsx:225]
+- [x] [Review][Patch] Acceptance loads an arrival that already has a GRN, is unmatched or has no accepted weighment; a scan or deep link bypasses the disabled card [edge/src/components/stores-accept.tsx:142]
+- [x] [Review][Patch] The load effect depends on `online`, so a connection flap reloads and resets every count and photo [edge/src/components/stores-accept.tsx:122]
+- [x] [Review][Patch] No in-flight guard on Complete acceptance; `report-damage.tsx` has one [edge/src/components/stores-accept.tsx:261]
+- [x] [Review][Patch] Cumulative received is computed by float subtraction, against the no-float data rule [edge/src/components/stores-accept.tsx:207]
+- [x] [Review][Patch] This receipt's DAMAGED quantity is not subtracted from the over-receipt band the file header describes [edge/src/capture/receiving.ts:90]
+- [x] [Review][Patch] The `= ordered` button fills from `ordered_qty`, not `open_qty`, and can go negative [edge/src/components/stores-accept.tsx:449]
+- [x] [Review][Patch] `pickPhoto` has no rejection handler; a failed photo store gives no message [edge/src/components/stores-accept.tsx:249]
+- [x] [Review][Patch] A missing inspection bay disables Complete acceptance with no entry in the missing list [edge/src/components/stores-accept.tsx:241]
+- [x] [Review][Patch] Gate photo is a plain anchor to an authenticated route; other screens use `authorizedFetch` [edge/src/components/stores-accept.tsx:364]
+- [x] [Review][Patch] Done today: server GRNs show `Captured - pending sync`, no date filter, duplicates between arrivals and the GRN list, `pending` flag ignored, UTC day boundary (AC 3) [edge/src/components/stores-inbox-model.ts:79]
+- [x] [Review][Patch] An offline-queued receipt leaves its arrival startable in Arrived [edge/src/components/stores-inbox-model.ts:75]
+- [x] [Review][Patch] `mounted` ref is never set back to true; the lot lookup sends the untrimmed scan [edge/src/components/stores-inbox.tsx:64]
+- [x] [Review][Patch] Test gaps closed in runnable suites: schema-drift mirror asserts its marker; AC 8 write round trip and seven inspect validator refusals in `test/integration/story-3-14.test.ts`; `acceptanceMissing`, scan trimming, damaged against the band, zero and short-only `buildReceiptRows` in the edge unit tests; the lot e2e test retitled to what it does [edge/test/e2e/stores-inbox.spec.ts:28]
+- [x] [Review][Patch] Playwright coverage added once `npm install` in `edge/` restored the missing `qrcode-generator` package: complete acceptance, refusal then corrected resubmit under the same ids, zero count refused, unweighed arrival refused, lot sheet, and an axe scan with the short, damage reason and inspect controls open [edge/test/e2e/stores-inbox.spec.ts]
+- [x] [Review][Patch] Suggested Review Order cites `test/unit/story-3-14.test.ts` and `edge.ts:1` for `edge-client`; both paths are wrong [this file]
+- [x] [Review][Defer] Arrivals read has no limit or pagination [src/api/v1/receiving.ts] - deferred, pilot volume is small
+- [x] [Review][Defer] Arrivals read picks the oldest GRN per correlation with no status filter [src/api/v1/receiving.ts] - deferred, no void GRN status in the pilot flow
+- [x] [Review][Defer] PO summary sums `open_qty` across units of measure and joins on PO number only [src/api/v1/receiving.ts] - deferred, display value only
+- [x] [Review][Defer] Photo references are length-checked only, not checked for existence or site [src/compliance/receiving.ts] - deferred, pre-existing pattern for `reason_photo_ref`
+- [x] [Review][Defer] Rehearsal setup reports `exists` for any `IB-01` without checking type or site [deploy/rehearsal/mock/setup-operations.ts] - deferred, follows the bay provisioning decision
+- [x] [Review][Defer] Inbox treats a 403 or 500 on indents, GRNs or putaway as an empty group [edge/src/components/stores-inbox.tsx] - deferred, shared inbox pattern
+
 ## Dev Notes
 ### Server contract
 - `RECEIVING_READ_ROLES` is `['store_assistant','unloading_supervisor','warehouse_manager','inventory_controller']` (`src/api/v1/receiving.ts:39-44`); `assertRoleAllowed` admits modules `receiving`, `inventory` and `*`, and its read check accepts a write assignment. `receivingScope` unions receiving and inventory locations, so the arrivals route needs no new role.
@@ -127,12 +169,12 @@ so that UJ-PUT-01 steps 1 to 3 and the acceptance half of step 4 run on the PWA 
 - GOOD/DAMAGED/REJECTED ordering: DAMAGED/REJECTED before GOOD.  
   [`receiving.ts:250`](../../edge/src/capture/receiving.ts#L250)
 - Offline: envelopes + photos to outbox, `received_by` server-set, refusal → Refused captures.  
-  [`edge-client.ts:3`](../../edge/src/components/edge-client.tsx#L3)
+  [`edge-client.tsx:3`](../../edge/src/components/edge-client.tsx#L3)
 
 **Integration and tests (AC 9)**
 
 - 7 integration tests cover weighment join, GRN join, ordering, bootstrap `inspection_bay_code`.  
-  [`story-3-14.test.ts:1`](../../test/unit/story-3-14.test.ts#L1)
+  [`story-3-14.test.ts:1`](../../test/integration/story-3-14.test.ts#L1)
 - `stores.*` i18n literals added; `i18n-literals.test.ts` guard green.  
   [`i18n-literals.test.ts:6`](../../edge/test/unit/i18n-literals.test.ts#L6)
 - Playwright e2e and axe specs for zero WCAG AA violations and 56/48/34 px targets.  
@@ -191,3 +233,4 @@ Kilo (kilo/kilo-auto/efficient)
 ### Change Log
 - 2026-10-22: Story created and development started from baseline `a07e22f`.
 - 2026-10-22: Implemented the arrivals read, bootstrap inspection bay, Stores navigation, inspect-on-opening schema and acceptance/inbox screens; added server, schema-drift, edge unit, e2e and axe coverage. Story moved to review.
+- 2026-11-19: Code review (three layers) found 6 decisions, 17 patches, 6 defers; owner ruled the decisions; 23 patches applied, including Playwright coverage of the submit path. Status done.

@@ -41,12 +41,9 @@ type LoadState =
     }
   | { kind: 'message'; text: string };
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
+/** Same local calendar day; a UTC slice puts the IST day boundary at 05:30. */
 function isToday(value: string | null | undefined): boolean {
-  return typeof value === 'string' && value.slice(0, 10) === today();
+  return typeof value === 'string' && new Date(value).toDateString() === new Date().toDateString();
 }
 
 export function StoresInbox({
@@ -62,15 +59,15 @@ export function StoresInbox({
   const [doneHighlight, setDoneHighlight] = useState<string | null>(null);
   const [lotSheet, setLotSheet] = useState<string | null>(null);
   const mounted = useRef(true);
-const locationCodes = useRef(new Map<string, string | null>());
+  const locationCodes = useRef(new Map<string, string | null>());
   const putawayError = useRef('');
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const load = useCallback(async () => {
     putawayError.current = '';
@@ -99,7 +96,7 @@ const locationCodes = useRef(new Map<string, string | null>());
       const arrivals = ((await arrivalsRes.json()) as { arrivals?: ArrivalRow[] }).arrivals ?? [];
       let putawayRaw: PutawayRow[] = [];
       if (putawayRes.ok) {
-        putawayRaw = (((await putawayRes.json()) as { tasks?: PutawayRow[] }).tasks ?? []);
+        putawayRaw = ((await putawayRes.json()) as { tasks?: PutawayRow[] }).tasks ?? [];
       } else {
         const body = (await putawayRes.json().catch(() => ({}))) as Record<string, unknown>;
         const code = typeof body['error_code'] === 'string' ? body['error_code'] : '';
@@ -170,9 +167,10 @@ const locationCodes = useRef(new Map<string, string | null>());
       return;
     }
     try {
-      const res = await authorizedFetch(`/api/v1/lots/${encodeURIComponent(code)}/location`);
+      const lot = code.trim();
+      const res = await authorizedFetch(`/api/v1/lots/${encodeURIComponent(lot)}/location`);
       if (res.ok) {
-        setLotSheet(code);
+        setLotSheet(lot);
         setAnnouncement(t('stores.scan.lotSheet'));
         return;
       }
@@ -196,25 +194,44 @@ const locationCodes = useRef(new Map<string, string | null>());
     );
   }
 
+  // Done today: this site's GRNs received today, titled by challan where the arrival is still
+  // listed, plus accepted arrivals that entered today. One row per GRN id.
+  const todaysGrns = state.grns.filter((grn) => isToday(grn.received_at ?? grn.created_at));
+  const todaysGrnIds = new Set(todaysGrns.map((grn) => grn.grn_id));
+  const accepted = acceptedToday(
+    state.arrivals.filter(
+      (row) => isToday(row.entered_at) || (row.grn_id !== null && todaysGrnIds.has(row.grn_id)),
+    ),
+  );
+  const acceptedIds = new Set(accepted.map((row) => row.id));
   const doneFromServer: DoneRow[] = [
-    ...acceptedToday(state.arrivals).map((row) => ({
-      ...row,
-      href: `/stores/grn?grn=${encodeURIComponent(row.id)}`,
-    })),
-    ...state.grns
-      .filter((grn) => isToday(grn.received_at ?? grn.created_at))
+    ...accepted,
+    ...todaysGrns
+      .filter((grn) => !acceptedIds.has(grn.grn_id))
       .map((grn) => ({
         id: grn.grn_id,
         title: grn.grn_number ?? grn.grn_id,
         statusKey: 'stores.done.synced' as const,
-        href: `/stores/grn?grn=${encodeURIComponent(grn.grn_id)}`,
       })),
-  ];
+  ].map((row) => ({ ...row, href: `/stores/grn?grn=${encodeURIComponent(row.id)}` }));
   const doneIds = new Set(doneFromServer.map((row) => row.id));
-  const done = [...pendingReceipts.filter((row) => !doneIds.has(row.id)), ...doneFromServer];
+  // A receipt still in the outbox: show the challan, and keep its arrival out of Arrived so the
+  // same truck cannot be accepted twice before the sync lands.
+  const pendingTokens = new Set(pendingReceipts.map((row) => row.bindingToken));
+  const done = [
+    ...pendingReceipts
+      .filter((row) => !doneIds.has(row.id))
+      .map((row) => ({
+        ...row,
+        title:
+          state.arrivals.find((arrival) => arrival.binding_token === row.bindingToken)
+            ?.challan_number_ext ?? row.title,
+      })),
+    ...doneFromServer,
+  ];
 
   const groups = buildInbox({
-    arrivals: state.arrivals,
+    arrivals: state.arrivals.filter((row) => !pendingTokens.has(row.binding_token)),
     putaway: state.putaway,
     issues: state.issues,
     showIssues: navigation.includes('Issues pending') || navigation.includes('Stores issue'),

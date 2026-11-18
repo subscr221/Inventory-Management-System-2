@@ -89,7 +89,9 @@ async function inWriteTransaction(
 export async function readPendingReceipts(
   db: QueryExecutor,
   ownerUserId?: string,
-): Promise<Array<{ grnId: string; challan: string | null; pending: boolean }>> {
+): Promise<
+  Array<{ grnId: string; challan: string | null; pending: boolean; bindingToken: string | null }>
+> {
   const rows = await db.getAll<{
     payload: string;
     metadata: string;
@@ -99,7 +101,12 @@ export async function readPendingReceipts(
     ['goods.received'],
   );
   const seen = new Set<string>();
-  const receipts: Array<{ grnId: string; challan: string | null; pending: boolean }> = [];
+  const receipts: Array<{
+    grnId: string;
+    challan: string | null;
+    pending: boolean;
+    bindingToken: string | null;
+  }> = [];
   for (const row of rows) {
     const owner = outboxRowOwner(row.metadata);
     if (ownerUserId && owner !== null && owner !== ownerUserId) continue;
@@ -117,6 +124,8 @@ export async function readPendingReceipts(
       challan:
         typeof payload['challan_number_ext'] === 'string' ? payload['challan_number_ext'] : null,
       pending: row.local_status !== 'acked',
+      bindingToken:
+        typeof payload['correlation_id'] === 'string' ? payload['correlation_id'] : null,
     });
   }
   return receipts;
