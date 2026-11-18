@@ -44,9 +44,10 @@ test('a wrong bin stays on step 1; the directed bin advances through lot to conf
 
   await lot.fill('LOT-F-01');
   await lot.press('Enter');
-  await expect(page.getByText('10.000')).toBeVisible();
+  const confirm = page.getByRole('button', { name: 'Confirm 10.000 picked' });
+  await expect(confirm).toBeVisible();
 
-  await page.getByRole('button', { name: 'Confirm 10.000 picked' }).click();
+  await confirm.click();
   await expect(page.getByRole('heading', { name: 'Pick complete' })).toBeVisible();
   await expect(page.getByText('All lines picked')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Back to tasks' })).toBeVisible();
