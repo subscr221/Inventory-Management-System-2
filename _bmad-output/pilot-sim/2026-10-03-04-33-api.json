@@ -1,0 +1,178 @@
+{
+  "started": "2026-10-03T04:33:49.913Z",
+  "finished": "2026-10-03T04:33:55.029Z",
+  "site": "CMF-ALIGARH",
+  "purchase_order": "MK-PO-D2610030433",
+  "sales_order": "MK-SO-D2610030433",
+  "crashed": true,
+  "steps": [
+    {
+      "name": "ERP feed: purchase order MK-PO-D2610030433",
+      "result": "FAIL",
+      "seconds": 1.5609565,
+      "note": "token for erp (erp1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client"
+    },
+    {
+      "name": "ERP feed: sales order MK-SO-D2610030433",
+      "result": "FAIL",
+      "seconds": 1.0633026999999997,
+      "note": "token for erp (erp1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client"
+    },
+    {
+      "name": "inbound: gate entry",
+      "result": "FAIL",
+      "seconds": 0.3352415000000001,
+      "note": "token for gate (gate1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client"
+    },
+    {
+      "name": "inbound: weighbridge (net within the PO line band)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: GRN plain item",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: GRN lot item",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: GRN consignment item (ownership agreement)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: putaway into a storage bin",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "job-work: receive customer material against the challan (no PO, no ticket)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "job-work: the same challan and lot again is refused",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "count: cycle count with a variance",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "count: counter cannot approve, another person approves",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "outbound: generate picks for a seeded sales order",
+      "result": "FAIL",
+      "seconds": 0.7177683000000001,
+      "note": "token for whmanager (cmf_supervisor@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client"
+    },
+    {
+      "name": "outbound: confirm pick lines (lot item FEFO, plain item)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "outbound: pack refuses a lot that was not picked",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "outbound: pack",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "outbound: IRN, shipping documents",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "outbound: dispatch",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "production: planner reads stock, creates the order",
+      "result": "FAIL",
+      "seconds": 0.3227976000000008,
+      "note": "token for planner (planner1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client"
+    },
+    {
+      "name": "production: release",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"production: planner reads stock, creates the order\""
+    },
+    {
+      "name": "production: stage components from storage bins",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"production: planner reads stock, creates the order\""
+    },
+    {
+      "name": "production: issue components",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"production: planner reads stock, creates the order\""
+    },
+    {
+      "name": "production: complete (inspection plan resolved)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"production: planner reads stock, creates the order\""
+    },
+    {
+      "name": "indent: raise",
+      "result": "FAIL",
+      "seconds": 0.3181279000000004,
+      "note": "token for indent (indent1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client"
+    },
+    {
+      "name": "indent: raiser cannot approve, department head approves",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"indent: raise\""
+    },
+    {
+      "name": "maintenance: technician reports a fault",
+      "result": "FAIL",
+      "seconds": 0.32946770000000014,
+      "note": "token for maint (maint1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client"
+    },
+    {
+      "name": "maintenance: supervisor accepts, work order with SLA",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"maintenance: technician reports a fault\""
+    },
+    {
+      "name": "maintenance: technician works and completes",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"maintenance: technician reports a fault\""
+    }
+  ]
+}

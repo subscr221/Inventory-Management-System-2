@@ -1,0 +1,4 @@
+Simulated pilot day  2026-10-25-0415
+
+== password-grant client
+  ims-cli client already present

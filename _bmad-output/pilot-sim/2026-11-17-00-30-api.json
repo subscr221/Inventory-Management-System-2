@@ -1,0 +1,178 @@
+{
+  "started": "2026-11-17T00:30:19.872Z",
+  "finished": "2026-11-17T00:32:59.935Z",
+  "site": "CMF-ALIGARH",
+  "purchase_order": "MK-PO-D2611170030",
+  "sales_order": "MK-SO-D2611170030",
+  "crashed": true,
+  "steps": [
+    {
+      "name": "ERP feed: purchase order MK-PO-D2611170030",
+      "result": "FAIL",
+      "seconds": 20.1489778,
+      "note": "token for erp (erp1@ancorlabs.org): 522  "
+    },
+    {
+      "name": "ERP feed: sales order MK-SO-D2611170030",
+      "result": "FAIL",
+      "seconds": 19.9295291,
+      "note": "token for erp (erp1@ancorlabs.org): 522  "
+    },
+    {
+      "name": "inbound: gate entry",
+      "result": "FAIL",
+      "seconds": 20.0008171,
+      "note": "token for gate (gate1@ancorlabs.org): 522  "
+    },
+    {
+      "name": "inbound: weighbridge (net within the PO line band)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: GRN plain item",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: GRN lot item",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: GRN consignment item (ownership agreement)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: putaway into a storage bin",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "job-work: receive customer material against the challan (no PO, no ticket)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "job-work: the same challan and lot again is refused",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "count: cycle count with a variance",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "count: counter cannot approve, another person approves",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "outbound: generate picks for a seeded sales order",
+      "result": "FAIL",
+      "seconds": 19.8927429,
+      "note": "token for whmanager (cmf_supervisor@ancorlabs.org): 522  "
+    },
+    {
+      "name": "outbound: confirm pick lines (lot item FEFO, plain item)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "outbound: pack refuses a lot that was not picked",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "outbound: pack",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "outbound: IRN, shipping documents",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "outbound: dispatch",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"outbound: generate picks for a seeded sales order\""
+    },
+    {
+      "name": "production: planner reads stock, creates the order",
+      "result": "FAIL",
+      "seconds": 20.287409199999995,
+      "note": "token for planner (planner1@ancorlabs.org): 522  "
+    },
+    {
+      "name": "production: release",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"production: planner reads stock, creates the order\""
+    },
+    {
+      "name": "production: stage components from storage bins",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"production: planner reads stock, creates the order\""
+    },
+    {
+      "name": "production: issue components",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"production: planner reads stock, creates the order\""
+    },
+    {
+      "name": "production: complete (inspection plan resolved)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"production: planner reads stock, creates the order\""
+    },
+    {
+      "name": "indent: raise",
+      "result": "FAIL",
+      "seconds": 20.115871,
+      "note": "token for indent (indent1@ancorlabs.org): 522  "
+    },
+    {
+      "name": "indent: raiser cannot approve, department head approves",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"indent: raise\""
+    },
+    {
+      "name": "maintenance: technician reports a fault",
+      "result": "FAIL",
+      "seconds": 19.966171000000003,
+      "note": "token for maint (maint1@ancorlabs.org): 522  "
+    },
+    {
+      "name": "maintenance: supervisor accepts, work order with SLA",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"maintenance: technician reports a fault\""
+    },
+    {
+      "name": "maintenance: technician works and completes",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"maintenance: technician reports a fault\""
+    }
+  ]
+}

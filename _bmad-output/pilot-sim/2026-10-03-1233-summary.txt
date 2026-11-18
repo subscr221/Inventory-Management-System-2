@@ -1,0 +1,34 @@
+Simulated pilot day  2026-10-03-1233
+
+== password-grant client
+== API day (pilot-day.ts)
+  FAIL  ERP feed: purchase order MK-PO-D2610030433                   1.56 s  token for erp (erp1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client
+  FAIL  ERP feed: sales order MK-SO-D2610030433                      1.06 s  token for erp (erp1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client
+  FAIL  inbound: gate entry                                          0.34 s  token for gate (gate1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client
+  SKIP  inbound: weighbridge (net within the PO line band)           0.00 s  needs "inbound: gate entry"
+  SKIP  inbound: GRN plain item                                      0.00 s  needs "inbound: gate entry"
+  SKIP  inbound: GRN lot item                                        0.00 s  needs "inbound: gate entry"
+  SKIP  inbound: GRN consignment item (ownership agreement)          0.00 s  needs "inbound: gate entry"
+  SKIP  inbound: putaway into a storage bin                          0.00 s  needs "inbound: gate entry"
+  SKIP  job-work: receive customer material against the challan (~   0.00 s  needs "inbound: gate entry"
+  SKIP  job-work: the same challan and lot again is refused          0.00 s  needs "inbound: gate entry"
+  SKIP  count: cycle count with a variance                           0.00 s  needs "inbound: gate entry"
+  SKIP  count: counter cannot approve, another person approves       0.00 s  needs "inbound: gate entry"
+  FAIL  outbound: generate picks for a seeded sales order            0.72 s  token for whmanager (cmf_supervisor@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client
+  SKIP  outbound: confirm pick lines (lot item FEFO, plain item)     0.00 s  needs "outbound: generate picks for a seeded sales order"
+  SKIP  outbound: pack refuses a lot that was not picked             0.00 s  needs "outbound: generate picks for a seeded sales order"
+  SKIP  outbound: pack                                               0.00 s  needs "outbound: generate picks for a seeded sales order"
+  SKIP  outbound: IRN, shipping documents                            0.00 s  needs "outbound: generate picks for a seeded sales order"
+  SKIP  outbound: dispatch                                           0.00 s  needs "outbound: generate picks for a seeded sales order"
+  FAIL  production: planner reads stock, creates the order           0.32 s  token for planner (planner1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client
+  SKIP  production: release                                          0.00 s  needs "production: planner reads stock, creates the order"
+  SKIP  production: stage components from storage bins               0.00 s  needs "production: planner reads stock, creates the order"
+  SKIP  production: issue components                                 0.00 s  needs "production: planner reads stock, creates the order"
+  SKIP  production: complete (inspection plan resolved)              0.00 s  needs "production: planner reads stock, creates the order"
+  FAIL  indent: raise                                                0.32 s  token for indent (indent1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client
+  SKIP  indent: raiser cannot approve, department head approves      0.00 s  needs "indent: raise"
+  FAIL  maintenance: technician reports a fault                      0.33 s  token for maint (maint1@ancorlabs.org): 400 unauthorized_client Unexpected error when authenticating client
+  SKIP  maintenance: supervisor accepts, work order with SLA         0.00 s  needs "maintenance: technician reports a fault"
+  SKIP  maintenance: technician works and completes                  0.00 s  needs "maintenance: technician reports a fault"
+  FAIL: 0/28 steps passed, 7 failed, 21 skipped
+== Browser day (Playwright, real sign-in)

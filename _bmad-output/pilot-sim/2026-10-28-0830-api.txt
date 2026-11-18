@@ -1,0 +1,50 @@
+
+Simulated pilot day (CMF-ALIGARH, 2026-10-28T00:30:12.447Z)
+PASS  ERP feed: purchase order MK-PO-D2610280030                   2.67 s  1 applied, 4 lines
+PASS  ERP feed: sales order MK-SO-D2610280030                      1.89 s  2 applied, 2 dispatch-order ids read on the box
+PASS  inbound: gate entry                                          0.66 s  binding matched to MK-PO-D2610280030
+PASS  inbound: weighbridge (net within the PO line band)           0.30 s  net 5000.000 kg accepted
+PASS  inbound: GRN plain item                                      0.68 s  50 BRG-6204 at RECV-DOCK, line posted, putaway task ready
+PASS  inbound: GRN lot item                                        0.72 s  100 RM-COIL-2MM at RECV-DOCK, line posted, putaway task ready
+PASS  inbound: GRN consignment item (ownership agreement)          0.32 s  500 FAST-M8-BOLT at RECV-DOCK, line posted, putaway task ready
+PASS  inbound: putaway into a storage bin                          1.97 s  3 tasks completed into BIN-A03
+PASS  job-work: receive customer material against the challan (~   1.37 s  120 CUST-SHEET-3MM of JW-MK-0001 at RECV-DOCK, receipt 02bbe6bf-e227-417e-a97a-4d7522d3d685, no PO, no ticket
+PASS  job-work: the same challan and lot again is refused          0.30 s  JOBWORK_CHALLAN_DUPLICATE for DC-SMOKE-CMF-ALIGARH-MVRDO6J1
+PASS  count: cycle count with a variance                           0.88 s  system 1916, counted 1915, adjustment pending
+PASS  count: counter cannot approve, another person approves       1.05 s  self-approval refused (COUNT_ENTERER_CANNOT_APPROVE), approved by the warehouse manager
+PASS  outbound: generate picks for a seeded sales order            0.58 s  MK-SO-D2610280030: 2.000 BRG-6204 + 10.000 RM-COIL-2MM, 2 task(s)
+PASS  outbound: confirm pick lines (lot item FEFO, plain item)     2.08 s  2 BRG-6204 from 75b85db9-084b-4c77-8c84-252d8cb9abd3, 10 RM-COIL-2MM (lot) from c457e170-6742-454b-a2c8-34f782131421
+PASS  outbound: pack refuses a lot that was not picked             0.90 s  PACKED_LINE_NOT_PICKED for RM-COIL-2MM with a lot that was not picked, no packing record
+PASS  outbound: pack                                               0.59 s  2 dispatch order lines packed
+PASS  outbound: IRN, shipping documents                            0.90 s  one IRN covers 2 lines, 8 documents
+PASS  outbound: dispatch                                           0.60 s  2 lines dispatched
+PASS  production: planner reads stock, creates the order           2.01 s  2 x FG-PUMP-12
+PASS  production: release                                          0.86 s  status released
+PASS  production: stage components from storage bins               1.39 s  3 lines staged
+PASS  production: issue components                                 1.21 s  3 components issued, order in process
+PASS  production: complete (inspection plan resolved)              0.34 s  lot ?, QC task raised
+PASS  indent: raise                                                0.92 s  approval required from 4eec160d-f8f0-472c-94da-06fbc2d4181e
+PASS  indent: raiser cannot approve, department head approves      0.56 s  self-approval refused (INDENT_RAISER_CANNOT_APPROVE), approved
+PASS  maintenance: technician reports a fault                      0.63 s  on AST-PRESS-01
+PASS  maintenance: supervisor accepts, work order with SLA         0.66 s  priority p2, resolution due 2026-10-29T00:34:47.379Z
+PASS  maintenance: technician works and completes                  0.84 s  status completed
+PASS  qc: sample and inspect an open task                          1.45 s  lot MO-2026-0042-L1 (2.000000 FG-PUMP-12), sample of 2, 2 characteristics conform
+PASS  qc: the inspector cannot disposition, the QC head accepts    1.18 s  the inspector who recorded the results refused (SOD_VIOLATION), accepted by the QC head
+PASS  qc: retention sample logged in the quarantine bin            0.82 s  1 EA kept in QCH-BIN-01, sample 2c881487-3da5-4fcd-a654-25347ec223fb
+PASS  qc: release the lot                                          0.58 s  released ({"release_id":"0a81ae88-9849-4f1e-adc4-d94e6e20ab01","lot_id":"010bc0d2-6645-44b8-9162-bc062c1463b7","task_id":"535c8aad)
+PASS  bin move: storekeeper moves stock to another storage bin ~   1.92 s  2 BRG-6306 BIN-C01 (700 to 698) to BIN-A01 (468 to 470), valuation unchanged at 606541.5, move 3f07bc73-c653-4265-9cbb-6b835acd5577
+PASS  bin move: more than the bin holds is refused                 0.82 s  699 of 698: BIN_MOVE_INSUFFICIENT_AVAILABLE, bin unchanged
+PASS  transfer: storekeeper requests a lot between two storage ~   1.38 s  2 RM-PIPE-25NB lot LOT-0133 BIN-A02 to BIN-A01, pending_approval
+PASS  transfer: no shipment before approval, the warehouse mana~   0.56 s  early ship refused (APPROVAL_REQUIRED), approved by the warehouse manager
+PASS  transfer: ship and receive                                   1.13 s  status received, BIN-A01 4017.8 to 4019.8
+PASS  replenishment: check the site and read the task board        0.54 s  0 created by the check, 0 open of 0 on the board
+SKIP  replenishment: operator confirms one task                    0.00 s  no open replenishment task: the site has no forward-pick min/max configured (PUT /api/v1/replenishment/config is a planning decision, not a daily action)
+PASS  refused captures: department head reads the open queue       0.54 s  0 open at the site, 0 captured by somebody else
+SKIP  refused captures: resolve one captured by somebody else      0.00 s  no open refused capture of another person at the site
+PASS  offcut: read the job-work order holdings                     1.08 s  3 orders, holdings JW-MK-0002: 0, JW-MK-0003: 0, JW-MK-0001: 0
+SKIP  offcut: CFO signs a job-work offcut acquisition              0.00 s  no retained offcut holding: capturing one needs consumption, output, QC release, dispatch and an ERP-acknowledged billing feed on the job-work order, none of which the pilot day does
+PASS  meter: technician records a reading                          1.09 s  MTR-FORKLIFT-01 on AST-FORKLIFT-01: 75 to 80 km
+PASS  meter: a reading below the current one is refused            0.27 s  79 after 80: METER_READING_REGRESSION
+
+FAIL: 42/45 steps passed, 0 failed, 3 skipped
+report: D:\WINCODE\Inventory Management System_2\_bmad-output\pilot-sim\2026-10-28-00-30-api.json

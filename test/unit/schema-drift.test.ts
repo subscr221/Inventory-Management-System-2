@@ -49,6 +49,31 @@ const EXPECTED = [
     ],
     indexes: [] as string[],
   },
+  // Story 2.10 (D1, D2): the item group master and its rights and recipient projections live in
+  // item_master.sql so every harness that applies it gets the foreign key target. Delete is a
+  // guarded feature (never-used groups only), so app_user holds DELETE on all three.
+  {
+    canonical: 'read/projections/item_master.sql',
+    table: 'item_group',
+    constraints: ['chk_item_group_status', 'chk_item_group_code', 'chk_item_group_name'],
+    indexes: ['uq_item_group_name_ci'],
+    indexBodies: ['ON item_group (lower(name))'],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
+  {
+    canonical: 'read/projections/item_master.sql',
+    table: 'item_group_right',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
+  {
+    canonical: 'read/projections/item_master.sql',
+    table: 'item_group_recipient',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
   {
     canonical: 'read/projections/location_register.sql',
     table: 'location_register',
@@ -3202,6 +3227,35 @@ describe('Story 2.1 schema drift guard', () => {
       itemSql.includes('legal_metrology_required    BOOLEAN NOT NULL DEFAULT false,'),
       'item_master.sql CREATE TABLE missing legal_metrology_required',
     );
+  });
+
+  it('Story 2.10 mirrors item_group_id, its foreign key and ever_assigned into both copies', () => {
+    // D2, D9: an item carries at most one group (nullable column, existing items stay valid);
+    // ON DELETE RESTRICT stays on the key; ever_assigned is the "never used" delete guard.
+    const itemSql = read('read/projections/item_master.sql');
+    for (const fragment of [
+      'ALTER TABLE item_master ADD COLUMN IF NOT EXISTS item_group_id UUID;',
+      'ever_assigned BOOLEAN NOT NULL DEFAULT false',
+      'CREATE INDEX IF NOT EXISTS idx_item_master_item_group ON item_master (item_group_id);',
+    ]) {
+      assert.ok(itemSql.includes(fragment), `item_master.sql missing ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
+    const fk = extractDoBlock(itemSql, 'fk_item_master_item_group');
+    assert.strictEqual(extractDoBlock(initDb, 'fk_item_master_item_group'), fk);
+    assert.ok(
+      fk.includes(
+        'FOREIGN KEY(item_group_id)REFERENCES item_group(item_group_id)ON DELETE RESTRICT',
+      ),
+      fk,
+    );
+    // The item group tables come before item_master in both files: the key needs its target.
+    for (const sql of [itemSql, initDb]) {
+      assert.ok(
+        sql.indexOf('CREATE TABLE IF NOT EXISTS item_group (') <
+          sql.indexOf('fk_item_master_item_group'),
+      );
+    }
   });
 
   // Story 11.5 code review (2026-09-09). The EXPECTED loop compares canonical against init-db.sql,

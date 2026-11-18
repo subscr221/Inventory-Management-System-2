@@ -5,7 +5,8 @@
     "department.head@example.com": { "display_name": "Current department head" },
     "finance.controller@example.com": { "display_name": "Current finance controller" },
     "cfo@example.com": { "display_name": "Current CFO" },
-    "site.head@example.com": { "display_name": "Current site head" }
+    "site.head@example.com": { "display_name": "Current site head" },
+    "store.controller@example.com": { "display_name": "Current store controller" }
   },
   "roles": [
     {
@@ -105,6 +106,13 @@
       "function_scope": "read",
       "location_id": "site",
       "holder": "site.head@example.com"
+    },
+    {
+      "role": "store_controller",
+      "module": "warehouse",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "store.controller@example.com"
     }
   ]
 }

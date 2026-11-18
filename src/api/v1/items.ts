@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import type { PoolClient } from 'pg';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import {
@@ -21,6 +22,12 @@ import {
   ITEM_STATUSES,
   STANDARD_COST_DESIGNATION,
 } from '../../read/projections/item_master.js';
+import { assertItemGroupAssignable, markEverAssigned } from '../../read/projections/item_group.js';
+import {
+  ITEM_GROUP_MAINTAINER_ROLE,
+  assertItemGroupRight,
+  notifyItemGroupChange,
+} from '../../compliance/item-group-authority.js';
 import type {
   CreateItemInput,
   UpdateItemPatch,
@@ -46,9 +53,15 @@ interface ActorContext {
   eventLocationId: string;
 }
 
-function actorContext(req: IncomingMessage): ActorContext {
+function actorContext(req: IncomingMessage, preferRole?: string): ActorContext {
   const authContext = getAuthContext(req);
-  const assignment = getAuthorizedAssignment(req);
+  const authorized = getAuthorizedAssignment(req);
+  // Story 2.10: a group change is authorized by inventory_controller, so the event and its
+  // notification are stamped under that role even when the module gate picked another one.
+  const assignment =
+    preferRole && authorized?.role !== preferRole
+      ? (authContext?.roles.find((r) => r.role === preferRole) ?? authorized)
+      : authorized;
   const userId = authContext?.userId ?? NO_LOCATION_UUID;
   const role = assignment?.role ?? '';
   const auditLocationId = assignment?.locationId ?? '*';
@@ -248,6 +261,58 @@ async function assertBusinessStream(value: string): Promise<void> {
   }
 }
 
+/**
+ * Story 2.10 (AC 4, AC 6): when a request carries a group value that differs from the item's
+ * current one (`current`; null on create), the caller must hold inventory_controller plus the
+ * item group edit right (on top of the route's inventory write gate); a string value must name
+ * an existing, active group (the shared D6 guard, read FOR NO KEY UPDATE) and marks it
+ * ever-assigned (D9); null clears. Returns the group id to store, or undefined when the value
+ * leaves the group as it was (nothing is checked, nothing is written).
+ */
+async function resolveItemGroupAssignment(
+  req: IncomingMessage,
+  value: unknown,
+  current: string | null,
+  client: PoolClient,
+): Promise<string | null | undefined> {
+  if (value === current) return undefined;
+  if (typeof value === 'string' && current !== null && value.toLowerCase() === current) {
+    return undefined;
+  }
+  await assertItemGroupRight(getAuthContext(req), 'edit', client);
+  if (value === null) return null;
+  const group = await assertItemGroupAssignable(value, client);
+  await markEverAssigned(group.item_group_id, client);
+  return group.item_group_id;
+}
+
+/** AC 7: an item's group set, changed or cleared tells everyone, in the item write's transaction. */
+async function notifyItemGroupAssignment(
+  client: PoolClient,
+  actor: ActorContext,
+  eventType: 'item.created' | 'item.updated',
+  sku: string,
+  before: string | null,
+  after: string | null,
+  correlationId: string,
+): Promise<void> {
+  if (before === after) return;
+  const verb =
+    before === null
+      ? 'Item group set'
+      : after === null
+        ? 'Item group cleared'
+        : 'Item group changed';
+  await notifyItemGroupChange(client, {
+    event_type: eventType,
+    actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+    status_verb: verb,
+    object_type: 'item',
+    object_id: sku,
+    correlation_id: correlationId,
+  });
+}
+
 function isDuplicateSkuError(err: unknown): boolean {
   return (
     typeof err === 'object' &&
@@ -316,11 +381,19 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
     ...standardCost,
   };
 
-  const actor = actorContext(req);
+  let actor = actorContext(req);
+  const correlationId = randomUUID();
   const pool = getPool();
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if ('item_group_id' in body) {
+      const groupId = await resolveItemGroupAssignment(req, body['item_group_id'], null, client);
+      if (groupId !== undefined) {
+        input.item_group_id = groupId;
+        actor = actorContext(req, ITEM_GROUP_MAINTAINER_ROLE);
+      }
+    }
     const item = await createItem(input, client);
     await persistEvent(
       {
@@ -329,13 +402,22 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
         event_type: 'item.created',
         payload: { item },
         metadata: {
-          correlation_id: randomUUID(),
+          correlation_id: correlationId,
           actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
           occurred_at: new Date().toISOString(),
         },
       },
       auditCtxFor(req, actor, 201),
       client,
+    );
+    await notifyItemGroupAssignment(
+      client,
+      actor,
+      'item.created',
+      sku,
+      null,
+      item.item_group_id,
+      correlationId,
     );
     await client.query('COMMIT');
     sendJson(res, 201, item);
@@ -421,12 +503,15 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
     patch.status = body['status'];
   }
   Object.assign(patch, parseStandardCostFields(body));
-  if (Object.keys(patch).length === 0) {
+  // Story 2.10: resolved (right, guard, normalization) inside the transaction below.
+  const hasGroupKey = 'item_group_id' in body;
+  if (Object.keys(patch).length === 0 && !hasGroupKey) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'At least one updatable field is required');
     return;
   }
 
-  const actor = actorContext(req);
+  let actor = actorContext(req);
+  const correlationId = randomUUID();
   const pool = getPool();
   const client = await pool.connect();
   try {
@@ -436,6 +521,18 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
       throw new AppError(404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, {
         sku,
       });
+    }
+    if (hasGroupKey) {
+      const groupId = await resolveItemGroupAssignment(
+        req,
+        body['item_group_id'],
+        before.item_group_id,
+        client,
+      );
+      if (groupId !== undefined) {
+        patch.item_group_id = groupId;
+        actor = actorContext(req, ITEM_GROUP_MAINTAINER_ROLE);
+      }
     }
     // AC6 merged validation (mirrors src/api/v1/doa.ts's value-band check): a patch that only
     // touches standard_cost_amount must still be checked against the EXISTING designation, and
@@ -457,13 +554,22 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
         event_type: 'item.updated',
         payload: { item_id: before.item_id, sku, before, after },
         metadata: {
-          correlation_id: randomUUID(),
+          correlation_id: correlationId,
           actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
           occurred_at: new Date().toISOString(),
         },
       },
       auditCtxFor(req, actor, 200),
       client,
+    );
+    await notifyItemGroupAssignment(
+      client,
+      actor,
+      'item.updated',
+      sku,
+      before.item_group_id,
+      after?.item_group_id ?? null,
+      correlationId,
     );
     await client.query('COMMIT');
     sendJson(res, 200, after);

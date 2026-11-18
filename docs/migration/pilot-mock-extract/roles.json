@@ -252,6 +252,13 @@
       "holder": "cmf_supervisor@ancorlabs.org"
     },
     {
+      "role": "store_controller",
+      "module": "warehouse",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "cmf_supervisor@ancorlabs.org"
+    },
+    {
       "role": "employee",
       "module": "employee",
       "function_scope": "write",
