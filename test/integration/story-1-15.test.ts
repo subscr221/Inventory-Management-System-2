@@ -298,9 +298,10 @@ describe('Story 1.15 Employee Base Role', () => {
       'POST',
       '/api/v1/doa/entries',
       {
+        // Story 4.10 (AC 6): a raise with no matching band is refused, so the band is unbounded.
         transaction_type: 'indent_approval',
         role: 'department_head_115',
-        value_min: 5000,
+        value_min: null,
         value_max: null,
       },
       await authFor(port, `doa-115-${run}@example.com`),
@@ -523,6 +524,8 @@ describe('Story 1.15 Employee Base Role', () => {
       'My requests',
       // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
       'Report damage',
+      // Story 4.8: every signed-in person can open the grants they hold.
+      'Standing grants',
     ]);
     assert.strictEqual(res.body['role'], 'employee');
   });
@@ -539,6 +542,8 @@ describe('Story 1.15 Employee Base Role', () => {
       'My requests',
       // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
       'Report damage',
+      // Story 4.8: every signed-in person can open the grants they hold.
+      'Standing grants',
     ]);
   });
 
@@ -555,6 +560,10 @@ describe('Story 1.15 Employee Base Role', () => {
       'My requests',
       // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
       'Report damage',
+      // Story 3.13: the gate officer's operating role opens the gate entry screen.
+      'Gate entry',
+      // Story 4.8: every signed-in person can open the grants they hold.
+      'Standing grants',
     ]);
   });
 

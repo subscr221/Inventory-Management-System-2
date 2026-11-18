@@ -29,6 +29,18 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^damage-/,
   /^damageCases\./,
   /^damage-cases-/,
+  // Story 4.11: the stores counter issue page.
+  /^storesIssue\./,
+  // Story 3.15: directed putaway and the device label queue.
+  /^putaway\./,
+  /^labels\./,
+  /^grn\./,
+  // Story 3.16: the floor task inbox and pick execution screen.
+  /^floor\./,
+  // Story 4.8: the standing grants page.
+  /^standingGrants\./,
+  /^standing-grants-/,
+  /^stores-issue-/,
   /^Promise$/,
   /^Dashboard$/,
   /^Frontline$/,
@@ -76,9 +88,7 @@ function scan(dir: string): string[] {
         .map((match) => match[1]!.trim())
         .filter((literal) => /[A-Za-z]/.test(literal));
       const attrNodes = USER_FACING_ATTRS.flatMap((attr) =>
-        [...text.matchAll(new RegExp(`${attr}="([^"]+)"`, 'g'))].map((match) =>
-          match[1]!.trim(),
-        ),
+        [...text.matchAll(new RegExp(`${attr}="([^"]+)"`, 'g'))].map((match) => match[1]!.trim()),
       ).filter((literal) => /[A-Za-z]/.test(literal));
       return [...textNodes, ...attrNodes];
     });

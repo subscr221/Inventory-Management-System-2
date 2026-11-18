@@ -4,7 +4,14 @@ baseline_commit: 112587c2c7e3860ac966b1d323ed66cd7278b190
 
 # Story 3.7: Packing, Shipping, and Dispatch Documents (FR-W-05, FR-W-06)
 
-Status: review
+Status: done
+
+## Review Order
+1. `src/compliance/dispatch.ts` — the three apply functions and the FOR UPDATE lot-lock + LOT_ON_HOLD gate (AC3).
+2. `src/api/v1/dispatch.ts` — pack / generate-documents / dispatch handlers and RBAC/site scoping.
+3. `src/warehouse/document-renderer.ts` — plain-text BOL, packing slip, commercial invoice, labels.
+4. `read/projections/packing_record.sql` / `dispatch_document.sql` — DDL + additive `dispatch_order_status` ALTER.
+5. `test/integration/story-3-7.test.ts` — 13 tests incl. both LOT_ON_HOLD cases, RBAC, site scope, stock decrement.
 
 ## Story
 

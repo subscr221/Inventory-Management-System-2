@@ -46,8 +46,9 @@ const EXPECTED = [
       'chk_item_master_variance_tolerance_percent',
       'chk_item_master_count_variance_tolerance_percent',
       'chk_item_master_size_class',
+      'fk_item_master_item_group',
     ],
-    indexes: [] as string[],
+    indexes: ['idx_item_master_item_group'] as string[],
   },
   // Story 2.10 (D1, D2): the item group master and its rights and recipient projections live in
   // item_master.sql so every harness that applies it gets the foreign key target. Delete is a
@@ -547,8 +548,64 @@ const EXPECTED = [
   {
     canonical: 'read/projections/indent_line.sql',
     table: 'indent_line',
-    constraints: ['uq_indent_line_no', 'chk_indent_line_qty_positive'],
-    indexes: ['idx_indent_line_sku'],
+    constraints: [
+      'uq_indent_line_no',
+      'chk_indent_line_qty_positive',
+      'chk_indent_line_route',
+      'chk_indent_line_status',
+      'chk_indent_line_rejection_reason',
+      'chk_indent_line_issue_state',
+      'chk_indent_line_issued_qty',
+      'chk_indent_line_closed_reason',
+    ],
+    indexes: ['idx_indent_line_sku', 'idx_indent_line_status', 'idx_indent_line_issue_state'],
+  },
+  // Story 4.11: stores counter issue slips
+  {
+    canonical: 'read/projections/indent_issue.sql',
+    table: 'indent_issue',
+    constraints: ['uq_indent_issue_number_ext', 'uq_indent_issue_source_event'],
+    indexes: ['idx_indent_issue_indent'],
+  },
+  {
+    canonical: 'read/projections/indent_issue.sql',
+    table: 'indent_issue_line',
+    constraints: ['chk_indent_issue_line_qty_positive'],
+    indexes: [
+      'idx_indent_issue_line_issue',
+      'idx_indent_issue_line_indent_line',
+      'uq_indent_issue_line_issue_line',
+    ],
+    // Review: a slip line is immutable once written, so app_user never updates it.
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 4.8: standing approvals and self-approval limits. The CHECKs are inline in the CREATE
+  // TABLE (compared between the two copies); the item-group FK is a named guarded block.
+  {
+    canonical: 'read/projections/standing_grant.sql',
+    table: 'standing_grant',
+    constraints: ['fk_standing_grant_item_group'],
+    indexes: [
+      'idx_standing_grant_active_grantee',
+      'idx_standing_grant_assigner',
+      'idx_standing_grant_status_end',
+    ],
+    indexBodies: [
+      'CONSTRAINT uq_standing_grant_ref UNIQUE (grant_ref)',
+      "CONSTRAINT chk_standing_grant_kind CHECK (grant_kind IN ('standing_approval', 'self_approval_limit'))",
+      "CONSTRAINT chk_standing_grant_status CHECK (status IN ('pending-finance', 'active', 'rejected', 'revoked', 'expired'))",
+      'CONSTRAINT chk_standing_grant_shape CHECK (',
+      'CONSTRAINT chk_standing_grant_cap CHECK (monthly_qty_cap IS NULL OR monthly_qty_cap > 0)',
+      'CONSTRAINT chk_standing_grant_parties CHECK (grantee_user_id <> assigner_user_id)',
+      "CONSTRAINT chk_standing_grant_revoke_reason CHECK (revoke_reason IS NULL OR revoke_reason IN ('assigner', 'account_disabled'))",
+    ],
+  },
+  {
+    canonical: 'read/projections/standing_grant.sql',
+    table: 'standing_grant_prune_setting',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    indexBodies: ['CONSTRAINT chk_standing_grant_prune_interval CHECK (prune_interval_days >= 1)'],
   },
   // Story 4.4: Purchase Order Management
   {
@@ -2661,6 +2718,32 @@ describe('Story 2.1 schema drift guard', () => {
     assert.ok(
       migrateSource.indexOf("'../../read/projections/grn_line_condition.sql'") >
         migrateSource.indexOf("'../../read/projections/grn_jobwork_challan.sql'"),
+    );
+  });
+
+  it('Story 3.14 mirrors the GRN line inspect migration into init-db.sql, after grn_line', () => {
+    const inspectSql = read('read/projections/grn_line_inspect.sql');
+    for (const fragment of [
+      'ADD COLUMN IF NOT EXISTS inspect_on_opening TEXT',
+      'ADD COLUMN IF NOT EXISTS inspect_note TEXT',
+      'ADD COLUMN IF NOT EXISTS inspect_photo_ref TEXT',
+      'ADD COLUMN IF NOT EXISTS material_photo_ref TEXT',
+      'chk_grn_line_inspect_on_opening',
+      'chk_grn_line_inspect_evidence',
+    ]) {
+      assert.ok(inspectSql.includes(fragment), `grn_line_inspect.sql missing ${fragment}`);
+    }
+    const body = inspectSql.slice(inspectSql.indexOf('ALTER TABLE grn_line ADD COLUMN'));
+    const mirrorAt = normalizeSql(initDb).indexOf(normalizeSql(body));
+    assert.ok(mirrorAt >= 0, 'init-db.sql does not mirror grn_line_inspect.sql verbatim');
+    const grnLineAt = normalizeSql(initDb)
+      .toLowerCase()
+      .indexOf('create table if not exists grn_line(');
+    assert.ok(grnLineAt >= 0, 'init-db.sql defines grn_line');
+    assert.ok(mirrorAt > grnLineAt, 'the mirror must follow the grn_line definition it alters');
+    assert.ok(
+      migrateSource.indexOf("'../../read/projections/grn_line_inspect.sql'") >
+        migrateSource.indexOf("'../../read/projections/grn_line_condition.sql'"),
     );
   });
 

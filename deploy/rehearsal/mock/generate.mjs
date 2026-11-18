@@ -417,7 +417,8 @@ const people = [
   ['cmf_supervisor', 'Site Head', false, [['warehouse_manager', 'warehouse', W, 'site'], ['warehouse_manager', 'inventory', W, 'site'], ['warehouse_manager', 'receiving', W, 'site'], ['site_head', 'jobwork', W, 'site'], ['site_head', 'jobwork', R, 'site'], ['site_head', 'notification', R, 'site'], ['store_controller', 'warehouse', R, 'site']]],
   ['dev1', 'Devender', false, [['engineering_admin', 'engineering', W, '*'], ['engineering_admin', 'engineering', R, '*']]],
   ['erp1', 'ERP adapter service', false, [['svc_erp_adapter', 'inventory', W, '*']]],
-  ['gate1', 'Ramesh Yadav', false, [['gate_officer', 'inventory', W, 'site'], ['weighbridge_operator', 'inventory', W, 'site']]],
+  // Story 3.13 (D2): the dedicated gate/weighbridge modules sit beside inventory; either admits the screen.
+  ['gate1', 'Ramesh Yadav', false, [['gate_officer', 'inventory', W, 'site'], ['weighbridge_operator', 'inventory', W, 'site'], ['gate_officer', 'gate', W, 'site'], ['weighbridge_operator', 'weighbridge', W, 'site']]],
   ['store1', 'Suresh Verma', false, [['store_assistant', 'receiving', W, 'site'], ['store_assistant', 'inventory', W, 'site'], ['store_assistant', 'warehouse', W, 'site']]],
   ['unload1', 'Mahesh Tyagi', false, [['unloading_supervisor', 'receiving', W, 'site'], ['unloading_supervisor', 'inventory', R, 'site'], ['unloading_supervisor', 'notification', R, 'site']]],
   ['qc1', 'Neha Saxena', false, [['qc_inspector', 'qc', W, 'site'], ['qc_inspector', 'quality', W, 'site'], ['qc_inspector', 'inventory', R, 'site']]],
@@ -478,7 +479,14 @@ const operations = {
   // calibration work in the pilot) and migration.variance_explanation belongs to the rehearsal.
   doa_entries: [
     ['inventory.count_adjustment', 'warehouse_manager'],
-    ['indent_approval', 'department_head'],
+    // Story 4.10 (owner ruling O1): two value bands, department head to 1,00,000 inclusive.
+    ['indent_approval', 'department_head', null, 100000],
+    ['indent_approval', 'finance_controller', 100000, null],
+    // Story 4.8 (D3): the site head and the head of department assign standing approvals and
+    // self-approval limits; the finance controller approves each once. No value bands.
+    ['standing_grant_assign', 'site_head'],
+    ['standing_grant_assign', 'department_head'],
+    ['standing_grant_finance', 'finance_controller'],
     ['purchase_order_approval', 'department_head'],
     ['supplier_onboarding', 'department_head'],
     ['transfer_request', 'warehouse_manager'],
@@ -503,7 +511,12 @@ const operations = {
     ['damage.qc_concurrence', 'qc_head'],
     ['damage.finance_concurrence', 'finance_controller'],
     ['damage.escalation', 'ceo'],
-  ].map(([transaction_type, role]) => ({ transaction_type, role, value_min: null, value_max: null })),
+  ].map(([transaction_type, role, value_min = null, value_max = null]) => ({
+    transaction_type,
+    role,
+    value_min,
+    value_max,
+  })),
   // Unique per (criticality_class, safety_flag); together they cover every priority p1 to p4.
   sla_policies: [
     ['critical', true, 'p1', 15, 4], ['critical', false, 'p1', 30, 8],

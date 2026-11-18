@@ -104,16 +104,53 @@ export async function setupOperations(ctx: Ctx): Promise<void> {
     });
   }
 
+  await step('setup: stores inspection bay (IB-01)', async () => {
+    // Story 3.14: acceptance posts GOOD rows to one active staging zone per site. The location tree
+    // comes from seed.mjs; this adds the bay through the API as a warehouse manager.
+    const reader = await ctx.as('invctl');
+    const siteRes = await ctx.request(
+      'GET',
+      `/api/v1/locations/${encodeURIComponent(ctx.siteCode)}`,
+      undefined,
+      reader,
+    );
+    must(siteRes, 200, `site ${ctx.siteCode}`);
+    const site = (siteRes.body['location'] as Json | undefined) ?? siteRes.body;
+    const found = await ctx.request('GET', '/api/v1/locations/IB-01', undefined, reader);
+    if (found.status === 200) return 'exists';
+    if (found.status !== 404) throw new Error(`reading IB-01 answered ${found.status}`);
+    const created = await ctx.request(
+      'POST',
+      '/api/v1/locations',
+      {
+        location_code: 'IB-01',
+        level: 'zone',
+        parent_location_id: site['location_id'],
+        zone_type: 'staging',
+        status: 'active',
+      },
+      await ctx.as('whmanager'),
+    );
+    if (created.status === 409 && created.body['error_code'] === 'DUPLICATE_LOCATION_CODE')
+      return 'exists';
+    must(created, 201, 'inspection bay IB-01');
+    return 'created';
+  });
+
   await step('setup: DOA entries', async () => {
     const headers = await ctx.as('compliance');
     let created = 0;
     const entries = ops['doa_entries'] as Json[];
     for (const e of entries) {
-      // There is no list route: resolve tells whether an active band already answers the type.
+      // There is no list route: resolve tells whether an active band already answers the type at
+      // a value inside this band (Story 4.10 seeds two value bands for indent_approval).
+      const vmin = e['value_min'];
+      const vmax = e['value_max'];
+      const probe = typeof vmin === 'number' ? vmin + 1 : typeof vmax === 'number' ? vmax : 1;
       const resolved = await ctx.request(
         'POST',
         '/api/v1/doa/resolve',
-        { transaction_type: e['transaction_type'], value: 1 },
+        { transaction_type: e['transaction_type'], value: probe },
         headers,
       );
       if (!(resolved.status === 404 && resolved.body['error_code'] === 'NO_DOA_ENTRY_MATCH'))

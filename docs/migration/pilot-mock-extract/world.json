@@ -853,6 +853,30 @@
         "transaction_type": "indent_approval",
         "role": "department_head",
         "value_min": null,
+        "value_max": 100000
+      },
+      {
+        "transaction_type": "indent_approval",
+        "role": "finance_controller",
+        "value_min": 100000,
+        "value_max": null
+      },
+      {
+        "transaction_type": "standing_grant_assign",
+        "role": "site_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "standing_grant_assign",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "standing_grant_finance",
+        "role": "finance_controller",
+        "value_min": null,
         "value_max": null
       },
       {

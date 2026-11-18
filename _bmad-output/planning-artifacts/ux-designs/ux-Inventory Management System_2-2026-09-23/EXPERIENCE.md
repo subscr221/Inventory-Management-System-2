@@ -233,7 +233,7 @@ Found during mock review and recorded in `.memlog.md`:
 - Report damage needs ad-hoc QC task creation; a finance commercial outcome endpoint (debit note, return, write-off) is unverified.
 - An indent with no band match is stored without an approver and then refused with NOT_RESOLVED_APPROVER, so it is stuck (compliance/indent.ts:599-603).
 - Only amount-band indent rules are built; item category and department rules from Story 4.3 are not.
-- Weighbridge tolerance breaches target the role receiving_supervisor (src/compliance/weighbridge.ts:11, src/api/v1/weighbridge.ts:34) but the pilot roles file only has unloading_supervisor, so breach tasks would reach nobody at pilot.
+- Weighbridge tolerance breaches route to `unloading_supervisor` (primary) and `warehouse_manager` (escalation above the 5 percent band or when the primary is unavailable); the pilot roles file has both. Corrected by Story 3.13.
 
 ## Resolved Questions
 
@@ -255,6 +255,13 @@ All 14 open questions were resolved on 2026-09-25; the Resolved Questions table 
 | 12 | "Hold for buyer decision" route for excess | Parked post-pilot |
 | 13 | Plate reading and offline QR on the scanner | Plate reading best effort, always human-confirmed; challan QR resolves offline against synced POs |
 | 14 | Site-configurable receiving reason labels | Parked post-pilot |
+| 15 | Gate: offline PO and ASN data? (Story 3.13 Q1) | Extend the offline sync config with a dedicated `erp_open_purchase_orders` bucket at pilot, then add ASNs to it |
+| 16 | Gate: challan resolves ASN first? (Q2) | Yes - try ASN then PO, remembering whichever hit; offline means a typed fallback |
+| 17 | Gate: focus chain (Q6) | Column, batch / lot, qty, UOM on picking lines; PO ref and supplier name here; every exception is select-then-edit with an audit row |
+| 18 | Gate: challan photo on desktop (Q3) | The desktop pupil uploads a phone photo over the camera link |
+| 19 | Gate: weighbridge indicator link (Q5) | Post-pilot; pilot reading is MANUAL from the display |
+| 20 | Gate: where does the recorded weight sit vs 3.4? (Q10) | A separate weighment record, attributed and reversible, not a GRN line edit |
+
 
 ## Remaining Actions
 

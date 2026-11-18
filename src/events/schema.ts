@@ -464,6 +464,15 @@ export interface GoodsReceivedPayload {
   reason_note?: string;
   /** Story 3.11: opaque photo attachment key (the challan_photo_ref precedent), required with 'OTHER'. */
   reason_photo_ref?: string;
+  /**
+   * Story 3.14: what the storekeeper saw while unloading. A NOTE for the inspector, not a verdict;
+   * 'suspected' or 'observed' only, with an optional one-line note and photo.
+   */
+  inspect_on_opening?: 'suspected' | 'observed';
+  inspect_note?: string;
+  inspect_photo_ref?: string;
+  /** Story 3.14: one material photo of what arrived, required by the acceptance screen. */
+  material_photo_ref?: string;
 }
 
 export interface GoodsReceivedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -964,6 +973,12 @@ export interface IndentLineInput {
   requested_qty: number;
   uom: string;
   unit_price_estimate?: number;
+  /** Story 4.10: per-line routing frozen at capture; absent on pre-4.10 events (defaults to doa). */
+  approval_route?: 'doa' | 'standing_approval' | 'self_approval';
+  approver_actor_id?: string;
+  doa_entry_id?: string;
+  /** Story 4.8 (D6): the standing approval a standing_approval line rides on; set by the server. */
+  standing_grant_id?: string;
 }
 
 export interface IndentRaisedPayload {
@@ -986,6 +1001,48 @@ export interface IndentRaisedPayload {
 export interface IndentRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'indent.raised';
   payload: IndentRaisedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 4.8: Standing Approvals and Self-Approval Limits
+// ---------------------------------------------------------------------------
+
+export interface StandingGrantAssignedPayload {
+  grant_id: string;
+  grant_kind: 'standing_approval' | 'self_approval_limit';
+  grantee_user_id: string;
+  site_id: string;
+  /** Exactly one of these two for a standing approval; neither for a limit. */
+  scope_sku?: string;
+  scope_item_group_id?: string;
+  /** Standing approval only; NUMERIC text or number, counted against quantity issued per IST month. */
+  monthly_qty_cap?: string | number;
+  /** Self-approval limit only; rupees, NUMERIC text or number. */
+  limit_amount?: string | number;
+  end_date?: string;
+}
+
+export interface StandingGrantAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'standing_grant.assigned';
+  payload: StandingGrantAssignedPayload;
+}
+
+export interface StandingGrantFinanceApprovedPayload {
+  grant_id: string;
+}
+
+export interface StandingGrantFinanceRejectedPayload {
+  grant_id: string;
+  reason: string;
+}
+
+export interface StandingGrantRevokedPayload {
+  grant_id: string;
+  revoke_reason: 'assigner' | 'account_disabled';
+}
+
+export interface StandingGrantExpiredPayload {
+  grant_id: string;
 }
 
 export interface IndentDuplicateFlaggedPayload {
@@ -1020,6 +1077,8 @@ export interface IndentApprovedPayload {
   indent_id: string;
   approver_actor_id: string;
   approved_at?: string;
+  /** Story 4.10 (O4): the explicit decided lines; absent only on pre-4.10 events (all lines). */
+  line_ids?: string[];
 }
 
 export interface IndentApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -1032,6 +1091,8 @@ export interface IndentRejectedPayload {
   rejection_reason: string;
   approver_actor_id: string;
   rejected_at?: string;
+  /** Story 4.10 (O4): the explicit decided lines; absent only on pre-4.10 events (all lines). */
+  line_ids?: string[];
 }
 
 export interface IndentRejectedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -1067,6 +1128,42 @@ export interface IndentClosedPayload {
 export interface IndentClosedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'indent.closed';
   payload: IndentClosedPayload;
+}
+
+// Story 4.11: stores counter issue against approved requisition lines.
+export interface IndentIssuedLineInput {
+  indent_line_id: string;
+  /** NUMERIC text, positive; never exceeds the line's open quantity. */
+  quantity: string;
+  /** Bin (location_register id) under the requisition's site. */
+  location_id: string;
+  lot_id?: string;
+  serials?: Array<{ serial_number: string }>;
+  override_expired_lot?: boolean;
+  fefo_mode?: 'fefo' | 'fifo';
+}
+
+export interface IndentIssuedPayload {
+  indent_id: string;
+  /** Fixed by the route before persistEvent so a replay writes the same slip row. */
+  issue_id: string;
+  lines: IndentIssuedLineInput[];
+}
+
+export interface IndentIssuedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.issued';
+  payload: IndentIssuedPayload;
+}
+
+export interface IndentLineClosedPayload {
+  indent_id: string;
+  indent_line_id: string;
+  closed_reason: string;
+}
+
+export interface IndentLineClosedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.line_closed';
+  payload: IndentLineClosedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -5929,6 +6026,41 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'indent.closed': {
     streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  // Story 4.11: counter issue and remainder closure are lifecycle facts on the tagged requisition;
+  // the ledger movement itself is the nested stock.issued event the issue applier persists.
+  'indent.issued': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.line_closed': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  // Story 4.8: standing approval and self-approval limit lifecycle on its own 'standing_grant'
+  // stream (stream_id = grant_id). Grants are site-scoped authorisations, not tagged business
+  // transactions, so none of these carries requiresBusinessStream. All five are server-written
+  // (the grant routes, the SCIM deprovision and the expiry sweep): the events door refuses the
+  // stream and the edge upload allow list never names it (D11).
+  'standing_grant.assigned': {
+    streamType: 'standing_grant',
+    requiresBusinessStream: false,
+  },
+  'standing_grant.finance_approved': {
+    streamType: 'standing_grant',
+    requiresBusinessStream: false,
+  },
+  'standing_grant.finance_rejected': {
+    streamType: 'standing_grant',
+    requiresBusinessStream: false,
+  },
+  'standing_grant.revoked': {
+    streamType: 'standing_grant',
+    requiresBusinessStream: false,
+  },
+  'standing_grant.expired': {
+    streamType: 'standing_grant',
     requiresBusinessStream: false,
   },
   // Story 4.4: purchase order lifecycle on the 'procurement' stream. Only

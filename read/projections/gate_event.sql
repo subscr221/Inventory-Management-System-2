@@ -11,6 +11,11 @@ CREATE TABLE IF NOT EXISTS gate_event (
   gate_id           TEXT NOT NULL,
   gate_officer_id   UUID NOT NULL,
   correlation_id    UUID NOT NULL,
+  -- Story 3.13 (AC 3): optional supplier identification captured at the gate. A gate officer can
+  -- record the matched PO vendor's code, or mark a truck as an unlisted supplier with a typed name.
+  supplier_ref_ext        TEXT,
+  supplier_name_unlisted  TEXT,
+  supplier_unlisted       BOOLEAN NOT NULL DEFAULT false,
   entered_at        TIMESTAMPTZ NOT NULL,
   business_date     DATE NOT NULL,
   status            TEXT NOT NULL DEFAULT 'open',
@@ -23,6 +28,10 @@ CREATE TABLE IF NOT EXISTS gate_event (
   CONSTRAINT chk_gate_event_vehicle_reg_nonempty CHECK (length(trim(vehicle_reg_ext)) > 0),
   CONSTRAINT chk_gate_event_challan_photo_nonempty CHECK (length(trim(challan_photo_ref)) > 0)
 );
+
+-- Story 3.13 (AC 3): add the optional supplier columns to a gate_event table created before them.
+-- Story 3.13 (D3): explicit unlisted-supplier flag; supplier_ref_ext stays null when set.
+ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_unlisted BOOLEAN NOT NULL DEFAULT false;
 
 DO $$
 BEGIN

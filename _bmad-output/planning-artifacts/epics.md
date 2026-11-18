@@ -1723,6 +1723,326 @@ So that every breach reaches a person who can act on it instead of dying in a qu
 
 ---
 
+### Story 3.13: Gate Entry and Weighbridge Capture Screen
+
+As a gate officer or weighbridge operator (gate1@ancorlabs.org holds both, `docs/migration/pilot-mock-extract/roles.json:297-310`),
+I want one edge screen that captures the gate entry (challan, photo, vehicle, supplier, PO binding) and the weigh-in gross and weigh-out tare, online or offline,
+So that a PO-backed truck gets a binding token and an accepted weighment from the PWA and receiving can raise a GRN.
+
+**Acceptance Criteria:**
+
+**Given** a caller whose assignment role is `gate_officer` or `weighbridge_operator` with `functionScope` write covering the operating site
+**When** the bootstrap runs
+**Then** navigation carries `Gate entry` from a new row `{ name: 'Gate entry', modules: 'gate', functionScope: 'write' }` resolved by a role-evaluated `hasGateScope` beside `hasDamageCaseScope` (`src/api/v1/edge.ts:389-420`, modules union at `:364-368` widened with `gate`); NAV_ENTRIES gains `/gate` with label `nav.gateEntry` (`edge/src/components/navigation/nav-model.ts:11-31`); `gate` joins BaseView and BASE_VIEW_ENTRY (`edge/src/components/app-shell.tsx:130-152`); a `store_assistant` holding module inventory is not sent the entry; a deep link without the entry renders the existing no-access card (`app-shell.tsx:349-358`); `edge/test/e2e/offline-shell.spec.ts:13-19` fixtures are updated; an integration test proves both callers
+
+**Given** Task 1 server work
+**When** it lands
+**Then** `gate_officer` and `weighbridge_operator` are added to `ASN_READ_ROLES` with module inventory or gate admitted on the GET path only (`src/api/v1/asn.ts:18`, `:27-30`, `:41-44`, `:242-245`); `assertRoleAllowed` in `src/api/v1/gate.ts:68-87` and `src/api/v1/weighbridge.ts:71-92` adopt the `src/middleware/rbac.ts:165-168` rule that a write assignment satisfies a read check, with a test per router that a write-only holder lists with 200 and a read-only `stock_viewer` still gets 403; `weighbridge_operator` joins `GENERAL_READ_ROLES` (`gate.ts:33`) and `gate_officer` joins `WEIGHBRIDGE_READ_ROLES` (`weighbridge.ts:32-36`); the bootstrap response (`src/api/v1/edge.ts:452-460`) gains `site_code_ext` (from location_register for the operating site) and `gate_id` (edge config, default GATE-01) which `gate.entered` requires (`src/compliance/gate.ts:69-75`); `assertGateEnteredShape` accepts optional `supplier_ref_ext` (vendor code or UNLISTED) and `supplier_name_unlisted`, projected onto `gate_event`; a new read `GET /api/v1/weighbridge-events/stamp-status?site=` (WEIGHBRIDGE_READ_ROLES, registered before `/api/v1/weighbridge-events/:weighbridgeEventId` at `src/server.ts:792`) returns the site device keys with stamp state from the statutory examination register (`src/compliance/weighbridge.ts:73-102`); `WEIGHBRIDGE_OUT_OF_STAMP` is added to both PERMANENT_ERROR_CODES twins (`edge/src/sync/connector.ts:111-118`, `src/sync/upload.ts:102-108`, parity test kept green) and `errors.WEIGHBRIDGE_OUT_OF_STAMP` to `edge/src/messages/en.json` beside `:143-149`
+
+**Given** the Challan step
+**When** the officer scans a challan code with the new shared ScanField (hardware trigger, keyboard wedge into the focused input, camera on coarse pointer; `Scan again` and `Type challan number` side by side and visible without scrolling at 360x640, EXPERIENCE.md:80, DESIGN.md:270)
+**Then** the code is resolved online as ASN first (`GET /api/v1/asn/:asnNumberExt`, `src/server.ts:797`) then PO (`GET /api/v1/erp/purchase-orders/:poNumber`, `:769`), a match card shows Accept and Not this, a typed challan number records `challan_number_ext` with `po_ref_ext` UNKNOWN, Next is disabled until accepted, rejected or typed, and the result is announced in aria-live; this is a recorded deviation from EXPERIENCE.md:81, :123 and :256 (offline resolution against synced PO and ASN rows) pending owner question Q1 of the proposal
+
+**Given** the challan step is resolved
+**When** the officer takes the mandatory photo (camera capture on coarse pointer as `report-damage.tsx:413-414`; file input accepting ACCEPTED_PHOTO_TYPES on desktop), types the vehicle number and optional driver name, then on the Supplier step accepts the matched PO vendor (pre-filled) or taps `Unlisted supplier` and types the name (chip `Stores will match this later. The truck can go in now.`, EXPERIENCE.md:82, UJ-GATE-01 step 3 at :178, mock L647-676), and taps Submit entry
+**Then** one `gate.entered` envelope is written through `createOutboxEvent` and `insertCaptureEvent` (`edge/src/capture/outbox-event.ts:3`, `edge/src/local-db/outbox.ts:42`) with the photo in `pendingPhotoStore` (`edge/src/local-db/pending-photos.ts:72`), `vehicle_reg_ext` upper-cased, `gate_id` and `site_code_ext` from the bootstrap, the supplier fields, and the payload shape of `src/compliance/gate.ts:55-91`; the device-generated `metadata.correlation_id` is the binding token (persisted by `gate.ts:139`); the officer reads `sync.captured` online or offline and the entry locks; OCR plate pre-fill is not built (recorded as deferred, EXPERIENCE.md:122)
+
+**Given** the Trucks on site tab
+**When** it opens
+**Then** it lists open gate entries derived on the device from the synced `edge_site_events` bucket (`gate.entered` minus `gate.reversed` by stream, joined to `weighbridge.recorded` by `correlation_id`, `sync/sync-rules.yaml:2-5`) merged with this device's unsynced outbox rows, as inbox cards with a derived text state pill (Entered - weigh in pending; Weighed in - gross held on device; Weighed out - net recorded; Exception when status is tolerance_breach), refreshed from `GET /api/v1/gate-events?site=<site_code_ext>&status=open` (`src/server.ts:788`) and `GET /api/v1/weighbridge-events?site=<site_code_ext>` (`:793`) when online; offline the list still renders from local rows and the sync badge shows the state (EXPERIENCE.md:99)
+
+**Given** a truck and a PO line picked from the PO lookup
+**When** the operator records gross then tare in kg with up to 3 decimals and a reading source pill AUTO or MANUAL
+**Then** the gross is held on the device until the tare exists, then one `weighbridge.recorded` envelope is queued with `correlation_id` equal to the gate binding token, `device_id`, `po_ref_ext`, `line_no`, `gross_kg`, `tare_kg`, `site_code_ext` and `capture_method` MANUAL when either reading was typed (`src/compliance/weighbridge.ts:146-216`); tare greater than gross is refused on the device with `errors.WEIGHBRIDGE_NET_NEGATIVE`; a net outside the PO line band shows a provisional breach banner naming the unloading supervisor (`TOLERANCE_BREACH_OWNER_ROLE`, `src/compliance/weighbridge.ts:18`), still submits, and the server verdict replaces it on sync; AUTO is set only when a reading arrives from the indicator read, and at pilot the `Read from weighbridge indicator` button renders disabled with the reason `No indicator link on this device` (EXPERIENCE.md:117) so every reading is MANUAL
+
+**Given** the site weighbridge device is out of stamp
+**When** the operator opens weigh-in
+**Then** the stamp-status read returns the device keys with stamp state, the weigh action is disabled with the reason in words, the gate entry stays submittable, and a 423 `WEIGHBRIDGE_OUT_OF_STAMP` refusal on sync settles needs_attention and lands in Refused captures with its `errors.*` text
+
+**Given** the four device classes
+**When** unit, e2e and axe suites run
+**Then** every string resolves from `en.json`, the stepper is single column on handheld and step list beside the form on tablet and wider, targets are 56/48 px on coarse pointer and 34 px on desktop, `aria-current="step"` is exposed, axe reports zero serious or critical violations on both tabs, and a keyboard-only pass completes one gate entry and one weighment
+
+**Note:** PRE-PILOT BLOCKING. Source: `sprint-change-proposal-2026-10-21.md`. Closes audit gaps G01 and G02. Depends on 3.2, 3.3, 3.12, 2.9, 1.14, 1.15, 8.9 (done) and edge Phase 1 (563d246). Owns the shared ScanField and the role-scoped nav token pattern reused by 3.14, 3.15, 3.16, 3.18, 3.19, 3.20, 4.12, 7.11 and 8.11. Size XL; if split, cut along the server contract seam (3.13a) and the screen (3.13b), not gate versus weighbridge.
+
+---
+
+### Story 3.14: Stores Inbox, Scan Anything Bar and Acceptance into Inspection Bay
+
+As a storekeeper (`store_assistant`, store1@ancorlabs.org, `docs/migration/pilot-mock-extract/roles.json:317-336`),
+I want a task inbox with a Scan anything bar and an acceptance screen that counts every PO line, reports short, damaged or rejected with evidence, and completes the GRN into the inspection bay,
+So that UJ-PUT-01 steps 1 to 3 and the acceptance half of step 4 run on the PWA with the Story 3.11 reason codes (the label queue of step 4 and the putaway of step 5 are Story 3.15).
+
+**Acceptance Criteria:**
+
+**Given** a caller with a receiving write assignment at the operating site
+**When** the bootstrap runs
+**Then** navigation carries `Stores` from a new row `{ name: 'Stores', modules: ['receiving'], functionScope: 'write' }` inserted before `Stores issue` in NAVIGATION_CAPABILITIES (`src/api/v1/edge.ts:368-383`); NAV_ENTRIES gains `{ name: 'Stores', href: '/stores', label: 'nav.stores' }`; `app-shell.tsx` adds `stores`, `stores-accept` and `stores-issue` to the view union, BaseView, BASE_VIEW_ENTRY and VIEW_NAV_ENTRY (`:95-103`, `:130-164`); new `edge/app/stores/page.tsx` and `edge/app/stores/accept/page.tsx` render `<EdgeClient view=... />`; the existing bare page `edge/app/stores/issue/page.tsx` renders `<EdgeClient view="stores-issue" />` inside AppShell gated by its own existing entry `{ name: 'Stores issue', modules: ['warehouse'] }` (`edge.ts:380`, `nav-model.ts:24`) so a warehouse-write holder without receiving write keeps the page; a deep link without the entry renders the no-access card with no list fetch
+
+**Given** Task 0 server work
+**When** it lands
+**Then** `GET /api/v1/receiving/arrivals?site=<site_code_ext>` exists under module receiving read with `RECEIVING_READ_ROLES` (`src/api/v1/receiving.ts:39-44`) and the receiving site scope, returning the site's open gate events (`gate_event_id`, `challan_number_ext`, `vehicle_reg_ext`, `driver_name`, `challan_photo_ref`, `entered_at`, `binding_status`, `po_summary`, `supplier_ref_ext`, `binding_token`) joined with `has_accepted_weighment` (a `weighbridge_event` with status accepted on the `correlation_id`) and `grn_id` (grn `correlation_id` match), oldest first, because `store_assistant` cannot read gate or weighbridge events (`src/api/v1/gate.ts:33`, `src/api/v1/weighbridge.ts:32-36`, access matrix :195-196); the access matrix gains an R for `store_assistant` on this read; one active non-quarantine inspection bay location (level zone, zone_type staging, code IB-01 or site-prefixed) is registered per pilot site through the location-register path, added to `deploy/rehearsal/mock/setup-operations.ts` and exposed to the edge by the bootstrap or a site-config read (`LOCATION_NOT_FOUND` at `src/compliance/receiving.ts:1124-1134` otherwise)
+
+**Given** the device is online
+**When** the inbox loads
+**Then** it shows the four groups of mock key-stores.html L480 in order: Arrived - awaiting acceptance (arrivals rows with `grn_id` null, oldest first; matched cards carry Start acceptance; unmatched cards are pilled Match supplier with Start acceptance disabled and the reason shown, mock L443 and L484, EXPERIENCE.md:82; a matched card with `has_accepted_weighment` false is pilled Waiting for weighbridge with Start acceptance disabled and the reason shown, recorded in Dev Notes as the server-forced deviation from mock L441 because receipt needs an accepted weighment at `src/compliance/receiving.ts:840-865`), Cleared by QC - put away (`GET /api/v1/putaway-tasks?site=<site location_id>&status=ready`, `src/server.ts:805`; cards open the 3.15 putaway detail and until 3.15 ships are disabled stating `Putaway arrives with Story 3.15`; tasks whose GRN line has no QC clearance carry the caveat pill Awaiting QC until 8.10 gates them, because every GOOD line is ready at receipt, `receiving.ts:1155`), Issues pending (`GET /api/v1/indents?issuable=true`, cards open the stores-issue view; shown only when both entries are present) and Returns to shelve (empty statement only); each card is a DESIGN.md:266 inbox card with a text status pill and one primary action; every empty group reads `Nothing waiting` (mock L611); below the groups a Done today section appears only when something was completed today (mock L614-621): GRNs captured on this device from the outbox (pilled Captured - pending sync or Synced) merged with `GET /api/v1/grns?site=&status=posted` filtered to today, plus issue slips completed in the stores-issue view
+
+**Given** the Scan anything bar (new shared ScanAnythingBar over the 3.13 ScanField, pinned on top, always armed, Type it always available, EXPERIENCE.md:77-78, DESIGN.md:262)
+**When** a code is scanned or typed
+**Then** a challan number matching an open matched gate event opens its acceptance (mock L952); a challan already accepted today opens its Done today card (mock L951); a lot QR opens a one-action sheet offering Report damage into `/damage/new` with the lot prefilled (Issue, Return and Move from mock L764-768 are deferred and the sheet says so); any other code gets the aria-live statement `Not recognised: <code>. Scan or type a challan or lot code.`; rack and item result sheets are out of scope and are not promised by the copy
+
+**Given** an Arrived card with an accepted weighment
+**When** the acceptance renders
+**Then** the header carries challan, supplier, PO, vehicle, arrival time and gate photo with nothing retyped; a banner names the site inspection bay destination; PO lines and band fields come from `GET /api/v1/erp/purchase-orders/:poNumber` (`src/server.ts:769`, `src/api/v1/erp-projections.ts:424-427`; `over_receipt_tolerance_pct` at `src/read/projections/erp_purchase_order.ts:87`); every open PO line shows ordered, a counted stepper with `= ordered` as a quick count (mock L634) and a chip Not counted, Matches PO, Short n or Excess n; the client caps the posted GOOD quantity to ordered x (1 + `over_receipt_tolerance_pct` / 100) minus cumulative received on the PO line (GOOD and DAMAGED count, REJECTED does not, `src/compliance/receiving.ts:755-770`, `:820-825`), rounded down to the line unit precision, and shows the excess as `Excess - returned with vehicle` (not posted); a short line requires one of the four fixed tiles Supplier short-shipped, Part delivery - balance to follow, Count mismatch with challan, Other (mock L437, `RECEIPT_REASON_DETAILS['SHORT']` plus OTHER, `src/compliance/receiving-reasons.ts:14-22`), Other requiring a photo and a one-line note; each PO line carries condition quantities Good / Damaged / Rejected whose sum is the counted quantity (EXPERIENCE.md:151), Damaged and Rejected opening their detail tiles from `RECEIPT_REASON_DETAILS`; one material photo is required and travels as the new additive `material_photo_ref` (Task 1); the Inspect on opening toggle offers Damage suspected or Damage observed with an optional photo and the helper `A note for the inspector, not a verdict. QC and finance decide.` (mock L654-659); Complete acceptance stays disabled stating what is left
+
+**Given** a complete acceptance online
+**When** Complete acceptance is tapped
+**Then** each PO line posts one `goods.received` per non-zero condition quantity to `POST /api/v1/grn-lines` (`src/server.ts:798`) on a shared client `grn_id`, `grn_line_id` per row, `correlation_id` equal to the binding token, `target_location_code` equal to the site inspection bay for GOOD rows (DAMAGED and REJECTED rows carry the same field but the server routes them to the site ZONE-QC-HOLD with a held putaway task, `src/compliance/receiving.ts:1109-1122`, and the completion screen pills them In QC hold), DAMAGED and REJECTED rows before the GOOD row of the same PO line, and the Story 3.11 fields; there is no Split line control; a unit test asserts the posted quantity never exceeds the band; permanent codes render `errors.*` copy (`edge/src/sync/connector.ts:84-97`) and the line stays editable; the completion screen shows the GRN number and summary pills and Done today gains the GRN
+
+**Given** an acceptance opened online while the device then goes offline
+**When** it is completed
+**Then** every line envelope and its photos go to the outbox and `pendingPhotoStore`, the screen reads `Captured - pending sync`, upload goes through `POST /api/v1/edge/events` with `received_by` server-set (`src/api/v1/edge.ts:669-671`), a refusal lands in Refused captures, and the inbox lists show the needs-connection card rather than a stale list (owner question Q7; mock L517 renders the inbox offline and the deviation is logged)
+
+**Given** Task 1 server work
+**When** `goods.received` carries the optional fields `inspect_on_opening` (suspected or observed), `inspect_note`, `inspect_photo_ref` and `material_photo_ref`
+**Then** they persist on `grn_line` following the Story 3.11 additive pattern: a new ALTER-only file `read/projections/grn_line_inspect.sql` appended in `src/events/migrate.ts` after `grn_line_condition.sql` (`:328-330`; `grn_line.sql` is not edited), typed in `src/events/schema.ts:455-466`, asserted in `assertReceiptReasonShape` (`inspect_note` and `inspect_photo_ref` allowed only with `inspect_on_opening`), mirrored verbatim at the tail of `deploy/compose/init-db.sql` (after `:15058`) and pinned by name in `test/unit/schema-drift.test.ts` beside `:2705-2715`; `GET /api/v1/grns/:grnId` returns them per line (`src/read/projections/grn_line.ts:157`) for the 8.11 QC detail; `listDiscrepancyLines` (`grn_line.ts:172`) is unchanged because a flag is a note for the inspector, not a discrepancy (EXPERIENCE.md:84)
+
+**Given** the inbox, acceptance and completion screens
+**When** axe, the i18n literal guard and a keyboard-only pass run
+**Then** zero WCAG 2.1 AA violations, all strings under `stores.*`, 56/48/34 px targets, primary pinned in the bottom third on Handheld, aria-live for scan and sync results, and the staging runbook row 2.10m accepts one short, one damaged and one capped line as store1@ and `GET /api/v1/receiving/discrepancies` lists them
+
+**Note:** PRE-PILOT BLOCKING. Source: `sprint-change-proposal-2026-10-21.md`. Closes audit gaps G03, G04 (acceptance half), G11 (re-homes `/stores/issue`) and part of G21 (challan and lot codes only; the GRN label QR moves to 3.15). Depends on 3.13 (binding token, ScanField) and on 3.4, 3.11, 3.12, 3.1, 1.14, 1.15, 4.11 (done). Owns ScanAnythingBar and the grouped inbox list reused by 3.15, 3.16 and 8.11. Size L.
+
+---
+
+### Story 3.15: Directed Putaway Task Screen, Label Queue and GRN Read Card
+
+As a storekeeper (`store_assistant`) on the edge PWA,
+I want a putaway list with the suggested rack per ready lot, rack-scan confirmation with an override reason, plus a device-local label queue and GRN read card,
+So that UJ-PUT-01 step 5 completes on a device and every lot's real location and label are recorded.
+
+**Acceptance Criteria:**
+
+**Given** a caller whose bootstrap carries the `Stores` entry created by Story 3.14
+**When** the stores inbox loads
+**Then** ready putaway tasks render as the inbox group Cleared by QC - put away (heading `putaway.group`) and each card opens the detail view `putaway-task` at `/stores/putaway?task=<taskId>` (the edge app has no dynamic route segments, cf. `edge/app/damage/cases/page.tsx`), an AppShell view gated by the same `Stores` entry (`edge/src/components/app-shell.tsx:130-152` BaseView and BASE_VIEW_ENTRY, view unions at `app-shell.tsx:95-104` and `edge-client.tsx:214-227`); no new NAVIGATION_CAPABILITIES row is added (EXPERIENCE.md:79, :134; mock key-stores.html L423, L430, L432); a deep link without the entry shows the existing no-access card; `edge/test/unit/i18n-literals.test.ts` ALLOWED_LITERAL_PATTERNS gains `putaway.` and `labels.`
+
+**Given** ready tasks at the site
+**When** the group loads online
+**Then** `GET /api/v1/putaway-tasks?site=<site location_id>&status=ready` (`src/server.ts:805`; `src/api/v1/putaway.ts:149-176` returns `{ tasks }` with `sku`, `lot_id`, `quantity`, `from_location_id`, `directed_location_code`, `velocity_class_at_suggestion`, `src/read/projections/putaway_task.ts:11-43`) renders one inbox card per task showing sku and item name (`GET /api/v1/items/:sku`, `src/server.ts:601`, cached per sku), `lot_id`, `quantity`, the source bay code (`GET /api/v1/locations/:locationId`, `:627`, cached per id) and a `Suggested <code>` pill only when `directed_location_code` is non-null (the list makes no per-task suggestion calls; the column is set by the suggestion route, `putaway.ts:233-248`); the empty group states `Nothing waiting` (mock L611); copy never says a lot is QC-cleared until 8.10 gates held lots, and Dev Notes record that GOOD lines are ready at receipt (`src/compliance/receiving.ts:1155`)
+
+**Given** a task is opened
+**When** the detail loads
+**Then** `GET /api/v1/putaway-tasks/:id` (`src/server.ts:806`, PUTAWAY_READ_ROLES `putaway.ts:33-38`) renders the task header, and for a `store_assistant` `GET /api/v1/putaway-tasks/:id/suggestion` (`:807`, PUTAWAY_EXECUTE_ROLES `putaway.ts:39`, `:207-208`) drives the card `Suggested: <locationCode>` with a plain-words caption from `putaway.classHint.<A|B|C>`, a pinned primary `Use suggested <code>` and a secondary `Choose another rack` opening scan-or-type of a rack code (alternatives list deferred); a `{ locationId: null, reason }` response (`src/warehouse/putaway-suggestion.ts:18-21`) shows the reason as the caption and only `Choose another rack`; a 403 `FUNCTION_ACCESS_DENIED` on the suggestion route (`putaway.ts:105-124`) renders the detail read-only with `errors.FUNCTION_ACCESS_DENIED` (`en.json:107`) in place of both actions; the detail always calls the suggestion route before offering completion so the server override rule applies (`src/compliance/putaway.ts:208` keys on `directed_location_id`)
+
+**Given** the target rack is set
+**When** a rack code is scanned or typed into the ScanField and equals the target
+**Then** `POST /api/v1/putaway-tasks/:id/complete` (`src/server.ts:808`) is sent with `actual_location_code` and a client-minted `idempotency_key`; when the code differs from the directed suggestion the client shows a reason step of fixed tiles whose codes are client-defined under `putaway.overrideReason.*` (RACK_FULL, DAMAGED_RACK, NEARER_BAY, OPERATOR_CHOICE, OTHER; the server validates presence only, `src/compliance/putaway.ts:205-214`; `deploy/rehearsal/mock/operations-smoke.ts:206` aligned) plus a `Certain | Uncertain` choice sent as `override_confidence`; no free text is collected because the payload has no field for it (`src/api/v1/putaway.ts:330-337`); `replayed: true` renders the same done state; every code the completion and suggestion paths can return has an `en.json` string: `PUTAWAY_TASK_REQUIRED`, `PUTAWAY_LOCATION_REQUIRED`, `PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED`, `PUTAWAY_TASK_NOT_READY`, `PUTAWAY_TASK_ALREADY_COMPLETED`, `PUTAWAY_LOCATION_NOT_FOUND`, `PUTAWAY_OVERRIDE_REASON_REQUIRED` (`src/compliance/putaway.ts:25-213`), `PUTAWAY_COMPLETION_EVENT_MISSING` (`src/api/v1/putaway.ts:291-293`), with `PUTAWAY_TASK_NOT_FOUND`, `PUTAWAY_TASK_NOT_HELD`, `PUTAWAY_DESTINATION_INVALID`, `PUTAWAY_QC_HOLD_QUARANTINE_REQUIRED` (`en.json:162-165`), `LOCATION_ACCESS_DENIED` (`en.json:109`, thrown at `src/api/v1/putaway.ts:142`, `:167`) and `FUNCTION_ACCESS_DENIED` already present; `PUTAWAY_OVERRIDE_REASON_REQUIRED` and `PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED` reopen the reason step
+
+**Given** a GRN completed by 3.14 (synced or pending)
+**When** the label queue renders on the completion screen and the Done today card
+**Then** one label per GRN line is queued in a device-local IndexedDB store (plain IndexedDB like `edge/src/local-db/pending-photos.ts:1-25`) keyed by `grn_line_id` with status `queued` or `printed`, text for GRN number, lot, PO line, sku and item name, bay code and `received_qty` (`GrnLine`, `src/read/projections/grn_line.ts:21-51`; `GET /api/v1/grns/:grnId` returns `{ ...grn, lines }`, `src/api/v1/receiving.ts:488-502`), a QR encoding `/stores/grn?grn=<grnId>&line=<grnLineId>` (small pure-JS QR dependency recorded in the story), a pill reading `Queued` until `window.print` has run for that label and `Printed` after `afterprint`, or `Queued - printer not ready` when `window.print` is unavailable (mock L698), and a Reprint action; printing uses the Story 4.11 print-only stylesheet precedent (`edge/src/components/stores-issue.tsx:41`, `:175`) and never blocks completion; the queue survives reload and reopens from the Done today card (mock L616-619); `edge/app/stores/grn/page.tsx` renders a read card over `GET /api/v1/grns/:grnId` (`src/server.ts:799`; module receiving read, `src/api/v1/receiving.ts:649-652`) showing GRN number, supplier, site, received date and per line sku, qty, condition and lot, highlighting the line named by `?line=`; a 403 renders the no-access card with the reason
+
+**Given** the device is offline
+**When** the putaway group or a detail opens or a completion is attempted
+**Then** the group shows the needs-connection card with `Check connection` (pattern `en.json:599-600`) and the primary is disabled with the reason `Putaway needs a connection on this device for now` (EXPERIENCE.md:122); nothing is written to the outbox; this is a recorded deviation from EXPERIENCE.md:99, mock L444 and L717 and Story 3.5 AC 5; in-story task: add an explicit 403 `CENTRAL_ONLY_OPERATION` refusal for stream warehouse with event `putaway.completed` or `location.override` on the edge door in the shape of `assertEdgeIndentIssueEventRefused` (`src/api/v1/edge.ts:555`), with a test, because the door today accepts `putaway.completed` with `completed_by` taken unstamped from the device payload and no execute-role gate (`edge.ts:353`, `src/events/store.ts:701`, `:1029-1040`); deferred-work.md gets the section named in the proposal
+
+**Given** the pages
+**When** axe, the i18n guard and a keyboard-only pass run
+**Then** zero WCAG 2.1 AA violations at `/stores/putaway?task=<id>` and `/stores/grn?grn=<id>`, strings under `putaway.*` and `labels.*`, 56/48 px targets on coarse pointer and 34 px on desktop, aria-live for suggestion, scan match and completion, an accessibility spec at `edge/test/accessibility/stores-putaway-accessibility.spec.ts` and an e2e spec at `edge/test/e2e/stores-putaway.spec.ts`
+
+**Note:** PRE-PILOT BLOCKING. Source: `sprint-change-proposal-2026-10-21.md`. Closes audit gap G05 and the label queue residual of G04. Depends on 3.14 (stores inbox, completion screen) and 8.10 (release of held lots to ready), and on 3.5, 3.4, 1.14, 1.15, 4.11 (done). Story 3.5 record is reconciled by this story's create-story (Tasks 1 to 7 and 9 ticked with a note; Task 8 stays unticked). Size M.
+
+---
+
+### Story 3.16: Floor Task Inbox and Pick Execution Screen
+
+As a picker (`warehouse_operator`, picker1@ancorlabs.org, `docs/migration/pilot-mock-extract/roles.json:401-413`),
+I want a task inbox that opens each pick list one line at a time (scan bin, scan lot, confirm quantity), offline if needed,
+So that Story 3.6 pick tasks are executed from the device instead of a paper list.
+
+**Acceptance Criteria:**
+
+**Given** a caller with warehouse write at the site
+**When** the bootstrap runs
+**Then** navigation carries `Floor tasks` from a new row `{ name: 'Floor tasks', modules: ['warehouse'], functionScope: 'write' }` (`src/api/v1/edge.ts:364-383`, precedent `Stores issue` at `:380`) with NAV_ENTRIES `{ name: 'Floor tasks', href: '/floor/tasks', label: 'nav.floorTasks' }` and `nav.floorTasks` in `en.json` beside `nav.storesIssue`; `floor-tasks` joins BaseView and BASE_VIEW_ENTRY so a deep link without the entry renders the no-access card with no fetch; `store_assistant` also holds warehouse write (`roles.json:332-335`) and is in PICK_READ_ROLES (`src/api/v1/pick-tasks.ts:39-44`), so it sees and can use the screen (accepted; access matrix :54 scopes it to putaway and counts)
+
+**Given** `/floor/tasks` online
+**When** the inbox loads `GET /api/v1/pick-tasks?site=<site>&status=pending` and `GET /api/v1/pick-tasks?site=<site>&status=in_progress` (one status per request, `src/api/v1/pick-tasks.ts:282`; `src/read/projections/pick_task.ts:265`) merged client-side
+**Then** one group headed `Pick lists - sales orders` (mock key-floor.html L617) lists tasks whose `assigned_to` equals the bootstrap `user_id` (`src/api/v1/edge.ts:453`) first, then tasks with `assigned_to` null at the site, both actionable (no assignment check exists in `src/compliance/pick.ts`; assign is PICK_SUPERVISE_ROLES only, `pick-tasks.ts:359`), tasks assigned to someone else hidden; each inbox card shows the task id, the sales order number, `n of m picked` and a text pill (`In progress` or `Pending`) from the Task 1 list fields; the empty state reads `All caught up`; offline the last fetched list shows with `Showing the list from <time>`
+
+**Given** Task 1 server work
+**When** `GET /api/v1/pick-tasks/:pickTaskId` (`src/server.ts:1416`) and `GET /api/v1/pick-tasks` (`:1415`) are called
+**Then** each line also carries `location_code`, `directed_lot_number` and `uom` joined from `location_register`, `lot_master` and `item_master` (today `src/read/projections/pick_line.ts:62-66` returns IDs only; `item_master` has no description column so none is promised), and each list row carries `so_number_ext` (joined from `erp_sales_order` via `dispatch_order_id`, `read/projections/erp_sales_order.sql:21`), `confirmed_line_count` and `line_count` (`src/read/projections/pick_task.ts:272-274`, same FILTER predicates as `pick.ts:828-832`), with integration tests for both
+
+**Given** the current line
+**When** the picker scans or types bin then lot in the ScanField
+**Then** a wrong bin shows `Wrong bin - <code>` and stays on step 1, a matching bin advances, the directed lot advances with the quantity prefilled, a lot whose `lot_number` is present in the synced `held_lot` table with `quality_hold_status` held (`edge/src/local-db/schema.ts:191-203`; `getHeldLot` and `assertLotNotHeld`, `edge/src/capture/held-lot.ts:22`, `:35`) shows `On hold - awaiting QC` and does not advance, online or offline (mock L918, L461), a different unheld lot shows `Wrong lot - not picked` naming the directed lot and stays on step 2 (mock L919, L467; lot substitution with override reason, Story 3.6 AC 8, is an exception flow in Story 3.17); the three-step indicator exposes `aria-current="step"`
+
+**Given** step 3 with the quantity equal to directed
+**When** Confirm is tapped
+**Then** one `pick_line.confirmed` event (stream warehouse, payload `{ pick_task_id, pick_line_id, confirmed_lot_id, confirmed_quantity, capture_method: 'PWA' }` per `src/compliance/pick.ts:136-153`; `confirmed_by` stamped server-side at `src/api/v1/edge.ts:674-676`) is written with `insertCaptureEvent` (`edge/src/local-db/outbox.ts:42`), the screen advances, the line reads Synced or `Captured - pending sync`, and a `PICK_*`, `LOT_ON_HOLD` or `INSUFFICIENT_STOCK_FOR_PICK` refusal (`edge/src/sync/connector.ts:119-129`, `:141`; strings at `en.json:86`, `:179-189`) lands in Refused captures with its `errors.*` text; the quantity field is read-only at the directed quantity and the mock's `Short pick` secondary (L713, L719) renders disabled with the reason `Short pick comes in a later release - leave the line open and tell your supervisor` (EXPERIENCE.md:122)
+
+**Given** the last outstanding line
+**When** its `pick_line.confirmed` event is accepted
+**Then** the server finalizes the task inline (`src/compliance/pick.ts:612-628`; no `pick_task.completed` is sent by the picker because that command is SOD-gated to `warehouse_manager` and `inventory_controller`, `pick.ts:29`, `:808-821`), the screen shows a completion panel with task id, order, line count, the line `All lines picked` and Back to tasks once the last line reads Synced (or `Captured - pending sync` while offline), and a `LOT_ON_HOLD`, `INSUFFICIENT_STOCK_FOR_PICK` or `PICK_LINE_ALREADY_CONFIRMED` refusal of that last confirm renders from `errors.*` in Refused captures and reloads the task; the task leaves the inbox once the list returns it as completed
+
+**Given** the four device classes (EXPERIENCE.md:135 plus mock L450-454)
+**When** the screen renders and axe plus a keyboard-only pass run
+**Then** Handheld shows one page at a time with the primary pinned at 56 px, Tablet and Desktop show inbox and task side by side, no horizontal scroll at 360 px, zero WCAG 2.1 AA violations, strings under `floor.*`, and after each confirm the result and the next instruction are announced through the aria-live region (EXPERIENCE.md:119) while the scan field stays focused and armed (EXPERIENCE.md:74)
+
+**Note:** PRE-PILOT BLOCKING. Source: `sprint-change-proposal-2026-10-21.md`. Closes the picker leg of audit gap G08. Depends on 3.13 (ScanField, outbox-with-refusal pattern) and on 3.6, 1.13, 1.14, 1.15 (done) and edge Phase 1 (563d246). Before build: one validation walk with picker1@ on the staging preview (EXPERIENCE.md:262) or the owner's recorded waiver. Dev Notes record that `pick_task` is one SKU per task (`src/read/projections/pick_task.ts:85`) so the mock's five-item list is illustrative, and that the mock groups `Pick lists - production issue` and `Moves` have no backend. Size L.
+
+---
+
+### Story 3.17: Short Pick Exception Seam and Tiles
+
+As a picker,
+I want to record a short pick with a reason (Bin empty, Less in bin than shown, Damaged - report, Other) instead of leaving the line open,
+So that the shortfall is durable, planning sees the re-pick and damaged units go on hold.
+
+**Acceptance Criteria:**
+
+**Given** a pick line in progress
+**When** `pick_line.short_picked` is uploaded with `found_quantity` where 0 <= found < directed (at most 3 decimals), reason BIN_EMPTY, LESS_IN_BIN, DAMAGED or OTHER and a one-line note (required for OTHER, refused otherwise)
+**Then** the event is registered in SUPPORTED_EVENT_TYPES beside `pick_line.confirmed` (`src/events/schema.ts:5867-5874`, stream warehouse), the line moves to a new status `short` added to `chk_pick_line_status` (`deploy/compose/init-db.sql:2827`, `read/projections/pick_line.sql`) and counted as resolved by the inline finalization counter (`src/compliance/pick.ts:619`) and the explicit gate (`:830-838`), its unpicked remainder allocation is released, the seam writes a `pick_shortfall` row (task, line, directed, found, reason, note, actor, occurred_at), DAMAGED opens a damage case in `in_qc_hold` for the short units through a photo-less in-transaction opener modelled on `openReceiptDamageCase` (`src/compliance/damage.ts:1865-1890`; source `pick` added to the source CHECK and pairing constraints at `read/projections/damage_report.sql:94-96` and the union at `src/read/projections/damage_report.ts:26`, `:187`) so no photo or damage-reason UI is added, the edge door server-sets `short_picked_by` (`src/api/v1/edge.ts:674-679` pattern), and `PICK_SHORT_REASON_REQUIRED`, `PICK_SHORT_QUANTITY_INVALID` and `PICK_SHORT_NOTE_REQUIRED` are twinned in `src/sync/upload.ts` and `edge/src/sync/connector.ts` PERMANENT_ERROR_CODES (`test/unit/edge-permanent-error-parity.test.ts`) with `errors.*` strings in `edge/src/messages/en.json:179-189`
+
+**Given** a task whose remaining lines are confirmed or short
+**When** the last line resolves (`src/compliance/pick.ts:612-629`) or `pick_task.completed` is applied (`:776-846`)
+**Then** `finalizePickTaskCompletion` runs, the allocated-to-picked move (`:655-709`) uses `found_quantity` for short lines, the `dispatch_order_status` row (`init-db.sql:2785-2789`, insert at `pick.ts:748-756`) is still written so Story 3.7 packing proceeds for the picked units (owner question Q15), one notification per task targets the planning role at the task site (`src/notify/emit.ts:6-16` role plus `location_id`; default `production_planner`, owner question Q14) listing each short line, found of directed and reason, and the existing `warehouse_manager` packing notification (`:711-724`) still fires; this replaces the data-loss path described at `pick.ts:466-471`
+
+**Given** the 3.16 pick line screen
+**When** Short pick is tapped on step 2 (lot) or step 3 (quantity)
+**Then** the Picked stepper (min 0, max directed) and four tiles labelled `Bin empty`, `Less in bin than shown`, `Damaged - report`, `Other` appear under `Short <directed minus found> - choose a reason` (mock key-floor.html L521, L688-700); Bin empty sets found to 0 (L969); raising found back to directed clears the short state (L967); the Short pick button leaves the footer while short (L721); the footer reads `Left: short reason` until a tile is pressed and `Left: one line` while Other has an empty note (L720), then `Ready`; the primary reads `Confirm short pick - <found> of <directed>` and stays disabled until a reason is chosen and, for Other, the note is non-empty (L670-671); `Damaged - report` shows the note `The damaged units go on hold and a QC task is raised. You only report; QC and finance decide.` (L697); confirm queues `pick_line.short_picked` to the outbox with the 3.16 `Captured - pending sync` treatment and the All lines list shows a warn pill `Short <n>` (L706); the completion panel adds a warn pill `<k> short` and the sentence `Short lines go back to planning for a re-pick.` (L729-730); no photo capture is added on this screen
+
+**Given** a different unheld lot at step 2 (Story 3.6 AC 8 substitution)
+**When** the picker chooses `Use this lot instead` from the `Wrong lot - not picked` state
+**Then** a reason tile step renders and the confirm carries `override_reason` on `pick_line.confirmed` (`src/compliance/pick.ts:502-512`, `PICK_OVERRIDE_REASON_REQUIRED` otherwise), `INSUFFICIENT_STOCK_FOR_PICK` (`:562-572`) renders from `errors.*`, and Dev Notes record that the mock has no substitution flow (key-floor.html L467) so the control is the spine's exception path
+
+**Given** the suite
+**When** `test/integration/story-3-17.test.ts`, the 3.16 edge unit file and the 3.16 e2e spec run
+**Then** they pass and the 3.16 disabled Short pick control is replaced by the live control
+
+**Note:** PILOT. Source: `sprint-change-proposal-2026-10-21.md`. Closes the short-pick residual of audit gap G08. Depends on 3.16 and on 3.6, 8.9 (done). Role gate: `warehouse_operator` and `store_assistant` (`src/api/v1/edge.ts:75-78`); no new nav row. Picking layouts and the four reasons are mockup assumptions (key-floor.html L467-468) due for validation on the staging preview (EXPERIENCE.md:262); the story builds the drafted layout and records user changes as follow-ups. Size M-L.
+
+---
+
+### Story 3.18: Pack Station and Dispatch Screen
+
+As a dispatch clerk (dispatch1@ancorlabs.org, `docs/migration/pilot-mock-extract/roles.json:576-589`),
+I want a pack station screen that lists picked orders, scans lots into the package, records weight, generates documents, clears the IRN block, prints and confirms dispatch,
+So that a dispatch leaves the site through the Story 3.7 and 11.2 gates from the app.
+
+**Acceptance Criteria:**
+
+**Given** EXPERIENCE.md:262 and key-floor.html L463 mark the pack and dispatch layout as not elicited
+**When** the story starts
+**Then** the layout is walked with dispatch1@ on the staging preview and the outcome recorded in the story file before build, or the owner's waiver is recorded as a ruling (audit :467)
+
+**Given** a caller holding an assignment with role in `DISPATCH_WRITE_ROLES` (`src/api/v1/dispatch.ts:43`: `dispatch_clerk`, `warehouse_manager`), module warehouse or `*`, `functionScope` write, covering the site
+**When** the bootstrap runs
+**Then** navigation carries `Pack and dispatch` from a new row `{ name: 'Pack and dispatch', modules: 'pack-dispatch', functionScope: 'write' }` with `pack-dispatch` added to the modules union (`src/api/v1/edge.ts:364-368`) and a `hasPackDispatchScope` branch in `navigationFor` (`:400-420`) modelled on `hasDamageCaseScope` (`:389-398`); dispatch1@ (`roles.json:576-582`) receives it, store1@ and a `dispatch_clerk` holding only inventory read (`roles.json:583-589`) do not; NAV_ENTRIES gains `{ name: 'Pack and dispatch', href: '/floor/pack', label: 'nav.packDispatch' }`; `pack-dispatch` joins BaseView and BASE_VIEW_ENTRY so a deep link without the entry renders the no-access card; an integration test asserts both outcomes; the mock's desktop sidebar label `Dispatch` (key-floor.html L567) and bottom nav Tasks / Scan / Stock / More (L557-562) are recorded as an accepted deviation
+
+**Given** Task 1 server work
+**When** `GET /api/v1/dispatch?site=<uuid>&stage=picked|packed|documents_generated|dispatched` is called
+**Then** it returns rows from `dispatch_order_status` joined to `erp_sales_order` (`src/read/projections/dispatch_order_status.ts:19-25`) filtered by `ship_from_site_id`, left joined to `dispatch_irn` (`src/read/projections/dispatch_irn.ts:13-25`) exposing `irn_recorded`, with stage derived as dispatched when `dispatched_at` is set, documents_generated when a `dispatch_document` row exists (`src/read/projections/dispatch_document.ts:27`) and `dispatched_at` is null, packed when `packed_at` is set and no documents, else picked; each row carries `dispatch_order_id`, `so_number_ext`, `line_no`, `ship_to_ext`, `sku`, `quantity`, `picked_at`, `packed_at`, `dispatched_at`, `stage`, `irn_recorded`; the route is gated by `assertRoleAllowed(req, DISPATCH_READ_ROLES, 'read')` (`src/api/v1/dispatch.ts:45-51`, `:86-104`) and `permittedLocationsForModuleScope(roles, 'warehouse', 'read')` (`:110-115`), registered before the `/:dispatchOrderId` routes in `src/server.ts:1423-1437`, added to the spine allowlist (`test/integration/story-1-9.test.ts:335-346`) and covered by an integration test; today only per-id reads exist
+
+**Given** the list
+**When** it loads online
+**Then** three groups render: Ready to pack (stage picked), Waiting for documents (stages packed and documents_generated, pilled Cannot dispatch when `irn_recorded` is false and Ready when true) and Dispatched today; the empty state reads `Nothing to pack or dispatch. Picked orders appear here when the picker finishes.` (key-floor.html L646); each row heading is the SO number with `ship_to_ext` as metadata (deviates from the mock PKG heading at L629 and L738 because no package id is minted, owner question Q19); a row opens the pack station
+
+**Given** an order from Ready to pack
+**When** each picked lot is scanned or typed into the focused ScanField and the carton weight is entered
+**Then** lines flip to In package with aria-live, an unknown lot is refused in place, Generate shipping documents stays disabled stating what is left, and pressing it posts `POST /api/v1/dispatch/:id/pack` with one `packingLines` entry per picked line `{ sku, packed_qty (string), lot_id (UUID or null), carton_count: 1 on the first line and 0 on the others, actual_weight_kg: the carton weight on the first line and null on the others, label_ref: null }` (`src/api/v1/dispatch.ts:173-257`) then `POST /api/v1/dispatch/:id/generate-documents` with no body so the server default document types apply (`dispatch.ts:37`, `:387`); `LOT_ON_HOLD`, `PACKED_QTY_MISMATCH`, `PACKED_LINE_NOT_PICKED`, `DISPATCH_ORDER_NOT_PICKED` and `INVALID_PARAMS` render from `errors.*` (`en.json:190-200`)
+
+**Given** documents exist and `POST /dispatch` answers 409 `IRN_MISSING` (`src/compliance/dispatch.ts:613-645`)
+**When** the order renders
+**Then** a blocked card in the err pair reads `E-invoice IRN missing - cannot dispatch` with the package summary and Check IRN again calling `GET /api/v1/dispatch/:id/irn`, treating 404 `DISPATCH_IRN_NOT_RECORDED` (`dispatch.ts:756-762`) as still blocked and 200 `{ dispatchOrderId, coverage }` (`:764`) as cleared (key-floor.html L757-767, EXPERIENCE.md:103); Park at dispatch bay renders disabled stating no bay record exists for pilot (recorded in deferred-work.md); a Record IRN form posts `{ invoice_number_ext, irn_ext (64 hex), idempotency_key minted once per opened form }` to `POST /api/v1/dispatch/:id/irn` (`dispatch.ts:598`, `:627-656`; owner question Q16, default yes); when `details.reason` is `no_erp_sales_order_line` the form is hidden and the card says the order is not an ERP line; the sentence about automatic billing notification is not shown (nothing in `src/` notifies billing; record fix amends EXPERIENCE.md:103); `DISPATCH_IRN_CONFLICT`, `DISPATCH_IRN_INVALID_PAYLOAD`, `DISPATCH_ORDER_SITE_MISMATCH` and `DISPATCH_ORDER_CLOSED` render from `errors.*` (`en.json:216-220`)
+
+**Given** IRN coverage exists
+**When** the order opens
+**Then** every document in `GET /api/v1/dispatch/:id/documents` (`{ dispatchOrderId, documents }`, `dispatch.ts:502`; types bol, packing_slip, commercial_invoice, label, labelled under `packStation.doc.*`) has a Print action rendering `document_content` under a print-only stylesheet twin of `stores-issue.tsx:41` scoped to the document container, a document whose `document_content` is null shows Print disabled stating no content, the mock's E-way bill row (L770) is not rendered and is recorded in deferred-work.md, Confirm dispatch posts `POST /api/v1/dispatch/:id/dispatch`, and on 200 the order moves to Dispatched today; `DISPATCH_ORDER_NOT_PACKED`, `DISPATCH_DOCUMENTS_NOT_GENERATED`, `DISPATCH_ORDER_ALREADY_DISPATCHED` and `LOT_ON_HOLD` render from `errors.*`
+
+**Given** the device is offline
+**When** the screen opens
+**Then** the list renders read-only from the last successful fetch with its sync badge, and Generate shipping documents, Check IRN again, Record IRN and Confirm dispatch are disabled stating `needs a connection` (EXPERIENCE.md:119); nothing is written to the outbox; this is a deliberate pilot departure from EXPERIENCE.md:99 and key-floor.html L464 and from the server door that already accepts `dispatch.packed`, `dispatch.shipping_documents_generated` and `dispatch.dispatched` (`src/api/v1/edge.ts:686-701`, Story 3.7 Tasks 7.1 to 7.3; codes at `edge/src/sync/connector.ts:131-149`), recorded in deferred-work.md and EXPERIENCE.md (owner question Q17)
+
+**Given** the four device classes
+**When** axe and a keyboard-only pass run
+**Then** Handheld is one task page with Back and a pinned 56 px full-width primary (key-floor.html L452), Tablet is icon rail plus list and detail panes (L453), Desktop is sidebar plus two panes with 34 px controls and the scan hint `USB scanner or type` (L454, L456; EXPERIENCE.md:123), Desktop touch is the Desktop layout with 56/48 px controls (L455); the ScanField keeps focus after each accepted scan; zero WCAG 2.1 AA violations; strings under `packStation.*`; runbook row 2.10o is walked as dispatch1@ on staging
+
+**Note:** PRE-PILOT BLOCKING. Source: `sprint-change-proposal-2026-10-21.md`. Closes the pack and dispatch leg of audit gap G08 and Story 3.7 AC 1 (epics.md:1589-1591, packing station operator). Depends on 3.13 (ScanField, nav token pattern), 3.16 (picked orders, floor surface) and on 3.7, 11.2, 3.6, 1.15, 4.11 (done; the 3-7 story file still reads Status: review and is set to done by this story's create-story). Deferred: vehicle number on `dispatch.dispatched`, e-way bill document, scale integration, billing notification, park at bay, offline pack capture. Size L.
+
+---
+
+### Story 3.19: Unloading Exception Commands (server)
+
+As an unloading supervisor (unload1@ancorlabs.org, `docs/migration/pilot-mock-extract/roles.json:346-366`),
+I want server commands to match an unmatched gate event to a PO, accept an over-tolerance receipt at the band cap and send an unmatched vehicle to procurement, with a durable resolved state,
+So that the 3.20 screen can resolve exceptions and the record shows who resolved what.
+
+**Acceptance Criteria:**
+
+**Given** an unmatched gate event (`binding_status` unmatched is written today when `po_ref_ext` is UNKNOWN or the PO is not open, `src/api/v1/gate.ts:211-214`, `src/compliance/gate.ts:123-132`)
+**When** `POST /api/v1/gate-events/:id/match-po { po_ref_ext, note }` is called by `unloading_supervisor` at the site (access matrix :197 C) or `warehouse_manager` as the escalation approver (:197 A, owner question Q21), authorised by a role allowlist like `UNMATCHED_READ_ROLES` (`gate.ts:32`) because `store_assistant` also holds receiving write
+**Then** a `gate.matched` event registered in `GATE_EVENT_TYPES` (`src/compliance/gate.ts:13`), the `src/events/schema.ts` union near `:377` and the registry near `:5830` is applied, refusing `GATE_EVENT_NOT_UNMATCHED` when `binding_status` is not unmatched or status is not open and `PO_NOT_OPEN` when `getPurchaseOrderByRef` (`src/read/projections/erp_purchase_order.ts`) returns no row or status is not open; `gate_event` gains nullable `resolved_by`, `resolved_at` and `match_note` by a guarded column upgrade of `read/projections/gate_event.sql`; `upsertGateEvent` (`src/read/projections/gate_event.ts:163-166`) no longer overwrites `binding_status` or `po_ref_ext` on a row already matched (replay guard, tested); today the only transition is reversal (`gate_event.ts:198`)
+
+**Given** a GOOD `grn_line` rejected as over tolerance (`src/compliance/receiving.ts:1003-1061`)
+**When** `POST /api/v1/grn-lines/:id/accept-within-band { note }` is called by the same roles at the site
+**Then** one `goods.received` line posts on the same `grn_id` copying the rejected line's sku, lot, expiry, uom, stock class and `weighbridge_correlation_id` with `received_qty` equal to ordered x (1 + `over_receipt_tolerance_pct` / 100) minus cumulative non-rejected received (`readPoReceiptBand`, `receiving.ts:738-770`; EXPERIENCE.md:83) against the same PO line and binding token, posting stock and a putaway task through the existing seam; the rejected line keeps status `rejected` (the band at `:759-760` excludes it; `grn_line.status` is constrained to posted, quarantined, rejected at `read/projections/grn_line.sql:22`, `:42`) and gains nullable `resolved_by`, `resolved_at` and `resolution` (`accepted_within_band` or `sent_to_procurement`) by a guarded column upgrade; the returned excess (counted minus cap) is written on the `receiving_exception` row with reason code `EXCESS_RETURNED_WITH_VEHICLE`, added to `RECEIPT_REASON_CODES` (`src/compliance/receiving-reasons.ts:7`) as a resolution-only code that `createGrnLine` still refuses and to the 3-11 Reason Catalogue; no quantity above the cap is ever posted and no DOA band applies (the access matrix :394 band governs weighbridge load acceptance, which stays with the 3-12 deferred items); `GRN_LINE_NOT_REJECTED` and `GRN_LINE_ALREADY_RESOLVED` are refused; `Hold excess for buyer decision` is not built (EXPERIENCE.md:255, :263)
+
+**Given** an unmatched gate event with no fitting open PO
+**When** `POST /api/v1/gate-events/:id/send-to-procurement { note }` is called by the same roles at the site
+**Then** a `receiving_exception` row (kind `unmatched_vehicle`, source `gate_event_id`, status `sent_to_procurement`, `resolved_by`, `resolved_at`, note) is written, the gate event stays unmatched and is excluded from the open inbox, and a notification targets `{ role: 'procurement_officer', location_id: siteId }` (precedent `src/compliance/supplier.ts:486`); the pilot pack (`deploy/rehearsal/mock/generate.mjs`, `roles.json`) gains a notification read grant for `procurement_officer` (indent1@, `roles.json:505-520` holds none today; `GET /api/v1/notifications` is gated on module notification read, `src/api/v1/notification.ts:394-396`) and the integration test proves the holder can read it; over-tolerance lines have no procurement route in this story (mock key-floor.html L803-812)
+
+**Given** the bootstrap
+**When** NAVIGATION_CAPABILITIES gains `{ name: 'Unloading exceptions', modules: 'unloading-exceptions', functionScope: 'read' }` with the modules union (`src/api/v1/edge.ts:364-368`) widened and a `navigationFor` branch calling `hasUnloadingExceptionScope` (role allowlist `unloading_supervisor`, `warehouse_manager` with `assignmentCoversLocation`)
+**Then** `store_assistant` (receiving write, `roles.json:318-320`) does not receive it and an integration test (pattern `test/integration/story-8-9.test.ts:1571-1575`) proves both cases; the edge NAV_ENTRIES row and label are 3.20's
+
+**Given** the routes
+**When** `test/integration/story-3-19.test.ts` runs
+**Then** every command is covered, the Story 1.9 `allowedSpineRoutes` list (`test/integration/story-1-9.test.ts:171`) gains every new route, a `receiving_exception` projection (kind, source id, status open, sent_to_procurement or resolved, resolved_by, resolved_at, note, excess fields) is pinned in schema-drift, and `GET /api/v1/receiving/exceptions?site=&status=open|sent_to_procurement|resolved` (default all; same roles; registered static-before-parameter next to `/api/v1/receiving/discrepancies`, `src/server.ts:801`) lists the rows with the band facts (ordered, already received, tolerance pct, cap, counted, excess) for over-tolerance kinds computed from the band SQL
+
+**Note:** PILOT. Source: `sprint-change-proposal-2026-10-21.md`. Closes the server half of the unloading leg of audit gap G08. Depends on 3.2, 3.3, 3.4, 3.11, 3.12 (done); 3.13 is the pilot producer of unmatched entries but a soft dependency because integration tests seed them through `POST /api/v1/gate-events`. Weighbridge breach acceptance, escalation and acknowledgement UI (3-12 story :46 items (a), (b)) stay deferred. Size L.
+
+---
+
+### Story 3.20: Unloading Exceptions Screen
+
+As an unloading supervisor,
+I want one inbox of exceptions from gate and unloading with a detail page that resolves each in a single action,
+So that a stuck truck or over-tolerance line is cleared from a screen with a visible Resolved record and the delivery moves to the stores inbox.
+
+**Acceptance Criteria:**
+
+**Given** a caller with the 3.19 `unloading-exceptions` scope
+**When** the bootstrap runs
+**Then** navigation carries `Unloading exceptions` at `/unloading/exceptions` with NAV_ENTRIES `{ name: 'Unloading exceptions', href: '/unloading/exceptions', label: 'nav.unloadingExceptions' }` (`edge/src/components/navigation/nav-model.ts:11-30`), `unloading-exceptions` joins BaseView and BASE_VIEW_ENTRY (`edge/src/components/app-shell.tsx:135-148`), and a deep link without it renders the no-access card
+
+**Given** the page online
+**When** the lists load
+**Then** one group `Exceptions from gate and unloading` with a count, oldest first after a client merge-sort (only the gate unmatched list is server-ordered ascending, `src/api/v1/gate.ts:424-426`), is built from `GET /api/v1/gate-events?site=&binding=unmatched&status=open` (`gate.ts:365-454`; UNMATCHED_READ_ROLES includes `unloading_supervisor`, `:32`) and the 3.19 exceptions list filtered to status open; each row is a DESIGN.md inbox card with a text pill; `Resolved today` lists the 3.19 exceptions list with status resolved or sent_to_procurement for the current business date; the empty state reads `No open exceptions from gate or unloading. New ones appear here as trucks arrive.` (mock key-floor.html L646) with the scan bar still armed (EXPERIENCE.md:106); `GET /api/v1/receiving/discrepancies` is read-only context on the over-tolerance detail, never a source of inbox rows (it has no status filter, `src/api/v1/receiving.ts:545-572`)
+
+**Given** a Vehicle not matched to any PO case
+**When** it opens
+**Then** the gate facts (`vehicle_reg_ext`, `driver_name`, `challan_number_ext`, `challan_photo_ref`, `entered_at` from `GET /api/v1/gate-events/:gateEventId`, `src/server.ts:787`) render; the PO picker is a typed or scanned PO number resolved through `GET /api/v1/erp/purchase-orders/:poNumber` (`src/server.ts:769`, module inventory read, `src/api/v1/erp-projections.ts:424-427`) showing supplier, open lines and due date (owner question Q24; `GET /api/v1/purchase-orders` is the native PO list under procurement read, `src/api/v1/purchase-orders.ts:617-620`, and is never called); the primary reads `Choose a PO to match` until one is selected, then `Match to <PO ref>`, and calls the 3.19 match-po command; the ghost action `No PO fits - hold vehicle, ask procurement` (mock L803) calls the 3.19 send-to-procurement command with an optional note
+
+**Given** a Receipt over tolerance case
+**When** it opens
+**Then** PO line, ordered, already received, tolerance (`accept up to <cap>`) and counted at unloading are shown in that order from the 3.19 exception row, with the warn note `Excess <excess> - returned with vehicle`; the footer holds `Recount` (returns to the inbox without a write) and the primary `Accept <cap> - return <excess> with vehicle` calling the 3.19 accept-within-band command (mock L803-812); `Hold excess for buyer decision` is disabled with the pill `Post-pilot` (EXPERIENCE.md:255); the tolerance percent comes from the PO line, never a literal (mock L463); no above-band branch exists
+
+**Given** the device is offline
+**When** the page opens
+**Then** the inbox shows the needs-connection card (pattern `edge/src/components/damage-cases.tsx:41`) with the scan bar still armed, and Match to PO, Accept within band and Ask procurement are disabled with the reason `Needs a connection - exceptions are resolved against live PO and GRN data`; no outbox write; because bootstrap navigation is not cached offline (deferred-work.md:1116) the header entry is absent offline and the card covers the deep-link and already-open cases; the deviation from mock key-floor.html L467 and L788 (offline resolve) is recorded in EXPERIENCE.md and deferred-work.md (owner question Q22)
+
+**Given** the device classes
+**When** axe and a keyboard-only pass run
+**Then** handheld shows one page at a time (inbox, then detail with Back) with the primary full width and pinned in the bottom third; tablet, desktop and desktop-touch show list and detail side by side; density follows pointer, not class: coarse pointer uses 56 px primary and 48 px secondary, fine pointer uses 34 px controls (EXPERIENCE.md:97, :120; `edge/src/lib/use-device-class.ts:10-32`); a wedge or typed scan of vehicle, challan or PO into the ScanField (placeholder `USB scanner or type vehicle, challan or PO` on desktop, mock L589) opens the matching case; zero WCAG 2.1 AA violations; strings under `unloading.*`
+
+**Note:** PILOT. Source: `sprint-change-proposal-2026-10-21.md`. Closes the edge half of the unloading leg of audit gap G08. Depends on 3.19, 3.13 (ScanField) and 3.14 (the matched delivery appears in the stores inbox automatically because 3.14 lists open matched gate events). Weighbridge breach rows are not rendered here (owner question Q23; EXPERIENCE.md:90 places the breach on the gate surface). The Unlisted supplier match-to-vendor flow (EXPERIENCE.md:85, mock L818-823) is deferred until 3.13's supplier fields are consumed by a vendor-match command. Size M.
+
+---
+
 ## Epic 4: Procurement and Supplier Management
 
 Procurement officers manage the full source-to-pay cycle from supplier registry through requisition, purchase order, goods receipt, and three-way invoice matching. Floor supervisors raise indents from a phone in under 90 seconds and always see live status (UJ-IND-01), with push notifications on every decision. Every purchase order carries DOA-gated approval by amount and category (FR-P-05) and MSME payment discipline is enforced at source (FR-P-09). Tender management (FR-T) is deferred to Phase 2 / Epic 14; this epic delivers the requisition-to-confirmation loop and the compliance controls that protect statutory payment deadlines.
@@ -2072,6 +2392,78 @@ So that approved needs are met from stock with a printed slip and an exact ledge
 **Then** lot and serial capture follows the Story 2.3 rules
 
 **Note:** PILOT. Prerequisite of Story 4.8 (issue-time cap check and slip text). Source: user ruling 2026-09-29 (Story 4.8 open questions).
+
+---
+
+### Story 4.12: Approvals Inbox and Requisition Approval Detail
+
+As a department head or finance controller holding an `indent_approval` DOA band (or their active delegate),
+I want an Approvals inbox that lists the requisitions waiting for me and lets me approve or reject the lines routed to me,
+So that UJ-IND-01 completes inside the edge app and stores can issue the approved lines.
+
+**Acceptance Criteria:**
+
+**Given** a caller who actively holds the role of any `listActiveDoaEntries('indent_approval')` entry at the site (`src/read/projections/doa_registry.ts:218-230` with `isActiveRoleHolderForEntry` `:338-357`) or is the active delegate of such a holder through a new delegate-side lookup in `doa_registry.ts` (`findActiveDelegation` `:267-286` is keyed by delegator only)
+**When** the bootstrap runs
+**Then** navigation carries `Approvals` from a new row `{ name: 'Approvals', modules: 'approvals', functionScope: 'read' }` resolved by `hasIndentApprovalScope(authContext, siteId)` in `src/api/v1/edge.ts` (pattern `hasDamageCaseScope` `:389-398`; modules union `:366` widened), NAV_ENTRIES gains `/approvals` with label `nav.approvals` (`edge/src/components/navigation/nav-model.ts:11-30`), `approvals` joins BaseView and BASE_VIEW_ENTRY (`edge/src/components/app-shell.tsx:130-156`), and a deep link without it renders the no-access card (`:349-358`)
+
+**Given** Task 1 server work
+**When** `GET /api/v1/indents?pending_for_me=true` or `?decided_by_me=true` is called
+**Then** `listIndents` (`src/read/projections/indent.ts:266-310`) returns raised headers with pending lines whose `approver_actor_id` is the caller or a delegator the caller actively represents (with `pending_for_me_line_ids` and `approver_bands`), or lines decided by the caller, branching before the base-role refusal at `src/api/v1/indents.ts:489-495` as the issuable branch does at `:470-486`, bypassing the raiser-site scope and returning an empty list rather than `FUNCTION_ACCESS_DENIED` for a holder with nothing pending; today only status, search, mine and issuable are parsed (`:406-416`)
+
+**Given** Task 1 server work
+**When** `GET /api/v1/indents/:indentId`, `POST .../approve` or `POST .../reject` is called by a caller who is the resolved approver or active delegate of at least one line but holds no procurement role
+**Then** the routes admit them: `approveIndentHandler` and `rejectIndentHandler` (`src/api/v1/indents.ts:1142-1150`) gate on module `[EMPLOYEE_MODULE, 'procurement']` write (the shape `raiseIndentHandler` uses at `:1111-1113`) and `assertIndentReadAccess` (`:223-233`, today 403 for the staging `finance_controller`, `deploy/provision/staging-bootstrap-accounts.sh:103-105`) gains a third admit branch for an approver or delegate of any line, while the seam keeps enforcing identity per line (`src/compliance/indent.ts:893-979`); confirm, withdraw and cancel stay procurement write (the remaining half of deferred-work.md:1182); `test/integration/story-4-12.test.ts` proves list, detail, approve and reject with a finance holder provisioned exactly as the staging script does
+
+**Given** `/approvals` online
+**When** the inbox loads
+**Then** tabs Waiting and Decided carry counts and All carries none (mock key-approvals.html L579-581); Handheld and Tablet render cards (type, reference, amount, subline, requester, age, status pill; L613-615), Desktop and Desktop touch render a table with columns Type / reference, Requested by, Amount, Age, Status (L598-603; the SLA column is omitted because SLA hours are mock values, EXPERIENCE.md:171); the status pill reads Waiting, Approved or Rejected in text (DESIGN.md:201, :260); a client-side search over reference, item and requester (L575); the band line `Your DOA band as <role>: up to Rs <max>` from `approver_bands`, hidden when empty (L584-586); the empty Waiting state `Nothing waiting for you` with `New approvals for <role> appear here. Last checked <time>.` and a `See decided items` link (L590), and `No items match` with `Clear filters` when a search empties a tab (L591); no approval-type filter ships because this story carries one type (owner question Q26)
+
+**Given** a requisition detail from `GET /api/v1/indents/:indentId`
+**When** it renders
+**Then** a DOA note states why it reached the caller (`Routed to you as the requester's head of department by value band (up to Rs <band>)`, L625, from `approver_bands`); every line shows its route chip per DESIGN.md:302-304 from `approval_route` (`src/read/projections/indent.ts:51`): `Standing approval SA-YYYY-NNN` in the ok pair with cap copy such as `4 of 6 cans used this month` where a cap is set (EXPERIENCE.md:89; Story 4.8 fields), `Self-approval limit Rs <amount>` in the info pair, `<band role> approval` in the warn pair for DOA lines; a `line_status` pill with text; lines pending for the caller are marked `Waiting for you` and the others read-only with their decider and time; an Evidence table lists line, qty, value with a total (L631-633); a History block lists raise (`created_at`) and each decision (`decided_at`, `decided_by`, `rejection_reason`) (L652-656); no per-line selection control
+
+**Given** the detail with at least one line pending for the caller
+**When** Approve is tapped, or Reject is confirmed with a non-empty reason (`Reason for rejection (required, sent to the requester)`, Confirm reject disabled until text, Cancel beside it, L709-715)
+**Then** `POST /api/v1/indents/:indentId/approve` or `/reject` is sent with `line_ids` equal to `pending_for_me_line_ids` (`src/server.ts:857-858`; the server derives the same set when the body omits them, `src/api/v1/indents.ts:955-956`), the detail confirms inline (`Approved by you, <time>. <requester> has been notified.` or `Rejected by you ... Reason sent to <requester>`, L719, L722), the item moves to Decided with no undo (EXPERIENCE.md:171); `INDENT_LINE_ALREADY_DECIDED`, `INDENT_LINE_NOT_FOUND`, `INDENT_RAISER_CANNOT_APPROVE`, `NOT_RESOLVED_APPROVER`, `INDENT_NOT_IN_RAISED`, `INDENT_PENDING_CONFIRMATION`, `INDENT_ALREADY_DECIDED`, `INDENT_REJECTION_REASON_REQUIRED` and `FUNCTION_ACCESS_DENIED` render through `errorMessage()` (`edge/src/i18n/locale.ts:37-41`) from new `errors.*` keys in `edge/src/messages/en.json` (none of the indent decision codes exists today, `:80-119`); nothing is written to the outbox; recorded spine deviation: EXPERIENCE.md:137 places Ask for info in the footer and this story ships without it (Story 4.13 adds the control and its endpoint)
+
+**Given** `navigator.onLine` is false or a fetch fails
+**When** the page is open
+**Then** Approve and Reject are disabled with the block `Offline - approvals need a connection. Decisions are checked live against the latest stock and your DOA band, so they are not queued. Reconnect to decide. Evidence shown is from the last sync at <time>.` (mock L706-708) in a `role="status"` notice, the last fetched data stays readable marked last synced, and the page re-fetches on online (EXPERIENCE.md:100: both actions disabled)
+
+**Given** the four device classes (`edge/src/lib/use-device-class.ts:10`)
+**When** axe and a keyboard-only pass run
+**Then** Handheld opens the detail as a page with Back and a pinned footer replacing the bottom nav (L846): Approve full width 56 px, Reject 48 px secondary; Tablet shows list and detail panes, touch-roomy 56/48 px, behind the icon rail; Desktop shows two panes with 34 px compact controls under the sidebar; Desktop touch shows the Desktop layout with 56/48 px targets (DESIGN.md:224-229, EXPERIENCE.md:111, :123, :137); zero WCAG 2.1 AA violations; strings under `approvals.*`; runbook row 2.10n (two-line requisition approved from phone and desktop windows, then issued as store1@) passes on staging
+
+**Note:** PRE-PILOT BLOCKING. Source: `sprint-change-proposal-2026-10-21.md`. Closes audit gap G06 (Ask for info carved out to 4.13). Depends on 4.10, 4.3, 1.15, 1.8 (done); 4.11 (done, uncommitted) must be committed before this story branches; 4.8 (review) only for the standing approval chips. Online-only base view like standing-grants (`edge/src/components/standing-grants.tsx:54-104`, `:227-231`); no outbox. Requisition-only scope is a recorded deviation from EXPERIENCE.md:169 (one inbox); a follow-up folds damage-case concurrence and grant decisions into `/approvals`. Size L.
+
+---
+
+### Story 4.13: Requisition Ask for Info
+
+As an approver,
+I want to send a question to the requester about a raised requisition without deciding it,
+So that I can decide with the missing information.
+
+**Acceptance Criteria:**
+
+**Given** an indent whose header status is `raised` (not `pending-confirmation`) with lines in `line_status` pending held by the actor
+**When** `POST /api/v1/indents/:indentId/request-info { question, line_ids? }` is called behind the 4.12 approve gate (`src/api/v1/indents.ts:1142-1150` as widened), `line_ids` defaulting to every pending line the actor holds (`resolveDecisionLineIds`, `:929-948`)
+**Then** for every line the actor must be that line's `approver_actor_id` or an active delegate of it (`decideAsApprover`, `src/compliance/indent.ts:943-975`; the requester is refused `INDENT_RAISER_CANNOT_APPROVE` as at `:911-935`; a non-pending line is refused `INDENT_LINE_ALREADY_DECIDED` 409); one `indent.info_requested` event is persisted on the procurement stream through the decision seam (`INDENT_EVENT_TYPES`, `src/compliance/indent.ts:35-45`, dispatcher `:62-66`, applier wired at `src/events/store.ts:1183`; not the 4.11 issue seam `src/compliance/indent-issue.ts:53`); one `indent_info_request` read row (new table in `read/projections/indent.sql` mirrored in `deploy/compose/init-db.sql`: indent_id, line_ids, question, asked_by_user_id, asked_at) and one `logAuditEntry` (`:1039` pattern) are written in the same transaction; a transactional notification (`emitNotificationInTransaction`, `:1082-1097`) with `event_type` `indent_info_requested` targets `{ role, user_id: indent.requester_user_id }` and the type joins `KNOWN_EVENT_TYPES` (`src/api/v1/notification.ts:34`, owner question Q28); `line_status` stays pending; a blank question is refused 400 `INDENT_INFO_QUESTION_REQUIRED`; the events door refuses an uploaded `indent.info_requested` with 403 `FUNCTION_ACCESS_DENIED` (extend `src/api/v1/events.ts:557-569`) and the edge door with 403 `CENTRAL_ONLY_OPERATION` (add to `EDGE_REFUSED_INDENT_EVENT_TYPES`, `src/sync/upload.ts:385-398`, called at `src/api/v1/edge.ts:554`), both tested as in `test/integration/story-4-11.test.ts:636` and `:939`; the route joins `allowedSpineRoutes` (`test/integration/story-1-9.test.ts:372-385`)
+
+**Given** `GET /api/v1/indents/:indentId` (`src/api/v1/indents.ts:386-403`, today `{ indent, lines }`)
+**When** info requests exist
+**Then** the response adds a top-level `info_requests[]` (newest first: `info_request_id`, `line_ids`, `question`, `asked_by`, `asked_at`), `GET /api/v1/indents` list rows gain `info_requested: { asked_at, question } | null` (latest only, one grouped subquery in `listIndents`, `src/read/projections/indent.ts:266`, no N+1), and the 4.12 detail renders the status block `Info asked, <when>` plus `"<question>" - you can still decide.` (mock key-approvals.html L733) with an `Info asked` chip (info pair, L546) on the inbox row; the row stays under Waiting (L529)
+
+**Given** the 4.12 requisition approval detail on Handheld while online
+**When** `Ask for info` (48 px secondary beside Reject under the full-width Approve, EXPERIENCE.md:137, mock L389, L735) is tapped
+**Then** the footer actions are replaced by a textarea labelled `What do you need from the requester?` with the hint `Required before you can send.` while empty, a primary `Send question` disabled until text is typed, and a `Cancel` link restoring the three actions (L707-716, L899-902); on send the detail shows the status block and the inbox row keeps Waiting; offline the footer shows the 4.12 offline block and Ask for info is not offered (L704-706, L725; EXPERIENCE.md:100); `Ask for info` is not offered on standing-approval or self-approval-limit items (L405, L735-736)
+
+**Given** the requester's My requests (`edge/src/components/my-requests.tsx`, fed by `GET /api/v1/indents?mine=true` at `:249`, list only)
+**When** `info_requested` is set on the row
+**Then** the card shows an `Info asked` chip and the question text with its date (keys under `myRequests.infoRequest.*`), and `GET /api/v1/notifications` (`src/server.ts:1458`) returns the `indent_info_requested` row for the requester; no edge notifications surface exists (no bell; EXPERIENCE.md:139; audit 7.2 item 8 Shell Phase 2), so in-app notification display and a typed requester reply are out of scope and recorded in deferred-work.md
+
+**Note:** PILOT. Source: `sprint-change-proposal-2026-10-21.md`. Closes the Ask for info residual of audit gap G06 (EXPERIENCE.md:137). Depends on 4.12. Same surface and nav as 4.12; no new nav row; online-only. Size S-M.
 
 ---
 
@@ -2727,6 +3119,50 @@ So that a wrong validity date neither locks a good instrument nor unlocks an exp
 
 ---
 
+### Story 7.11: Maintenance Supervisor Desk
+
+As a maintenance supervisor (maintsup1@ancorlabs.org, role `maintenance_supervisor` on module maintenance with location `*`, `docs/migration/pilot-mock-extract/roles.json:492-498`),
+I want a desk with my work order board, fault triage, warranty override, return-to-service sign-off and the sync-conflict queue,
+So that a reported fault becomes a breakdown work order and a repaired asset returns to running without API calls by hand.
+
+**Acceptance Criteria:**
+
+**Given** a caller who is the active DOA holder of `maintenance.return_to_service`, `maintenance.warranty_override` or `maintenance.sync_conflict_resolution` (world.json:961-979)
+**When** the bootstrap runs
+**Then** navigation carries `Maintenance desk` from a new row `{ name: 'Maintenance desk', modules: 'maintenance-desk', functionScope: 'write' }` with the modules union (`src/api/v1/edge.ts:364-368`) widened and a `hasMaintenanceDeskScope` branch in `navigationFor` (`:400-420`) pairing `findFirstActiveDoaEntry(transactionType)` (`src/read/projections/doa_registry.ts:232`) with `isActiveRoleHolderForEntry(entryId, userId)` (`:338`) over the three types, as `setAssetStatusBase` does via `resolveApprover` (`src/api/v1/maintenance.ts:3747-3760`); the technician maint1@ (maintenance write at site, `roles.json:478-484`) is not sent it (a module-based row would advertise the desk to the technician); NAV_ENTRIES gains `{ name: 'Maintenance desk', href: '/maintenance/desk', label: 'nav.maintenanceDesk' }`; `maintenance-desk` joins BaseView, BASE_VIEW_ENTRY and VIEW_NAV_ENTRY (`edge/src/components/app-shell.tsx:130-160`) so a deep link renders the no-access card (`:349-355`); an integration test beside `test/integration/story-1-15.test.ts:514-560` proves both callers; `edge/test/unit/nav-model.test.ts` asserts the entry
+
+**Given** `GET /api/v1/maintenance/fault-reports?status=reported&limit=500` and `?status=accepted&limit=500` (`src/api/v1/maintenance.ts:1277-1300`; `safety_flag` lives on the fault report, `src/read/projections/maintenance_fault_report.ts:13`, joined on `work_order.fault_report_id`), `GET /api/v1/edge/maintenance/worklist?limit=500` (open, overdue, in_progress, on_hold only, `src/read/projections/maintenance_work_order.ts:444`), `GET /api/v1/maintenance/work-orders?status=completed&limit=500` (`src/server.ts:982`), `GET /api/v1/maintenance/asset-status?limit=500` (`:1067`) and `GET /api/v1/maintenance/sync-conflicts?status=open&limit=500` (`:1101`) have loaded
+**When** the board renders
+**Then** five groups with counts show To triage (fault reports reported), Assigned / accepted (work orders open or overdue; mock label key-maintenance.html L814 kept, no-assignment reading recorded under EXPERIENCE.md:138), In progress, Waiting spares (on_hold with `status_note` as the pill text, L829) and Done - sign-off (completed work orders whose `asset_operational_status` is breakdown or maintenance); each card carries `work_order_id` or `fault_report_id`, a text priority pill P1 to P4 or Unset (L477), `asset_tag` and asset name as the title line (backend work orders have no title; deviation from L833 recorded), and the pills Warranty-flagged (`warranty_flagged` and no override), Awaiting signature (Done group) and, for fault-report cards, Safety hazard; Desktop and Desktop touch render columns, Handheld and Tablet a grouped list (EXPERIENCE.md:138, L436); the three attention buttons Awaiting signature (n), Sync conflicts (n), Warranty-flagged (n) open the first matching card's detail or the conflict panel and announce `Nothing awaiting signature` or `No warranty-flagged work orders` when empty (L820-822, L1030-1032); the worklist `total` and `truncated` (`src/api/v1/edge.ts:968-976`) state how many were not loaded and any other list returning exactly 500 rows shows the 500+ marker
+
+**Given** a fault report in To triage
+**When** Create work order is tapped
+**Then** `POST /api/v1/maintenance/fault-reports/:id/accept` is called with an empty body (the handler reads none, `maintenance.ts:1375`), the work order appears in Assigned / accepted with status open and its SLA-derived priority read-only (`policy.priority` from `getActiveSlaPolicy(criticality_class, safety_flag)`, `maintenance.ts:1396-1428`), a `Safety hazard flagged by reporter - Isolate the asset before work starts` banner renders first when `safety_flag` is true (L872), Reject requires `rejection_reason` (trimmed, non-empty, `maintenance.ts:1522-1528`) and calls `POST .../reject` (not in the mock; owner question Q31), and `FAULT_ALREADY_TRIAGED`, `SLA_POLICY_NOT_FOUND`, `FAULT_REPORT_NOT_FOUND` and `ASSET_NOT_FOUND` render from `errors.*`; the mock's P1 to P4 segment and Assign technician select (L876-882) are deferred
+
+**Given** a work order with `warranty_flagged` true (`maintenance_work_order.ts:33`) and no row from `GET /api/v1/maintenance/work-orders/:id/warranty-overrides` (`src/server.ts:1091-1094`)
+**When** one configured reason code is chosen from tiles and Override - repair in-house is tapped
+**Then** `POST /api/v1/maintenance/work-orders/:id/warranty-overrides { reason_code }` is called (`maintenance.ts:4307-4362`; catalogue `config.maintenance.warrantyOverrideReasonCodes`, defaults OUT_OF_WARRANTY_SCOPE, WARRANTY_NOT_APPLICABLE, PREVIOUS_UNAUTHORIZED_REPAIR, EMERGENCY_REPAIR at `src/config/index.ts:517-525`, each trimmed, max 200), the card reads `Warranty overridden - repair in-house` with `overridden_by` and `overridden_at` from the `{ override }` response (L898), Call OEM under warranty stays a secondary no-op (L886), and `WARRANTY_OVERRIDE_ALREADY_RECORDED`, `WARRANTY_OVERRIDE_NOT_REQUIRED`, `WARRANTY_OVERRIDE_REASON_INVALID`, `APPROVAL_REQUIRED` and `APPROVAL_UNRESOLVED` render from `errors.*`; no free-text reason (mock L899-900 is superseded by the 7.7 reason-code contract); Task 1 adds `GET /api/v1/maintenance/warranty-override-reason-codes` (mirror of `GET /api/v1/maintenance/closure-codes`, `src/server.ts:1100`, maintenance read) because today the catalogue is reachable only through `details.allowed` on the 400
+
+**Given** a completed work order in Done - sign-off
+**When** the three checklist items are ticked and Sign return to service tapped
+**Then** `POST /api/v1/maintenance/assets/:assetId/status { new_status: 'running' }` is called (`maintenance.ts:3696-3786`), the card reads Returned to service with `sign_off_by` and `sign_off_at` from `GET /api/v1/maintenance/assets/:assetId/status` (`src/server.ts:1069`; `src/read/projections/asset_operational_status.ts:14-15`) and leaves the group, Sign stays disabled until all three are ticked with the reason shown (ticks are device-side only, owner question Q30), and 423 `STATUTORY_EXAMINATION_OVERDUE` (`maintenance.ts:3712-3722`, raised before the DOA check), 404 `APPROVAL_UNRESOLVED` (`:3751`), 403 `APPROVAL_REQUIRED` (`:3762`) and 400 `INVALID_STATUS_TRANSITION` (`:3734`) render from `errors.*` with the asset left out of service
+
+**Given** an open sync conflict
+**When** it opens
+**Then** `conflicting_event_type`, `device_id`, `captured_by`, `occurred_at`, `raised_at`, `expected_version` against `head_version`, `reason` (version_conflict or safety_fault_rejected), `rejection_code` and key `conflicting_payload` fields render (`src/read/projections/maintenance_sync_conflict.ts:12-37`), two tiles Keep server reading (resolution_code `discarded`) and Keep both, re-entered centrally (`reapplied_centrally`) with an optional `resolution_note` of at most 1000 characters (`src/compliance/maintenance-sync-conflict.ts:51`), Resolve conflict calls `POST /api/v1/maintenance/sync-conflicts/:id/resolve { resolution_code, resolution_note }` (`maintenance.ts:4660-4681`), the button count drops, and `SYNC_CONFLICT_ALREADY_RESOLVED`, `SYNC_CONFLICT_NOT_FOUND`, `APPROVAL_REQUIRED` and `APPROVAL_UNRESOLVED` render from `errors.*`; `reapplied_centrally` records only (deferred-work.md:419, row 491) and the card says so; Send back to technician (mock L914-923) is deferred
+
+**Given** the device is offline
+**When** the desk is open
+**Then** the last fetched board shows under the banner `Offline - needs a live connection` with the copy `Showing the board from the last sync. Signing, overrides, conflict resolution and triage are disabled until you reconnect.` (mock L863), every action is disabled with the reason, nothing is written to the outbox, and lists re-fetch on online; with no earlier fetch the needs-connection card (`edge/src/components/damage-cases.tsx:41`) replaces the board
+
+**Given** the four device classes
+**When** axe and a keyboard-only pass run
+**Then** zero WCAG 2.1 AA violations, every pill carries text, focus returns to the board after a panel closes, 56/48/34 px targets, strings under `maintenanceDesk.*` and `nav.maintenanceDesk`, new keys `errors.FAULT_ALREADY_TRIAGED`, `errors.SLA_POLICY_NOT_FOUND`, `errors.WARRANTY_OVERRIDE_ALREADY_RECORDED`, `errors.WARRANTY_OVERRIDE_NOT_REQUIRED`, `errors.WARRANTY_OVERRIDE_REASON_INVALID`, `errors.SYNC_CONFLICT_ALREADY_RESOLVED`, `errors.SYNC_CONFLICT_NOT_FOUND` and `errors.STATUTORY_EXAMINATION_OVERDUE` in `edge/src/messages/en.json` (none exists today), and `edge/test/unit/i18n-literals.test.ts` ALLOWED_LITERAL_PATTERNS extended
+
+**Note:** PRE-PILOT BLOCKING. Source: `sprint-change-proposal-2026-10-21.md`. Closes audit gap G09; touches G10 and G18 only through the shared nav tables, so audit fix-now item 5 (technician Maintenance nav row) lands first. Depends on 7.3, 7.6, 7.7, 7.8, 1.14, 1.15, 8.9 (done). Online-only; company-wide board as shipped (deferred-work.md row 512, owner question Q32). Deferred: technician assignment (no `assigned_to` in `src/read/projections/maintenance_work_order.ts`), triage priority override, send back to technician. Size L.
+
+---
+
 ## Epic 8: Quality Control and Batch Release
 
 QC inspectors and heads disposition every finished goods lot before it reaches sellable stock — there is no bypass, and urgency is served by conditional release, not by skipping the gate (FR-Q-02). AQL sampling, calibration-locked result capture, CoA/CoC, NCR/CAPA, BIS and Legal Metrology hooks, and customer-witnessed inspections are all enforced workflows. Quality holds propagate everywhere within 15 minutes (FR-Q-09). Instrument records from Epic 7 (C-12) must exist before the calibration lockout activates here.
@@ -2994,6 +3430,86 @@ So that damage found anywhere becomes governed evidence with a concurred resolut
 **Given** a reporter who also needs the material replaced
 **When** they choose report-and-request-replacement
 **Then** it is one flow - the replacement becomes a requisition under normal approval rules (Story 4.3, standing approvals per Story 4.8 where they apply), linked to the damage report
+
+---
+
+### Story 8.10: Receipt-Lot QC Task, QC-Governed Putaway Release, Observation Note and Photo (server)
+
+As the QC head,
+I want receipt lots held in ZONE-QC-HOLD to open a real QC inspection task, an accept disposition to release the held putaway, observations to carry text and a photo, and disposition to be QC-head gated,
+So that the 8.11 screen can inspect, disposition and release a BIS or quarantine lot.
+
+**Acceptance Criteria:**
+
+**Given** `goods.received` with `needsQcHold` true (`item.bis_licence_required` or `item.quarantine_required`, `src/compliance/receiving.ts:1110-1116`) and a resolved `lot_id`
+**When** a new non-throwing lookup wrapping `resolveInspectionPlanForLot` (`src/compliance/quality.ts:1898-1993`; today it throws `INSPECTION_PLAN_NOT_FOUND`, `INSPECTION_PLAN_AMBIGUOUS` or `INSPECTION_PLAN_NOT_APPROVED` and takes a non-null `bom_revision_id`) finds an approved plan for the item at the receipt business date
+**Then** the receiving seam inserts a `qc_inspection_task` in the same transaction with `source_completion_type` `goods_receipt` and `source_completion_id` equal to `grn_line_id`, after widening `SOURCE_COMPLETION_TYPES` (`quality.ts:264-268`, `:675-682`), dropping and re-adding `chk_qc_inspection_task_source_type` (`read/projections/qc_inspection_task.sql:73`; `deploy/compose/init-db.sql:9818`, `:9873`), making `bom_revision_id` nullable for this source only (`init-db.sql:9795`, owner question Q35) and relaxing the finished-stock quantity and allocation check of `applyCompletionReceived` (`quality.ts:2097-2147`) for the receipt arm; replay is idempotent through `getQcInspectionTaskBySource` (`src/read/projections/qc_inspection_task.ts:159`) under `uq_qc_inspection_task_source` (`init-db.sql:9816`); `GET /api/v1/qc/tasks` (`src/server.ts:1137`) lists it; when the resolver reports no plan the seam opens no task, keeps the held putaway plus the `qc_hold_placed` notification (`receiving.ts:1455-1470`) and records `no inspection plan` in a new `putaway_task.hold_reason` column and the notification next step (owner question Q33); a receipt with no `lot_id` (`receiving.ts:1441`) opens no task and is recorded the same way with `no lot` (owner question Q36)
+
+**Given** a `goods_receipt` task
+**When** `qc.lot_dispositioned` accept (or the accepted child of a `qc.lot_split_recorded`) is applied in `applyLotDispositioned` (`src/compliance/quality.ts:2508`; the recorder-may-not-accept SoD at `:2524-2530` is kept)
+**Then** the task's held putaway (`putaway_task.grn_line_id` equal to `source_completion_id`, status held, owner role `qc_inspector`, `receiving.ts:1443-1448`) is released in the same transaction via `markPutawayReleased` with `released_by` the disposition actor and reason `qc_accept`, and a `goods.putaway_released` event is emitted whose admissibility accepts a `disposition_id` in place of the `receiving.putaway_release` DOA check (`receiving.ts:189-200`; `RECEIVING_APPROVER_ROLES` at `:98` stay for the manual path); `assertDamageCaseAllowsRelease` (`receiving.ts:1530-1531`, `src/compliance/damage.ts:1952-1974`) still runs so a line that also has an open damage case stays held; reject leaves the putaway held; `GET /api/v1/putaway-tasks?status=ready` (`src/server.ts:805`) then lists it; today the only release paths are the receiving-supervisor DOA release (`receiving.ts:1534`) and the Story 8.9 damage-case clearance, and a clean BIS or quarantine_required lot has neither
+
+**Given** `POST /api/v1/qc/tasks/:taskId/observations`, today a per-characteristic readings batch requiring `characteristic_id` and `readings` (`src/api/v1/quality.ts:1198-1230`, `:1293`)
+**When** the payload is a free-text observation `{ note (max 1000), attachment_id }` with the attachment owned by the caller (owner check per `src/compliance/damage.ts:1120` precedent)
+**Then** both persist on a new observation note row returned by the task results read, the route accepts either body shape (or a sibling `POST .../notes` route is added and named in the story), and `qc.observation_recorded` stays central-only on the edge door (`src/sync/upload.ts:335-343`)
+
+**Given** `POST /api/v1/qc/tasks/:taskId/disposition` and `/split` (`src/api/v1/quality.ts:2217`, `:2220`; today `requireRole` module qc write only)
+**When** the actor role is not in `config.quality.qcHeadRoles` (`src/config/index.ts:652`, default `qc_head`; qchead1@ at `docs/migration/pilot-mock-extract/roles.json:569-573`)
+**Then** the handler pre-check and the seam both return 403 `APPROVAL_REQUIRED` with `{ task_id, qc_head_roles }` in the Binding Scope Decision 9 pattern (`src/api/v1/quality.ts:1428-1437`, `src/compliance/quality.ts:3845-3852`), with no role literal in the seam; this overrides deferred-work.md:456 (row 583, reject needs no second signature) and that row is updated (owner question Q34)
+
+**Given** `GET /api/v1/qc/tasks/:taskId` (`src/server.ts:1138`)
+**When** the task is a `goods_receipt` task
+**Then** the view joins `grn_line` by `source_completion_id` and carries `grn_number`, supplier name, received quantity, `line_condition`, `reason_code`, `reason_note`, `reason_photo_ref` (`src/read/projections/grn_line.ts:44-48`; the Story 3.11 columns composed by `describeReceiptReason`, `receiving.ts:1466`) and, once 3.14 lands, `inspect_on_opening`, `inspect_note`, `inspect_photo_ref` and `material_photo_ref`, plus the `putaway_task` row (status, `from_location_id`, quantity) and hold locations with quantities for the hold-scope card; task rows on `GET /api/v1/qc/tasks` gain `disposition`, `disposition_at` and `released_at` (`src/read/projections/qc_inspection_task.ts:85-89` carries none) and the list `gate_status` filter accepts accepted, rejected and split (`quality.ts:862-866`)
+
+**Given** `test/integration/story-8-10.test.ts` (new) and `deploy/rehearsal/mock/operations-smoke.ts` (today seeds no inspection plan and calls no `/api/v1/qc` route)
+**When** they run
+**Then** one approved inspection plan per BIS pilot item is seeded via `POST /api/v1/qc/inspection-plans` and approve (`src/server.ts:1112`, `:1121`), the chain from `goods.received` with `needsQcHold` to `qc_inspection_task` to disposition accept to putaway status ready passes, the no-plan fallback, the reject arm leaving the putaway held, the damage-case-still-blocks case and the non-qc_head 403 arm are asserted, and the central-only property for the widened source type is proven like 8-3 story :121-124
+
+**Note:** PRE-PILOT BLOCKING. Source: `sprint-change-proposal-2026-10-21.md`. Closes the server half of audit gap G07. Depends on 8.1, 8.2, 8.3, 8.5, 8.9, 3.11 (done); 3.14 is a soft dependency for the inspect-on-opening fields only. Server only; no nav change. Record fixes: deferred-work.md:456 (row 583) points here; deferred-work.md:1157 is marked resolved by 8.9 (`receiving.ts:1530`) and a new line records the clean BIS or quarantine lot path; 8-3 UX Boundary :713-720 points to 8.11. Size L.
+
+---
+
+### Story 8.11: QC Inbox, Inspection Detail and Lot Disposition (edge)
+
+As a QC inspector or QC head (qc1@ and qchead1@, `docs/migration/pilot-mock-extract/roles.json:549-553` and `:569-573`, module qc write),
+I want an inbox of lots held for inspection, an inspection detail with results, observations and photo, and a disposition with hold scope,
+So that a BIS or quarantine receipt lot is inspected and released to putaway from the PWA.
+
+**Acceptance Criteria:**
+
+**Given** a caller with a qc module assignment at the site
+**When** the bootstrap runs
+**Then** navigation carries `QC inbox` from a new row `{ name: 'QC inbox', modules: ['qc'], functionScope: 'read' }` after Standing grants (`src/api/v1/edge.ts:382`), NAV_ENTRIES gains `/qc/tasks` with label `nav.qcInbox`, `qc-tasks` and `qc-holds` join BaseView and BASE_VIEW_ENTRY, a deep link without the entry renders the no-access card, and `edge/test/unit/nav-model.test.ts` asserts the entry; the rehearsal roles file (`deploy/rehearsal/mock/out/MOCK-MUTT2R97/roles.json:374-393`) grants module `quality` only and gains a qc assignment or the entry never appears on the rehearsal stack
+
+**Given** tasks at the site
+**When** `/qc/tasks` loads online
+**Then** groups render in order: In inspection bay - to inspect (two calls `GET /api/v1/qc/tasks?site_id=&gate_status=qc_hold&task_status=open` and `...&task_status=sampling_determined`, because `task_status` takes one value, `src/api/v1/quality.ts:853-875`; the bay name comes from the 8.10 task view), Damage reported (the open damage-report cards for the site from the damage case groups `to_inspect` and `whole_lot`, `edge/src/components/damage-case-view.ts:201-210`, each with lot, hold pill and a `Suspect whole lot - requested` pill where asked, opening `/damage/cases?case=<id>`; the case itself is never duplicated here, mock key-qc.html L411, L565, L687-692), Awaiting disposition (`task_status=inspected` with no disposition from the 8.10 fields), Sent on - finance or CEO (count card from the damage-case groups `sent_on` and `with_ceo`; no QC task status exists for it) and Done today (tasks whose 8.10 disposition or release falls on the device's local date); the 3.14 inspect-on-opening report shows as a chip, not a verdict; a task opened with no plan is not listed and the putaway hold reason `no inspection plan` shows in the stores inbox instead; each empty group states what is empty; an always-visible scan bar (DESIGN.md:262; 48 px in touch density) sits above the groups, a lot number or lot barcode resolves to its task on the fetched list and opens the detail, and it stays armed when every group is empty (EXPERIENCE.md:107)
+
+**Given** a task detail (`GET /api/v1/qc/tasks/:taskId` via `?task=` query)
+**When** it opens
+**Then** sampling is determined on first open (`POST .../sampling`) and the sample size shown, each characteristic renders Measured plus Pass and Fail with an out-of-tolerance pill and posts `POST .../results` online, a Split card (Good stepper, Not usable derived as received minus Good, mock L612-617) is client state on the detail, Complete inspection stays disabled stating why until every sampled characteristic has a result and every not-usable count has an observation, then posts `POST .../inspection-completion` with no body counts (`quality.ts:1335`) and the task moves to Awaiting disposition; the Story 8.2 refusal codes (`en.json:308-318`, re-worded for an online page) render from `errors.*`; new keys `errors.QC_INSPECTION_REQUIRED`, `errors.DISPOSITION_EXISTS`, `errors.HOLD_EXISTS`, `errors.HOLD_ALREADY_RELEASED`, `errors.HOLD_NOT_FOUND`, `errors.LOT_NOT_FOUND`, `errors.DEFECT_CODE_UNKNOWN`, `errors.QC_RELEASE_NOT_ELIGIBLE`, `errors.RELEASE_EXISTS`, `errors.RETENTION_SAMPLE_REQUIRED`, `errors.RETENTION_SAMPLE_EXISTS`, `errors.APPROVAL_AUTHORITY_MISMATCH`, `errors.INSPECTION_PLAN_NOT_FOUND` and `errors.INSPECTION_PLAN_NOT_APPROVED` are added (`quality.ts:255-335`; none exists today)
+
+**Given** an open or inspected task
+**When** the inspector adds a free-text observation with an optional photo
+**Then** the photo uploads through `PUT /api/v1/attachments/:attachmentId` via `edge/src/sync/attachment-uploader.ts:60` and the note posts to the 8.10 note endpoint with `{ note, attachment_id }`, the list shows who, when, text and a thumbnail fetched through `authorizedFetch` (pattern `edge/src/components/damage-cases.tsx:1009`), announced once via aria-live
+
+**Given** an inspected task with Good and Not usable counts summing to the received quantity
+**When** the QC head taps Record disposition with hold scope `Hold this lot in the bay only` (default; disposition and split act on the task) or `Hold the whole lot everywhere` with a required `hold_reason` (`Hold only reported units` appears for damage-sourced tasks only)
+**Then** the whole-lot choice posts `POST /api/v1/qc/holds { lot_id, hold_reason }` first (`quality.ts:2308-2335`; `HOLD_EXISTS` refetches quietly), a two-part lot posts `POST .../split { justification, splits: [{ sequence: 1, quantity: good }, { sequence: 2, quantity: not_usable }] }` (`quality.ts:1591-1640`) then per-child dispositions, a single part posts `POST .../disposition { disposition: accept | reject, justification, defect_code? }` (`quality.ts:1522-1541`), an accept posts `POST .../release` (`src/server.ts:1161`) and shows `Released for putaway` in Done today only when no open hold remains on the lot (a whole-lot hold keeps `lot_master.quality_hold_status` held until `POST /api/v1/qc/holds/:holdId/release` with `release_reason`, `:1177`; otherwise the card shows On hold with the hold id and states the lot stays held until a two-tap release, owner question Q37); while the scope is whole lot the Accept tile on the Good part is disabled with the reason `A lot-wide hold blocks accepting the good units until QC clears the lot` (EXPERIENCE.md:101, mock L497, L622-626); `RETENTION_SAMPLE_REQUIRED` or `QC_RELEASE_NOT_ELIGIBLE` on release shows `Log retention sample first` with a `POST .../retention-sample` action for the QC head unless 8.10 scopes receipt lots out of the retention rule (owner question Q39); `DISPOSITION_EXISTS` refetches quietly; Conditional release is disabled with the reason `Needs the Approvals inbox (DOA sign-off), not yet built` (mock L412, L653); a non QC head sees the Decision and Hold scope cards read-only (client check against the bootstrap role; the server gate is 8.10 AC 4)
+
+**Given** `/qc/holds`
+**When** it opens
+**Then** online it lists `GET /api/v1/qc/holds?site_id=&status=open` (`quality.ts:2444`) with `hold_id`, `placed_by`, `placed_at` and a two-tap release requiring `release_reason`, and offline it renders the synced `held_lot` rows (`sync/sync-rules.yaml:27-29`: `lot_id`, `lot_number`, `sku`, `quality_hold_status`, `quality_hold_reason`, `updated_at`; no site, hold id or placer) as a `Lots on hold (all sites, as synced)` list with release disabled and an as-of line from the last PowerSync sync time (`edge/src/components/sync-status-badge.tsx` has none today; add it or render the as-of next to the list)
+
+**Given** the device is offline
+**When** `/qc/tasks` or a detail opens
+**Then** the needs-connection card replaces the groups, every write is disabled with the reason, and Dev Notes record the departure from EXPERIENCE.md:99 (QC observations offline) and mock key-qc.html L427 (disposition captured offline): `src/sync/upload.ts` `EDGE_QC_EVENT_TYPES` admits only `qc.result_recorded` on `POST /api/v1/edge/events` (`:343-359`, called at `src/api/v1/edge.ts:557`); sampling, observations, inspection completion, split, disposition, holds and conditional release are 403 `CENTRAL_ONLY_OPERATION`, and this story keeps results on the same online REST path for one consistent page state rather than mixing an outbox for results with online-only writes for everything else
+
+**Given** the two pages
+**When** axe, e2e (`edge/test/e2e/qc.spec.ts`), unit and `i18n:check` run
+**Then** `/qc/tasks` and `/qc/holds` have zero WCAG 2.1 AA violations, a keyboard-only test reaches the first card, Pass and Fail, Complete inspection and Record disposition, 56/48/34 px targets, strings under `qc.*` and `nav.qcInbox`, and the Handheld bottom nav keeps `MAX_SLOTS` 4 with the fourth slot becoming More (`edge/src/components/bottom-nav.tsx:8-27`)
+
+**Note:** PRE-PILOT BLOCKING. Source: `sprint-change-proposal-2026-10-21.md`. Closes the edge half of audit gap G07. Depends on 8.10 (receipt task, release, note endpoint, QC head gate, task view fields), 3.14 (inspect-on-opening chip source and acceptance fields) and 8.9, 1.14, 1.15 (done); 3.15 consumes the released putaway. QC workbench surface (EXPERIENCE.md:39, :136): Handheld inbox then detail with Back and pinned primary; Tablet and Desktop two panes. Online-only except the `held_lot` offline read; `/qc/holds` reached from the inbox header (owner question Q38). Record fixes: 8-9 story file Status set to done once Task 13.5 is recorded; 8-1 :460-465, 8-2 :152-154 and 8-3 :121-124 cited as the reason the gap exists. Size L.
 
 ---
 

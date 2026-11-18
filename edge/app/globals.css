@@ -1,38 +1,175 @@
 @import '../src/components/dashboard/dashboard.css';
 @import '../src/components/search/search.css';
 
+/* Gate entry keeps scanner alternatives within the handheld first viewport. */
+#gate-entry .gate-tabs,
+#gate-entry .gate-footer,
+#gate-entry .gate-choice {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+#gate-entry .gate-stepper,
+#gate-entry .gate-form,
+#gate-entry .gate-step,
+#gate-entry .scan-field {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+#gate-entry .gate-step-list {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0;
+  margin: var(--space-2) 0;
+  list-style: none;
+  font-size: var(--caption-size);
+}
+
+#gate-entry .gate-step-list li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+#gate-entry .gate-step-list [aria-current='step'] {
+  color: var(--accent-strong);
+  font-weight: var(--label-weight);
+}
+
+#gate-entry .gate-step-number {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-full);
+}
+
+#gate-entry .gate-step {
+  margin: 0;
+  padding: var(--space-3);
+}
+
+#gate-entry .gate-step legend {
+  font-weight: var(--label-weight);
+}
+
+#gate-entry .scan-field-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+#gate-entry .scan-field-actions > :nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+#gate-entry .scan-viewfinder {
+  width: 100%;
+  max-height: 40vh;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+}
+
+#gate-entry .gate-step input:not([type='radio']) {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  color: var(--text);
+}
+
+#gate-entry button.primary-action {
+  position: static;
+  box-shadow: none;
+}
+
+#gate-entry .gate-choice label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-compact);
+}
+
+#gate-entry button,
+#gate-entry input:not([type='radio']) {
+  min-height: var(--control-compact);
+}
+
+#gate-entry .gate-footer p {
+  flex-basis: 100%;
+}
+
+@media (min-width: 600px) {
+  #gate-entry .gate-stepper {
+    grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-4);
+  }
+
+  #gate-entry .gate-step-list {
+    flex-direction: column;
+    gap: var(--space-4);
+    font-size: var(--label-size);
+  }
+
+  #gate-entry .gate-step-list li {
+    flex-direction: row;
+  }
+}
+
+@media (pointer: coarse) {
+  #gate-entry button.primary-action,
+  #gate-entry input:not([type='radio']) {
+    min-height: var(--touch-primary);
+  }
+
+  #gate-entry button.secondary-action,
+  #gate-entry .gate-choice label {
+    min-height: var(--touch-secondary);
+  }
+}
+
 /* DESIGN.md (ux-Inventory Management System_2-2026-09-23) default tokens: Zoho-familiar
    structure, dark sidebar, Lato, per-site Ledger Blue accent for CMF-ALIGARH. */
 :root {
   /* Per-site accent family (Ledger Blue default) */
-  --accent: #1E6BC6;
-  --accent-strong: #1656A3;
-  --accent-soft: #E8F1FC;
-  --on-accent: #FFFFFF;
-  --accent-on-dark: #5AA2F0;
+  --accent: #1e6bc6;
+  --accent-strong: #1656a3;
+  --accent-soft: #e8f1fc;
+  --on-accent: #ffffff;
+  --accent-on-dark: #5aa2f0;
 
   /* Shell and neutrals */
-  --side: #1B2230;
-  --side-hover: #252E3F;
-  --side-text: #C9D1DD;
-  --side-muted: #8C97A8;
-  --bg: #F4F6F9;
-  --surface: #FFFFFF;
-  --border: #DDE2E9;
-  --text: #1C2430;
+  --side: #1b2230;
+  --side-hover: #252e3f;
+  --side-text: #c9d1dd;
+  --side-muted: #8c97a8;
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --border: #dde2e9;
+  --text: #1c2430;
   --text-muted: #566173;
 
   /* Status pairs (fixed across sites) */
-  --ok: #1E7A3C;
-  --ok-bg: #E6F4EA;
-  --warn: #8A5300;
-  --warn-bg: #FFF3DC;
-  --err: #B3261E;
-  --err-bg: #FCE8E6;
-  --info: #1F5FAD;
-  --info-bg: #E7F0FB;
-  --off: #4A5568;
-  --off-bg: #ECEFF3;
+  --ok: #1e7a3c;
+  --ok-bg: #e6f4ea;
+  --warn: #8a5300;
+  --warn-bg: #fff3dc;
+  --err: #b3261e;
+  --err-bg: #fce8e6;
+  --info: #1f5fad;
+  --info-bg: #e7f0fb;
+  --off: #4a5568;
+  --off-bg: #eceff3;
 
   /* Back-compat aliases used by older component classes */
   --primary: var(--accent);
@@ -542,13 +679,15 @@ textarea:focus-visible {
 }
 
 /* Form controls: surface fill, border, compact desktop height, accent focus halo. */
-.cross-dock-capture form {
+.cross-dock-capture form,
+.indent-capture form {
   display: grid;
   gap: var(--space-2);
   margin-top: var(--space-4);
 }
 
-.cross-dock-capture input {
+.cross-dock-capture input,
+.indent-capture input:not([type='checkbox']) {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--rounded);
@@ -694,7 +833,8 @@ textarea:focus-visible {
   max-width: 420px;
 }
 
-.base-form input {
+.base-form input,
+.base-form select {
   width: 100%;
   min-height: var(--control-height-secondary);
   border: 1px solid var(--border);
@@ -704,7 +844,8 @@ textarea:focus-visible {
   color: var(--text);
 }
 
-.base-form input:focus-visible {
+.base-form input:focus-visible,
+.base-form select:focus-visible {
   outline: 3px solid var(--accent-soft);
   outline-offset: 2px;
 }
@@ -1285,4 +1426,223 @@ textarea:focus-visible {
   .icon-rail {
     display: none;
   }
+}
+
+/* Story 3.14: stores inbox and acceptance. Touch targets follow EXPERIENCE.md: 56/48/34 px. */
+.stores-inbox,
+.stores-accept {
+  display: grid;
+  gap: 1rem;
+}
+
+.stores-status,
+.stores-empty {
+  color: #4a4a4a;
+  margin: 0.25rem 0;
+}
+
+.stores-group h2,
+.stores-accept h1,
+.stores-line h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.stores-cards,
+.stores-lines,
+.stores-summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.stores-card {
+  display: grid;
+  gap: 0.35rem;
+  border: 1px solid #d6d6d6;
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+
+.stores-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.stores-card p {
+  margin: 0;
+  color: #4a4a4a;
+}
+
+.stores-card-highlight {
+  outline: 3px solid #1a4d8f;
+}
+
+.stores-pill {
+  display: inline-block;
+  justify-self: start;
+  border: 1px solid #7a7a7a;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.82rem;
+}
+
+.stores-banner,
+.stores-warning {
+  border-left: 4px solid #7a5b00;
+  padding-left: 0.6rem;
+  color: #4a3600;
+}
+
+.stores-condition-row {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+}
+
+.stores-condition-row label,
+.stores-line label,
+.stores-accept label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.stores-accept input:not([type='radio']):not([type='checkbox']),
+.stores-accept select,
+.stores-accept button,
+.stores-inbox button,
+.stores-inbox a {
+  min-height: 48px;
+}
+
+.stores-footer {
+  display: grid;
+  gap: 0.5rem;
+  border-top: 1px solid #d6d6d6;
+  padding-top: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .stores-footer {
+    position: sticky;
+    bottom: 0;
+    background: #fff;
+    padding-bottom: 0.75rem;
+  }
+}
+
+@media (pointer: coarse) {
+  .stores-accept input,
+  .stores-accept select,
+  .stores-accept button,
+  .stores-inbox button,
+  .stores-inbox a,
+  .stores-line input,
+  .stores-line select {
+    min-height: 56px;
+  }
+}
+
+@media (pointer: fine) and (min-width: 900px) {
+  .stores-accept input,
+  .stores-accept select,
+  .stores-accept button,
+  .stores-inbox button,
+  .stores-inbox a {
+    min-height: 34px;
+  }
+}
+
+/* ===== Story 3.16: floor task inbox and pick execution ===== */
+.stores-announcement {
+  margin-top: 0.75rem;
+}
+
+.floor-screen {
+  display: grid;
+  gap: 1rem;
+}
+@media (min-width: 600px) {
+  .floor-screen[data-device-class="tablet"],
+  .floor-screen[data-device-class="desktop"],
+  .floor-screen[data-device-class="desktop-touch"] {
+    grid-template-columns: minmax(18rem, 26rem) 1fr;
+    align-items: start;
+  }
+}
+@media (max-width: 599px) {
+  .floor-screen {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+}
+
+.floor-steps {
+  list-style: none;
+  display: flex;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+}
+.floor-step {
+  font-weight: 600;
+}
+.floor-step.active {
+  color: #1E6BC6;
+}
+
+.direct {
+  display: grid;
+  gap: 0.25rem;
+}
+.direct .go {
+  font-weight: 600;
+}
+.direct .bin,
+.direct .what,
+.direct .lot {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.qty {
+  display: grid;
+  gap: 0.5rem;
+  align-items: center;
+  grid-auto-flow: column;
+  justify-content: start;
+}
+.qty .of {
+  font-size: 0.9rem;
+}
+
+.emptyst {
+  padding: 1rem;
+}
+
+@media (pointer: coarse) {
+  .floor-screen button,
+  .floor-screen a,
+  .floor-screen .scan-input {
+    min-height: 56px;
+  }
+}
+@media (pointer: fine) and (min-width: 900px) {
+  .floor-screen button,
+  .floor-screen a,
+  .floor-screen .scan-input {
+    min-height: 34px;
+  }
+}
+
+.indent-capture label:has(input[type='checkbox']) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.indent-capture form .primary-action {
+  justify-self: start;
+  margin-top: var(--space-2);
 }

@@ -25,6 +25,15 @@ export interface PickTask {
   completed_at: string | null;
   completed_by: string | null;
   updated_at: string;
+  /**
+   * Story 3.16 (AC 3): the external sales-order number, joined from erp_sales_order on both the
+   * list and by-id reads. Null only when the order row is absent.
+   */
+  so_number_ext: string | null;
+  /** Story 3.16 (AC 3): confirmed (incl. substituted) pick-line count at this task. List read only. */
+  confirmed_line_count: number | null;
+  /** Story 3.16 (AC 3): non-cancelled pick-line count at this task. List read only. */
+  line_count: number | null;
 }
 
 /** Story 3.8: shared task-board priority vocabulary, ordered least to most urgent. */
@@ -82,9 +91,19 @@ function ts(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
-const PICK_TASK_COLUMNS = `pick_task_id, dispatch_order_id, sku, total_quantity::text AS total_quantity,
-       strategy, wave_id, batch_id, zone_id, status, assigned_to, priority, created_by, created_at,
-       completed_at, completed_by, updated_at`;
+/**
+ * Story 3.16: the by-id reads join the sales order so the header and completion panel can show the
+ * external order number. Columns are table-qualified because erp_sales_order shares several column
+ * names (id, created_at, ...); the LEFT JOIN is additive and keeps every existing caller working.
+ */
+const PICK_TASK_READ_COLUMNS = `pick_task.pick_task_id, pick_task.dispatch_order_id, pick_task.sku,
+       pick_task.total_quantity::text AS total_quantity, pick_task.strategy, pick_task.wave_id,
+       pick_task.batch_id, pick_task.zone_id, pick_task.status, pick_task.assigned_to,
+       pick_task.priority, pick_task.created_by, pick_task.created_at, pick_task.completed_at,
+       pick_task.completed_by, pick_task.updated_at, eso.so_number_ext AS so_number_ext`;
+
+const PICK_TASK_READ_FROM = `FROM pick_task
+       LEFT JOIN erp_sales_order eso ON eso.id = pick_task.dispatch_order_id`;
 
 /**
  * Story 3.8: SQL ranking expression for the priority vocabulary. Text ordering would sort 'high'
@@ -113,6 +132,13 @@ function mapRow(row: Record<string, unknown>): PickTask {
     completed_at: row['completed_at'] ? ts(row['completed_at']) : null,
     completed_by: (row['completed_by'] as string | null) ?? null,
     updated_at: ts(row['updated_at']),
+    so_number_ext: (row['so_number_ext'] as string | null) ?? null,
+    confirmed_line_count:
+      row['confirmed_line_count'] === null || row['confirmed_line_count'] === undefined
+        ? null
+        : Number(row['confirmed_line_count']),
+    line_count:
+      row['line_count'] === null || row['line_count'] === undefined ? null : Number(row['line_count']),
   };
 }
 
@@ -121,7 +147,7 @@ export async function getPickTaskById(
   client?: PoolClient,
 ): Promise<PickTask | null> {
   const result = await runner(client).query(
-    `SELECT ${PICK_TASK_COLUMNS} FROM pick_task WHERE pick_task_id = $1`,
+    `SELECT ${PICK_TASK_READ_COLUMNS} ${PICK_TASK_READ_FROM} WHERE pick_task.pick_task_id = $1`,
     [pickTaskId],
   );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
@@ -137,7 +163,7 @@ export async function getPickTaskByIdForUpdate(
   client: PoolClient,
 ): Promise<PickTask | null> {
   const result = await client.query(
-    `SELECT ${PICK_TASK_COLUMNS} FROM pick_task WHERE pick_task_id = $1 FOR UPDATE`,
+    `SELECT ${PICK_TASK_READ_COLUMNS} ${PICK_TASK_READ_FROM} WHERE pick_task.pick_task_id = $1 FOR UPDATE OF pick_task`,
     [pickTaskId],
   );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
@@ -271,7 +297,12 @@ export async function listPickTasks(
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
   const columns = `pt.pick_task_id, pt.dispatch_order_id, pt.sku, pt.total_quantity::text AS total_quantity,
        pt.strategy, pt.wave_id, pt.batch_id, pt.zone_id, pt.status, pt.assigned_to, pt.priority,
-       pt.created_by, pt.created_at, pt.completed_at, pt.completed_by, pt.updated_at`;
+       pt.created_by, pt.created_at, pt.completed_at, pt.completed_by, pt.updated_at,
+       eso.so_number_ext AS so_number_ext,
+       (SELECT COUNT(*) FILTER (WHERE status IN ('confirmed', 'substituted'))
+          FROM pick_line pl WHERE pl.pick_task_id = pt.pick_task_id) AS confirmed_line_count,
+       (SELECT COUNT(*) FILTER (WHERE status <> 'cancelled')
+          FROM pick_line pl WHERE pl.pick_task_id = pt.pick_task_id) AS line_count`;
   // Priority ordering ranks the vocabulary explicitly; ORDER BY pt.priority would sort the text
   // values alphabetically ('high', 'low', 'normal', 'urgent'), which is not the intended order.
   const orderBy = filters.orderByPriority

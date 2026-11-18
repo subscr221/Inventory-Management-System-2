@@ -496,6 +496,8 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
       finance: await band('damage.finance_concurrence', 'finance_controller'),
       escalation: await band('damage.escalation', 'ceo'),
       release: await band('receiving.putaway_release', 'unloading_supervisor'),
+      // Story 4.10 (AC 6): the replacement raise needs a band or it is refused at raise.
+      indent: await band('indent_approval', 'finance_controller'),
     };
     // The DOA authorities are the REAL oldest holders (findRoleHolder oldest-wins): resolve them
     // rather than assume the fixture persona.

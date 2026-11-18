@@ -21,6 +21,8 @@ import { validateEnvelope, persistEvent } from '../../events/store.js';
 import {
   validateEdgeEnvelope,
   assertEdgeMaintenanceEventAllowed,
+  assertEdgeIndentIssueEventRefused,
+  assertEdgePutawayEventRefused,
   // Story 6.4 (FR-MO-13, AC 6): the production-stream allowlist and the edit-log write its refusal
   // requires.
   assertEdgeProductionEventAllowed,
@@ -45,10 +47,12 @@ import { REFUSED_CAPTURE_STREAM_TYPE } from '../../compliance/edge-refused-captu
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 import { config } from '../../config/index.js';
+import { getLocationById } from '../../read/projections/location_register.js';
+import { getPool } from '../../config/db.js';
 import type { AuthContext } from '../../middleware/context.js';
 import { getCrossDockTaskById } from '../../read/projections/cross_dock_task.js';
 import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
-import { resolveApprover, INDENT_DOA_TYPE } from './indents.js';
+import { routeIndentLines, headerApproverOf } from '../../compliance/indent-routing.js';
 import { damageAuthorityTypesFor } from '../../compliance/damage.js';
 import {
   countOpenWorkOrders,
@@ -116,7 +120,12 @@ function assertEdgePayloadSiteWriteAccess(
   const employee = isEmployeeEdgeEvent(body)
     ? permittedLocationsForModuleScope(authContext.roles, EMPLOYEE_MODULE, 'write')
     : { wildcard: false, locations: new Set<string>() };
-  if (!wildcard && !locations.has(siteId) && !employee.wildcard && !employee.locations.has(siteId)) {
+  if (
+    !wildcard &&
+    !locations.has(siteId) &&
+    !employee.wildcard &&
+    !employee.locations.has(siteId)
+  ) {
     throw new AppError(
       403,
       'LOCATION_ACCESS_DENIED',
@@ -324,13 +333,43 @@ function selectOperatingAssignment(authContext: AuthContext): OperatingAssignmen
   // at the site, so adding it never changes a specialist's displayed or stamped role.
   const atSite = concrete.filter((r) => r.locationId === locationId);
   const specialist = atSite.filter((r) => r.module !== EMPLOYEE_MODULE);
-  const assignment = (specialist.length > 0 ? specialist : atSite)
-    .sort((a, b) =>
-      [a.role, a.module, a.functionScope]
-        .join('\0')
-        .localeCompare([b.role, b.module, b.functionScope].join('\0')),
-    )[0]!;
+  const assignment = (specialist.length > 0 ? specialist : atSite).sort((a, b) =>
+    [a.role, a.module, a.functionScope]
+      .join('\0')
+      .localeCompare([b.role, b.module, b.functionScope].join('\0')),
+  )[0]!;
   return { role: assignment.role, locationId };
+}
+
+const GATE_STREAM_MODULES = ['gate', 'weighbridge', 'inventory'];
+
+/**
+ * Story 3.13 (D2/D4): the module list above is any-of, so the role is judged here, across all of the
+ * caller's assignments. gate.entered is the gate officer's or the weighbridge operator's;
+ * gate.reversed stays the gate officer's; weighbridge events are the weighbridge operator's.
+ */
+function assertEdgeGateRoleAllowed(
+  authContext: AuthContext,
+  body: { stream_type: string; event_type: string },
+): void {
+  const allowed =
+    body.stream_type === 'weighbridge'
+      ? ['weighbridge_operator']
+      : body.event_type === 'gate.reversed'
+        ? ['gate_officer']
+        : ['gate_officer', 'weighbridge_operator'];
+  const ok = authContext.roles.some(
+    (r) =>
+      (GATE_STREAM_MODULES.includes(r.module) || r.module === '*') &&
+      r.functionScope === 'write' &&
+      allowed.includes(r.role),
+  );
+  if (!ok)
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'This operation is restricted to roles: ' + allowed.join(', '),
+    );
 }
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string | string[] {
@@ -345,6 +384,9 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
     // base hat as well and meets its explicit CENTRAL_ONLY_OPERATION refusal in the handler rather
     // than a module denial that would say nothing about why.
     if (streamType === 'damage') return [EMPLOYEE_MODULE, streamType];
+    // Story 3.13 (D2): the gate and weighbridge streams accept the dedicated module OR inventory;
+    // the role allowlist below (assertEdgeGateRoleAllowed) keeps a store_assistant out.
+    if (streamType === 'gate' || streamType === 'weighbridge') return GATE_STREAM_MODULES;
     if (typeof streamType === 'string') return streamType;
   }
   return '';
@@ -358,7 +400,7 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
  */
 const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   name: string;
-  modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases';
+  modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases' | 'gate';
   functionScope: 'read' | 'write';
 }> = [
   { name: 'Dashboard', modules: '*', functionScope: 'read' },
@@ -371,6 +413,18 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   // people who work cases - QC or stores at the site, or a damage DOA authority.
   { name: 'Report damage', modules: [EMPLOYEE_MODULE], functionScope: 'write' },
   { name: 'Damage cases', modules: 'damage-cases', functionScope: 'read' },
+  // Story 3.13 (AC 1): the gate entry and weighbridge capture screen, for the gate officer and
+  // weighbridge operator only (a store_assistant holding inventory is not sent it).
+  { name: 'Gate entry', modules: 'gate', functionScope: 'write' },
+  // Story 3.14 (AC 1): the storekeeper's task inbox, for receiving write at the site.
+  { name: 'Stores', modules: ['receiving'], functionScope: 'write' },
+// Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
+{ name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
+// Story 3.16 (AC 1): the floor task inbox and pick execution screen, for people holding
+// warehouse write at the site (warehouse_operator picker, store_assistant, supervisors).
+{ name: 'Floor tasks', modules: ['warehouse'], functionScope: 'write' },
+  // Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
+  { name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
 ];
 
 /**
@@ -388,6 +442,22 @@ async function hasDamageCaseScope(authContext: AuthContext, siteId: string): Pro
   return (await damageAuthorityTypesFor(authContext.userId)).length > 0;
 }
 
+/**
+ * Story 3.13 (AC 1): the gate entry screen is for the gate officer and weighbridge operator who
+ * hold a write assignment covering the operating site. Role-evaluated (not a bare module match) so
+ * a store_assistant holding `inventory` is never sent it.
+ */
+function hasGateScope(authContext: AuthContext, siteId: string): boolean {
+  const gateNavRoles = new Set(['gate_officer', 'weighbridge_operator']);
+  return authContext.roles.some(
+    (r) =>
+      (r.module === 'gate' || r.module === 'weighbridge' || r.module === 'inventory') &&
+      gateNavRoles.has(r.role) &&
+      r.functionScope === 'write' &&
+      assignmentCoversLocation(r, siteId),
+  );
+}
+
 async function navigationFor(authContext: AuthContext, siteId: string): Promise<string[]> {
   const roles = authContext.roles;
   const names: string[] = [];
@@ -401,6 +471,8 @@ async function navigationFor(authContext: AuthContext, siteId: string): Promise<
       );
     } else if (modules === 'damage-cases') {
       shown = await hasDamageCaseScope(authContext, siteId);
+    } else if (modules === 'gate') {
+      shown = hasGateScope(authContext, siteId);
     } else {
       shown = roles.some(
         (r) =>
@@ -440,11 +512,37 @@ const edgeBootstrapBase: RouteHandler = async (req, res) => {
   // Story 1.15 (D7): derived from NAVIGATION_CAPABILITIES against the caller's assignments.
   const navigation = await navigationFor(authContext, assignment.locationId);
 
+  // Story 3.13 (AC 3, Q4): gate.entered requires site_code_ext and gate_id. site_code_ext is the
+  // operating site's external code (location_register.location_code); gate_id is edge config
+  // (default GATE-01; one gate per site at pilot). A wildcard operating assignment resolves no site
+  // row, so both fall back to null and the gate screen is simply not advertised.
+  const operatingSite =
+    assignment.locationId && assignment.locationId !== '*'
+      ? await getLocationById(assignment.locationId)
+      : null;
+  // Only a site row is a gate: an assignment at a zone or bin must not advertise a site code.
+  const gateSite = operatingSite?.level === 'site' ? operatingSite : null;
+
+  // Story 3.14 (AC 2): the acceptance screen posts GOOD rows to the site's inspection bay by code.
+  // One active, non-quarantine staging zone per site, preferring the platform literal IB-01.
+  const inspectionBay = gateSite
+    ? await getPool().query(
+        `SELECT location_code FROM location_register
+WHERE site_id = $1 AND level = 'zone' AND zone_type = 'staging'
+  AND quarantine = false AND status = 'active'
+ORDER BY (location_code = 'IB-01') DESC, location_code LIMIT 1`,
+        [gateSite.location_id],
+      )
+    : null;
+
   sendJson(res, 200, {
     user_id: authContext.userId,
     user_name: authContext.displayName ?? authContext.externalId,
     site_id: assignment.locationId,
     site_name: edgeSiteName(),
+    site_code_ext: gateSite?.location_code ?? null,
+    gate_id: config.gate.id,
+    inspection_bay_code: (inspectionBay?.rows[0]?.['location_code'] as string | undefined) ?? null,
     role: assignment.role,
     navigation,
     offline_ready: true,
@@ -514,6 +612,17 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     );
   }
 
+  // Story 4.8 (D11): assigning, deciding, revoking and expiring a standing approval or limit need a
+  // live connection (EXPERIENCE.md); the grant routes are the only producers.
+  if (body.stream_type === 'standing_grant' || body.event_type.startsWith('standing_grant.')) {
+    throw new AppError(
+      403,
+      'CENTRAL_ONLY_OPERATION',
+      'Standing approvals and limits are managed online, not from an edge device',
+      { stream_type: body.stream_type, event_type: body.event_type },
+    );
+  }
+
   // Pilot G3 review R1: no offline capture for bin moves in this release. The move is gated to the
   // storekeeping roles on the REST route and the events door; this door selects ONE operating
   // assignment and would stamp whatever role that is, so the event is refused outright.
@@ -530,6 +639,12 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   // Return-to-service and every other central-only maintenance operation reject 403
   // CENTRAL_ONLY_OPERATION here, before any identity or version work.
   assertEdgeMaintenanceEventAllowed(body);
+  // Story 4.11 (D8): counter issue and line closure are online-only.
+  assertEdgeIndentIssueEventRefused(body);
+  // Story 3.15 (AC 6): putaway completion and location override are online-only; the door would
+  // otherwise accept putaway.completed with completed_by unstamped from the device payload and no
+  // execute-role gate.
+  assertEdgePutawayEventRefused(body);
   // Story 8.1 (Binding Scope Decision 9): the same allowlist shape for the qc stream - plan
   // creation, approval, completion hand-off and conditional release are central-only.
   assertEdgeQcEventAllowed(body);
@@ -633,6 +748,9 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     auditRole = covering.role;
     auditLocationId = task.site_id;
     authoritativeSiteId = task.site_id;
+  }
+  if (body.stream_type === 'gate' || body.stream_type === 'weighbridge') {
+    assertEdgeGateRoleAllowed(authContext, body);
   }
   if (body.stream_type === 'gate' && body.event_type === 'gate.entered') {
     body.payload['gate_officer_id'] = authContext.userId;
@@ -745,21 +863,26 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     // approver throws APPROVAL_UNRESOLVED (409), a permanent code that settles the outbox row as
     // needs_attention rather than retrying forever.
     const rawLines = body.payload['lines'];
-    let estimatedValue = 0;
+    // Story 4.10 (Task 2.4): the same per-line resolver as the HTTP raise; no second idiom.
     if (Array.isArray(rawLines)) {
-      for (const line of rawLines as Array<Record<string, unknown>>) {
-        const qty =
-          typeof line?.['requested_qty'] === 'number' ? (line['requested_qty'] as number) : 0;
-        const price =
-          typeof line?.['unit_price_estimate'] === 'number'
-            ? (line['unit_price_estimate'] as number)
-            : 0;
-        estimatedValue += qty * price;
-      }
+      const lines = rawLines as Array<Record<string, unknown>>;
+      const siteId = body.payload['site_id'];
+      const routes = await routeIndentLines(lines, undefined, undefined, {
+        requesterUserId: authContext.userId,
+        siteId: typeof siteId === 'string' ? siteId : '',
+      });
+      body.payload['lines'] = lines.map((line, i) => ({
+        ...line,
+        approval_route: routes[i]!.approval_route,
+        approver_actor_id: routes[i]!.approver_actor_id ?? undefined,
+        doa_entry_id: routes[i]!.doa_entry_id ?? undefined,
+        standing_grant_id: routes[i]!.standing_grant_id ?? undefined,
+      }));
+      const approval = headerApproverOf(routes);
+      if (approval.approver_actor_id)
+        body.payload['approver_actor_id'] = approval.approver_actor_id;
+      if (approval.doa_entry_id) body.payload['doa_entry_id'] = approval.doa_entry_id;
     }
-    const approval = await resolveApprover(INDENT_DOA_TYPE, estimatedValue);
-    if (approval.approverActorId) body.payload['approver_actor_id'] = approval.approverActorId;
-    if (approval.doaEntryId) body.payload['doa_entry_id'] = approval.doaEntryId;
   }
   // Story 8.9 (D3): the reporter is the authenticated actor, never trusted from the edge payload
   // (the requester_user_id stamp above). The damage applier re-stamps it from the actor as well.
@@ -1076,7 +1199,9 @@ export function withRefusedCaptureRecord(handler: RouteHandler): RouteHandler {
     const body = getParsedBody(req);
     // The handler rewrites metadata.actor and stamps payload fields: snapshot what the device sent.
     const snapshot =
-      typeof body === 'object' && body !== null ? (structuredClone(body) as Record<string, unknown>) : null;
+      typeof body === 'object' && body !== null
+        ? (structuredClone(body) as Record<string, unknown>)
+        : null;
     try {
       await handler(req, res, params);
     } catch (err: unknown) {
@@ -1102,7 +1227,9 @@ export function withRefusedCaptureRecord(handler: RouteHandler): RouteHandler {
           endpoint: req.url ?? '',
           method: req.method ?? 'POST',
           user_id: authContext.userId,
-          assignment: assignment ? { role: assignment.role, locationId: assignment.locationId } : undefined,
+          assignment: assignment
+            ? { role: assignment.role, locationId: assignment.locationId }
+            : undefined,
         });
       }
       throw err;

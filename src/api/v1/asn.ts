@@ -2,7 +2,8 @@ import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import { getAuthContext, getParsedBody } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import { requireRole, assignmentCoversLocation } from '../../middleware/rbac.js';
+import type { RoleAssignment } from '../../read/projections/users.js';
 import { getPool } from '../../config/db.js';
 import { getPurchaseOrderByRef } from '../../read/projections/erp_purchase_order.js';
 import { getLocationByCode } from '../../read/projections/location_register.js';
@@ -15,22 +16,43 @@ import { upsertAsnHeader, upsertAsnLine, getAsnByNumber } from '../../read/proje
  */
 
 const ASN_WRITE_ROLES = ['store_assistant', 'svc_supplier_edi'];
-const ASN_READ_ROLES = ['store_assistant', 'unloading_supervisor', 'warehouse_manager'];
+// Story 3.13 (AC 2): the gate officer and weighbridge operator read an ASN to resolve a challan.
+const ASN_READ_ROLES = [
+  'store_assistant',
+  'unloading_supervisor',
+  'warehouse_manager',
+  'gate_officer',
+  'weighbridge_operator',
+];
+
+/**
+ * True when ONE assignment carries an eligible module (receiving/`*`, plus gate/weighbridge on
+ * the read path only), an allowed role and the function scope. Role, module and scope are judged
+ * together on the same assignment so site access cannot be assembled from several of them.
+ */
+function assignmentQualifies(
+  r: RoleAssignment,
+  allowedRoles: string[],
+  functionScope: 'read' | 'write',
+): boolean {
+  return (
+    (r.module === 'receiving' ||
+      r.module === '*' ||
+      // Story 3.13 (AC 2): the read path only admits the gate and weighbridge modules; the
+      // write path stays receiving-only so ASN intake is unchanged.
+      (functionScope === 'read' && (r.module === 'gate' || r.module === 'weighbridge'))) &&
+    (functionScope === 'read' || r.functionScope === 'write') &&
+    allowedRoles.includes(r.role)
+  );
+}
 
 function assertRoleAllowed(
   req: IncomingMessage,
   allowedRoles: string[],
   functionScope: 'read' | 'write',
 ): void {
-  const authContext = getAuthContext(req);
-  const roles = authContext?.roles ?? [];
-  const ok = roles.some(
-    (r) =>
-      (r.module === 'receiving' || r.module === '*') &&
-      (functionScope === 'read' || r.functionScope === 'write') &&
-      allowedRoles.includes(r.role),
-  );
-  if (!ok)
+  const roles = getAuthContext(req)?.roles ?? [];
+  if (!roles.some((r) => assignmentQualifies(r, allowedRoles, functionScope)))
     throw new AppError(
       403,
       'FUNCTION_ACCESS_DENIED',
@@ -38,11 +60,19 @@ function assertRoleAllowed(
     );
 }
 
-function assertSiteAccess(req: IncomingMessage, siteId: string, scope: 'read' | 'write'): void {
+/** Per-assignment: one qualifying assignment must itself cover the site (no cross-assignment union). */
+function assertSiteAccess(
+  req: IncomingMessage,
+  siteId: string,
+  scope: 'read' | 'write',
+  allowedRoles: string[],
+): void {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
-  const receivingScope = permittedLocationsForModuleScope(authContext.roles, 'receiving', scope);
-  if (!receivingScope.wildcard && !receivingScope.locations.has(siteId)) {
+  const ok = authContext.roles.some(
+    (r) => assignmentQualifies(r, allowedRoles, scope) && assignmentCoversLocation(r, siteId),
+  );
+  if (!ok) {
     throw new AppError(
       403,
       'LOCATION_ACCESS_DENIED',
@@ -165,11 +195,11 @@ const createAsnBase: RouteHandler = async (req, res) => {
     );
     return;
   }
-  assertSiteAccess(req, site.location_id, 'write');
+  assertSiteAccess(req, site.location_id, 'write', ASN_WRITE_ROLES);
 
   const existing = await getAsnByNumber(asnNumberExt);
   if (existing) {
-    assertSiteAccess(req, existing.site_id, 'write');
+    assertSiteAccess(req, existing.site_id, 'write', ASN_WRITE_ROLES);
     if (existing.site_id !== site.location_id) {
       sendRequestError(
         req,
@@ -231,7 +261,7 @@ const getAsnBase: RouteHandler = async (req, res, params) => {
     sendRequestError(req, res, 404, 'ASN_NOT_FOUND', `No ASN exists for "${asnNumberExt}"`);
     return;
   }
-  assertSiteAccess(req, asn.site_id, 'read');
+  assertSiteAccess(req, asn.site_id, 'read', ASN_READ_ROLES);
   sendJson(res, 200, asn);
 };
 
@@ -240,6 +270,7 @@ export const createAsnHandler: RouteHandler = requireRole({
   functionScope: 'write',
 })(createAsnBase);
 export const getAsnHandler: RouteHandler = requireRole({
-  module: 'receiving',
+  // Story 3.13 (AC 2): the gate and weighbridge operators resolve a challan against the ASN read.
+  module: ['receiving', 'gate', 'weighbridge'],
   functionScope: 'read',
 })(getAsnBase);

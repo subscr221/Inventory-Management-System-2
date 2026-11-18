@@ -462,7 +462,9 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     // Story 8.9: damage cases and photo uploads have their own routes, which gate the hat and
     // shape the body; the appliers hold every decision guard, but no one posts them raw.
     body.stream_type === 'damage' ||
-    body.stream_type === 'attachment'
+    body.stream_type === 'attachment' ||
+    // Story 4.8 (D11): assign, finance decision, revoke and expiry are online server routes.
+    body.stream_type === 'standing_grant'
   ) {
     sendRequestError(
       req,
@@ -550,6 +552,41 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
 
   // Story 2.1 (AC3): a zone-incompatible placement is a WARNING, not an error. The event was NOT
   // persisted; the 200 envelope tells the caller to resubmit with payload.placement_confirmed: true.
+  // Story 4.10 (review): the routing of a requisition line is server-decided. A direct post must
+  // not pre-route (auto-approve) a line, so the per-line route fields are dropped here and the
+  // seam defaults every line to doa. The HTTP raise and the edge door overwrite them the same way.
+  // Story 4.11 (D8): counter issue and line closure are online-only facts decided by the issue
+  // route (bin under site, open quantity, slip number); this door never accepts them.
+  if (
+    body.stream_type === 'procurement' &&
+    (body.event_type === 'indent.issued' || body.event_type === 'indent.line_closed')
+  ) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `Event "${body.event_type}" is accepted only through the stores issue routes`,
+      { event_type: body.event_type },
+    );
+  }
+  if (body.stream_type === 'procurement' && body.event_type === 'indent.raised') {
+    const lines = body.payload['lines'];
+    if (Array.isArray(lines)) {
+      body.payload['lines'] = lines.map((line) => {
+        if (typeof line !== 'object' || line === null) return line;
+        const rest = { ...(line as Record<string, unknown>) };
+        for (const key of [
+          'approval_route',
+          'approver_actor_id',
+          'doa_entry_id',
+          'standing_grant_id',
+          'self_approved',
+          'self_approval_grant_id',
+        ])
+          delete rest[key];
+        return rest;
+      });
+    }
+  }
   try {
     const persisted = await persistEvent(body, auditCtx);
     sendJson(res, 201, persisted);

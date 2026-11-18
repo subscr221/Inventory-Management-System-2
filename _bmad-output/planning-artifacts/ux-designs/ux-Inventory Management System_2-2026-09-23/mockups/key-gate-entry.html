@@ -372,7 +372,7 @@ details .inner{padding:0 12px 8px}
           <li><span class="ltag">DECISION</span> Every weighment is bound to an open gate entry (binding token = the gate event's correlation_id) and to one PO line (po_ref_ext + line_no). A reversed gate entry cannot be weighed (code: WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND).</li>
           <li><span class="ltag">DECISION</span> Weights in kg, up to 3 decimals. Net = gross - tare; a negative net is refused (code: WEIGHBRIDGE_NET_NEGATIVE).</li>
           <li><span class="ltag">DECISION</span> Tolerance is checked on the NET weight against the PO line ordered quantity with its under/over receipt tolerance %, not against the challan weight (code: applyWeighbridgeProjection). Challan weight is shown for information only.</li>
-          <li><span class="ltag">DECISION</span> Out of tolerance = Exception: receipt is blocked and a task goes to the receiving supervisor role (Mahesh Tyagi, same exceptions list as the floor mock).</li>
+          <li><span class="ltag">DECISION</span> Out of tolerance = Exception: receipt is blocked and a task goes to the <code>unloading_supervisor</code> role at the dock (the same exception-owner role the receiving screen uses); <code>warehouse_manager</code> is the escalation above the 5 percent band or when the primary is unavailable.</li>
           <li><span class="ltag">DECISION</span> Capture method is recorded as AUTO (read from indicator) or MANUAL (typed). Code has no reason rule for manual, so no reason is asked.</li>
           <li><span class="ltag">DECISION</span> An overdue legal-metrology stamp on the weighbridge blocks weighing until re-stamped (code: 423 WEIGHBRIDGE_OUT_OF_STAMP).</li>
           <li><span class="ltag as">ASSUMPTION</span> Gross at weigh in (loaded), tare at weigh out (empty) for inbound trucks. Code needs both in one weighbridge.recorded event; the mock holds the gross reading as "Captured - pending sync" until tare is taken.</li>
@@ -463,14 +463,14 @@ details .inner{padding:0 12px 8px}
   function resultBox(g,t,n,ok,prov){
     return '<div class="netbox"><div><small>Gross (in)</small><b>'+g+' kg</b></div><div><small>Tare (out)</small><b>'+t+' kg</b></div><div><small>Net</small><b>'+n+' kg</b></div></div>'+
       (ok?'<div class="chip match" role="status"><strong><span class="gl" aria-hidden="true">&#10003;</span>Within tolerance</strong>Net is inside '+fmt(LOW)+' - '+fmt(HIGH)+' kg. Ready for receipt.'+(prov?' Provisional until synced.':'')+'</div>'
-        :'<div class="chip err" role="status"><strong><span class="gl" aria-hidden="true">!</span>Out of tolerance - exception raised</strong>Receipt is blocked. Sent to receiving supervisor Mahesh Tyagi for review.'+(prov?' Provisional until synced.':'')+'</div>');
+        :'<div class="chip err" role="status"><strong><span class="gl" aria-hidden="true">!</span>Out of tolerance - exception raised</strong>Receipt is blocked. Sent to the unloading supervisor for review.'+(prov?' Provisional until synced.':'')+'</div>');
   }
   function wbBody(){
     var t=TRUCKS.filter(function(x){return x.id===SEL;})[0], h='', st=tStage(t);
     if(t.id!=='T1'){
       h+=tcard(t,t.po)+'<p class="hint">'+pillS(st)+'</p>';
       if(st==='done'||st==='exc'){h+='<div class="netbox"><div><small>Gross (in)</small><b>'+t.g+' kg</b></div><div><small>Tare (out)</small><b>'+t.t+' kg</b></div><div><small>Net</small><b>'+t.n+' kg</b></div></div>';
-        h+=st==='exc'?'<div class="chip err"><strong><span class="gl" aria-hidden="true">!</span>Tolerance breach - with receiving supervisor</strong>'+t.why+'. Mahesh Tyagi is reviewing; receipt blocked.</div>':'<div class="chip match"><strong><span class="gl" aria-hidden="true">&#10003;</span>Net recorded, within tolerance</strong>Handed to stores for acceptance.</div>';}
+        h+=st==='exc'?'<div class="chip err"><strong><span class="gl" aria-hidden="true">!</span>Tolerance breach - with the unloading supervisor</strong>'+t.why+'. The dock is reviewing; receipt blocked.</div>':'<div class="chip match"><strong><span class="gl" aria-hidden="true">&#10003;</span>Net recorded, within tolerance</strong>Handed to stores for acceptance.</div>';}
       else h+='<p class="hint">Gross '+t.g+' kg recorded at weigh in.</p><p class="hint">Demo: open UP81 AT 4521 to weigh a truck.</p>';
       return h;
     }
@@ -758,7 +758,7 @@ details .inner{padding:0 12px 8px}
       case 'unlStart':W.stage='unl';S.status='Unloading started';break;
       case 'unlDone':W.stage='out';S.status='Weigh out pending';break;
       case 'recTare':W.tare=parseW(W.inp);W.tm=W.method||'MANUAL';W.stage=within(W.gross-W.tare)?'done':'exc';W.inp='';W.method='';S.pending++;
-        S.status='Net '+fmt(W.gross-W.tare)+' kg recorded. '+(W.stage==='done'?'Within tolerance':'Out of tolerance - exception sent to receiving supervisor')+'. Captured - pending sync';break;
+        S.status='Net '+fmt(W.gross-W.tare)+' kg recorded. '+(W.stage==='done'?'Within tolerance':'Out of tolerance - exception sent to the unloading supervisor')+'. Captured - pending sync';break;
       case 'nr':S.status=(t.dataset.what||'That item')+' is not part of this mock';break;
       default:return;
     }

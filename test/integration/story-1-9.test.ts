@@ -303,6 +303,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/gate-events',
       // Story 3.3: Weighbridge Event Capture and Tolerance Enforcement
       'POST /api/v1/weighbridge-events',
+      // Story 3.13: the weighbridge stamp-status read.
+      'GET /api/v1/weighbridge-events/stamp-status',
       'GET /api/v1/weighbridge-events/:weighbridgeEventId',
       'GET /api/v1/weighbridge-events',
       // Story 3.4: Goods Receiving Against ASN or PO
@@ -312,6 +314,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/grns/:grnId',
       'GET /api/v1/grns',
       'GET /api/v1/receiving/discrepancies',
+      // Story 3.14: the stores inbox arrivals read.
+      'GET /api/v1/receiving/arrivals',
       'POST /api/v1/putaway-tasks/:putawayTaskId/release',
       // Story 3.5: Directed Putaway and Location Override
       'GET /api/v1/putaway-tasks',
@@ -378,6 +382,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/indents/:indentId/approve',
       'POST /api/v1/indents/:indentId/reject',
       'POST /api/v1/indents/:indentId/cancel',
+      // Story 4.11: stores counter issue against a requisition
+      'GET /api/v1/indents/issues/:issueId',
+      'POST /api/v1/indents/:indentId/issue',
+      'POST /api/v1/indents/:indentId/lines/:lineId/close',
+      'GET /api/v1/indents/:indentId/issues',
       // Story 8.9: report damage, the damage-case workbench and the photo store
       'POST /api/v1/damage-reports',
       'GET /api/v1/damage-reports',
@@ -719,6 +728,14 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/item-groups/:code',
       'PATCH /api/v1/item-groups/:code',
       'DELETE /api/v1/item-groups/:code',
+      // Story 4.8: Standing Approvals and Self-Approval Limits
+      'PUT /api/v1/standing-grants/prune-setting',
+      'POST /api/v1/standing-grants',
+      'GET /api/v1/standing-grants',
+      'GET /api/v1/standing-grants/:id',
+      'POST /api/v1/standing-grants/:id/finance-approve',
+      'POST /api/v1/standing-grants/:id/finance-reject',
+      'POST /api/v1/standing-grants/:id/revoke',
     ].sort();
     assert.deepStrictEqual(
       routeSurface,

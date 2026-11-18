@@ -99,6 +99,13 @@ interface Done {
 export function ReportDamage({ onSubmit, settlementOf, outboxVersion = '' }: ReportDamageProps) {
   const [sku, setSku] = useState('');
   const [lotNumber, setLotNumber] = useState('');
+
+  // Story 3.14: a lot QR from the stores inbox opens this screen with the lot prefilled.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const lot = new URLSearchParams(window.location.search).get('lot');
+    if (lot) setLotNumber(lot);
+  }, []);
   const [foundAt, setFoundAt] = useState<DamageFoundAt>('stock');
   const [binCode, setBinCode] = useState('');
   const [quantity, setQuantity] = useState('');
@@ -185,7 +192,10 @@ export function ReportDamage({ onSubmit, settlementOf, outboxVersion = '' }: Rep
     if (inFlight.current) return;
     if (missing.length > 0 || !photo || !reasonCode) {
       setNotice(
-        t('damage.stillNeeded').replace('{parts}', missing.map((part) => t(MISSING_LABEL[part])).join(', ')),
+        t('damage.stillNeeded').replace(
+          '{parts}',
+          missing.map((part) => t(MISSING_LABEL[part])).join(', '),
+        ),
       );
       const first = missing[0];
       if (first) document.getElementById(MISSING_FIELD[first])?.focus();
@@ -515,7 +525,12 @@ export function ReportDamage({ onSubmit, settlementOf, outboxVersion = '' }: Rep
             {submitting ? t('damage.sending') : t('damage.submit')}
           </button>
           {notice ? (
-            <p className="base-notice" role="status" aria-live="polite" aria-label={t('damage.liveLabel')}>
+            <p
+              className="base-notice"
+              role="status"
+              aria-live="polite"
+              aria-label={t('damage.liveLabel')}
+            >
               {notice}
             </p>
           ) : null}

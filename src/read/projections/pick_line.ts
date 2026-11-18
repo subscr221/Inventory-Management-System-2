@@ -27,6 +27,15 @@ export interface PickLine {
   confirmed_at: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * Story 3.16 (AC 3): joined enrichment. Present only on the task-detail read; by-id accessors
+   * leave these null.
+   */
+  location_code: string | null;
+  /** Directed lot's human lot_number from lot_master (bridges directed_lot_id UUID). */
+  directed_lot_number: string | null;
+  /** The item's unit of measure from item_master. */
+  uom: string | null;
 }
 
 export interface CreatePickLineInput {
@@ -88,6 +97,9 @@ function mapRow(row: Record<string, unknown>): PickLine {
     confirmed_at: row['confirmed_at'] ? ts(row['confirmed_at']) : null,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
+    location_code: (row['location_code'] as string | null) ?? null,
+    directed_lot_number: (row['directed_lot_number'] as string | null) ?? null,
+    uom: (row['uom'] as string | null) ?? null,
   };
 }
 
@@ -198,8 +210,25 @@ export async function listPickLinesByTask(
   pickTaskId: string,
   client?: PoolClient,
 ): Promise<PickLine[]> {
+  // Every column is qualified: PICK_LINE_COLUMNS is unqualified and the enriched read joins
+  // item_master, whose own `sku` column would otherwise make the bare `sku` ambiguous.
+  const columns = `pl.pick_line_id, pl.pick_task_id, pl.dispatch_order_line_id, pl.sku,
+       pl.directed_lot_id, pl.confirmed_lot_id,
+       pl.directed_quantity::text AS directed_quantity,
+       pl.confirmed_quantity::text AS confirmed_quantity, pl.location_id, pl.pick_sequence,
+       pl.status, pl.override_reason, pl.capture_method, pl.confirmed_by,
+       pl.confirmed_location_id, pl.confirmed_at, pl.created_at, pl.updated_at,
+       lr.location_code AS location_code,
+       lm.lot_number AS directed_lot_number,
+       im.uom AS uom`;
   const result = await runner(client).query(
-    `SELECT ${PICK_LINE_COLUMNS} FROM pick_line WHERE pick_task_id = $1 ORDER BY pick_sequence ASC, pick_line_id ASC`,
+    `SELECT ${columns}
+       FROM pick_line pl
+       LEFT JOIN location_register lr ON lr.location_id = pl.location_id
+       LEFT JOIN lot_master lm ON lm.lot_id = pl.directed_lot_id
+       LEFT JOIN item_master im ON im.sku = pl.sku
+      WHERE pl.pick_task_id = $1
+      ORDER BY pl.pick_sequence ASC, pl.pick_line_id ASC`,
     [pickTaskId],
   );
   return result.rows.map(mapRow);

@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { getLocationWithHierarchyPath } from '../read/projections/location_register.js';
+import { toIstCalendarDate } from '../lib/business-days.js';
 
 async function resolveShipFrom(dispatchOrderId: string, client: PoolClient): Promise<string> {
   const result = await client.query(
@@ -99,6 +100,76 @@ Issued without recourse. E. & O. E.
 `;
 
   return content;
+}
+
+// ---------------------------------------------------------------------------
+// Story 4.11: stores issue slip. Pure (no database); the issue seam gathers the input. Plain text
+// in the packing-slip idiom so the edge page prints it as is. Never "No approval required" and
+// never a grade word (EXPERIENCE.md line 60); the basis line is Table 2 of the story.
+// ---------------------------------------------------------------------------
+
+export interface IssueSlipLine {
+  line_no: number;
+  sku: string;
+  quantity: string;
+  uom: string;
+  location_code: string;
+  lot_id: string | null;
+  serial_count: number;
+  requested_qty: string;
+  issued_to_date: string;
+  approval_basis: string;
+}
+
+export interface IssueSlipInput {
+  issue_number_ext: string;
+  site_id: string;
+  indent_number_ext: string;
+  requester_user_id: string;
+  department_code: string;
+  earlier_slips: string[];
+  issued_by: string;
+  /** ISO instant of the persisted event; rendered as an IST calendar date plus UTC time. */
+  issued_at: string;
+  lines: IssueSlipLine[];
+}
+
+function slipRow(label: string, value: string): string {
+  return `${label.padEnd(14)}: ${value}`;
+}
+
+export function renderIssueSlip(input: IssueSlipInput): string {
+  const issuedAt = new Date(input.issued_at);
+  const when = `${toIstCalendarDate(issuedAt)} (${issuedAt.toISOString()})`;
+  const header = [
+    slipRow('Site', input.site_id),
+    slipRow('Requisition', input.indent_number_ext),
+    slipRow('Issued to', `${input.requester_user_id} (${input.department_code || '-'})`),
+    ...(input.earlier_slips.length > 0
+      ? [slipRow('Earlier slips', input.earlier_slips.join(', '))]
+      : []),
+    slipRow('Issued by', input.issued_by),
+    slipRow('Issued at', when),
+  ].join('\n');
+  const lines = input.lines
+    .map((l) => {
+      const trace = l.serial_count > 0 ? `serials ${l.serial_count}` : `lot ${l.lot_id ?? 'none'}`;
+      return (
+        `  ${l.line_no}. ${l.sku} qty ${l.quantity} ${l.uom} from ${l.location_code} ${trace}` +
+        ` | requested ${l.requested_qty}, issued to date ${l.issued_to_date}\n` +
+        `     Basis: ${l.approval_basis}`
+      );
+    })
+    .join('\n');
+  return `ISSUE SLIP ${input.issue_number_ext}
+${'='.repeat(30)}
+${header}
+
+Lines:
+${lines}
+
+--- Receiver to sign on the counter copy ---
+`;
 }
 
 export async function renderPackingSlip(

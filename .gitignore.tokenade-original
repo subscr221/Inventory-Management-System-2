@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.next/
+playwright-report/
+test-results/
+*.tsbuildinfo
+spine-acceptance-contract-results.xml
+.env
+.env.*
+!.env.example
+!.env.test
+graphify-out/
+# Pilot cutover roles file: real holder emails live only on the operator's machine (template: roles.example.json)
+deploy/provision/roles.json
+# Cloudflare Origin CA certificate for the staging nginx; placed by the operator, never committed
+deploy/compose/certs/
+# Pilot simulation sign-in state (tokens) for the staging Playwright suite
+edge/test/staging/.auth/

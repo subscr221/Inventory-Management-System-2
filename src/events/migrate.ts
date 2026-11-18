@@ -58,6 +58,8 @@ const MIGRATIONS = [
   '../../read/projections/supplier.sql',
   '../../read/projections/indent.sql',
   '../../read/projections/indent_line.sql',
+  '../../read/projections/indent_issue.sql',
+  '../../read/projections/standing_grant.sql',
   '../../read/projections/purchase_order.sql',
   '../../read/projections/purchase_order_line.sql',
   '../../read/projections/po_outbound_message.sql',
@@ -327,6 +329,10 @@ const MIGRATIONS = [
   // Story 3.11: GRN line condition and reason codes. Forward-only ADD COLUMN IF NOT EXISTS plus
   // named CHECKs on grn_line; appended at the tail, grn_line.sql is NOT edited.
   '../../read/projections/grn_line_condition.sql',
+  // Story 3.14: inspection-on-opening evidence and the general material photo on a GRN line.
+  // Forward-only ADD COLUMN IF NOT EXISTS plus named CHECKs; appended at the tail, grn_line.sql is
+  // NOT edited.
+  '../../read/projections/grn_line_inspect.sql',
   // Story 8.9: the damage case (report or receipt), its append-only action history, the photo
   // store, and the replacement-requisition link on indent (forward-only ADD COLUMN; indent.sql is
   // NOT edited). Appended at the tail; no FK between them.

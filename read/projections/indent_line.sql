@@ -42,6 +42,108 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 4.10: per-line approval route and decision state. Header status derives from these.
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS approval_route TEXT NOT NULL DEFAULT 'doa';
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS line_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS approver_actor_id TEXT;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS doa_entry_id UUID;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS decided_by TEXT;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_route' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_route
+      CHECK (approval_route IN ('doa', 'standing_approval', 'self_approval'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_status' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_status
+      CHECK (line_status IN ('pending', 'approved', 'rejected'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_rejection_reason' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_rejection_reason
+      CHECK (line_status <> 'rejected' OR (rejection_reason IS NOT NULL AND length(trim(rejection_reason)) > 0));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_indent_line_status ON indent_line (indent_id, line_status);
+
+-- Story 4.10 backfill (idempotent): lines of indents decided before per-line state existed
+-- inherit the header decision; undecided headers copy the routing only.
+UPDATE indent_line l
+SET line_status = CASE WHEN i.status = 'rejected' THEN 'rejected' ELSE 'approved' END,
+    approver_actor_id = i.approver_actor_id::text,
+    doa_entry_id = i.doa_entry_id,
+    decided_at = i.decided_at,
+    decided_by = i.decided_by::text,
+    rejection_reason = i.rejection_reason
+FROM indent i
+WHERE l.indent_id = i.indent_id
+  AND l.decided_at IS NULL
+  AND i.decided_at IS NOT NULL
+  AND i.status IN ('approved', 'ordered', 'closed', 'rejected');
+
+UPDATE indent_line l
+SET approver_actor_id = i.approver_actor_id::text,
+    doa_entry_id = i.doa_entry_id
+FROM indent i
+WHERE l.indent_id = i.indent_id
+  AND l.decided_at IS NULL
+  AND l.approver_actor_id IS NULL
+  AND i.approver_actor_id IS NOT NULL;
+
+-- Story 4.11: per-line fulfilment state for stores counter issue. Separate from the approval
+-- fact (line_status): a rejected line stays 'open' and is never issuable. issued never exceeds
+-- requested (Story 4.10 approves whole lines, so requested_qty is the approved quantity).
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS issued_qty NUMERIC(18,3) NOT NULL DEFAULT 0;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS issue_state TEXT NOT NULL DEFAULT 'open';
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS closed_reason TEXT;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS closed_by TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_issue_state' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_issue_state
+      CHECK (issue_state IN ('open', 'issued', 'closed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_issued_qty' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_issued_qty
+      CHECK (issued_qty >= 0 AND issued_qty <= requested_qty);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_closed_reason' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_closed_reason
+      CHECK (issue_state <> 'closed' OR (closed_reason IS NOT NULL AND length(btrim(closed_reason)) > 0));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_indent_line_issue_state ON indent_line (indent_id, issue_state);
+
+-- Story 4.8: the grant a line rode on at raise (standing_approval) and the limit a requester used to
+-- approve their own line (self_approval). Both nullable; no FK (projection convention).
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS standing_grant_id UUID;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS self_approved BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS self_approval_grant_id UUID;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN

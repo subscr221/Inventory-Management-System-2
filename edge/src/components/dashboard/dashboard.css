@@ -4,194 +4,296 @@
 @import '../workflow/workflow.css';
 @import '../reports/report.css';
 
-/* Enhanced Dashboard Styles (Zoho-familiar: surface cards, border, rounded, accent primary). */
+/* Items desk: Zoho list and detail, using the existing token set. */
 
-.enhanced-dashboard {
+.inventory-desk {
+  display: grid;
+  gap: var(--space-3);
   width: 100%;
+  min-width: 0;
   padding: var(--space-4);
 }
 
-.dashboard-controls {
+.inventory-desk-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--space-4);
   flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
   gap: var(--space-3);
 }
 
-.view-selector {
-  display: flex;
+.inventory-desk-header h2 {
+  margin: 0;
+  font-size: var(--title-size);
+  font-weight: var(--title-weight);
+}
+
+.inventory-desk-header p {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+}
+
+.inventory-desk-header .primary-action {
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-height: var(--control-height);
+  padding: 0 var(--space-4);
+  border-radius: var(--rounded);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: var(--label-weight);
+  text-decoration: none;
+}
+
+.inventory-desk-header .primary-action:hover {
+  background: var(--accent-strong);
+}
+
+.inventory-desk-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-2);
 }
 
-.view-selector label {
-  font-weight: var(--label-weight);
-  font-size: var(--label-size);
-  color: var(--text-muted);
-}
-
-.view-selector select {
-  padding: 0 var(--space-3);
-  min-height: var(--control-height-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--rounded);
-  background: var(--surface);
-  color: var(--text);
-  font-size: var(--text-size);
-}
-
-.dashboard-header h2 {
-  margin: 0 0 var(--space-2) 0;
-  font-size: var(--title-size);
-  font-weight: var(--title-weight);
-  color: var(--text);
-}
-
-.dashboard-header p {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--text-size);
-}
-
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-}
-
-.dashboard-grid-item {
-  min-height: 200px;
-}
-
-.dashboard-grid-item.size-1x1 { grid-column: span 1; grid-row: span 1; }
-.dashboard-grid-item.size-2x1 { grid-column: span 2; grid-row: span 1; }
-.dashboard-grid-item.size-1x2 { grid-column: span 1; grid-row: span 2; }
-.dashboard-grid-item.size-2x2 { grid-column: span 2; grid-row: span 2; }
-
-.dashboard-widget {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--rounded);
-  padding: var(--space-3);
-  height: 100%;
-}
-
-.dashboard-widget h3 {
-  margin: 0 0 var(--space-3) 0;
-  font-size: var(--title-size);
-  font-weight: var(--title-weight);
-  color: var(--text);
-}
-
-/* KPI Widget Styles */
-.kpi-widget .kpi-content {
+.inventory-desk-metric {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: calc(100% - 30px);
-  text-align: center;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-height: var(--control-height-secondary);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
 }
 
-.kpi-widget .kpi-value {
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--accent);
-  margin-bottom: 5px;
+button.inventory-desk-metric {
+  cursor: pointer;
 }
 
-.kpi-widget .kpi-label {
-  font-size: var(--text-size);
+.inventory-desk-metric.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.inventory-desk-metric-value {
+  font-size: var(--title-size);
+  font-weight: var(--title-weight);
+  font-variant-numeric: tabular-nums;
+}
+
+.inventory-desk-metric-label {
   color: var(--text-muted);
-  margin-bottom: 10px;
+  font-size: var(--caption-size);
 }
 
-.kpi-widget .kpi-trend {
+.inventory-desk-toolbar {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.inventory-desk-tabs {
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.inventory-desk-tabs button {
+  flex: 0 0 auto;
+  min-height: var(--control-height-secondary);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: var(--label-weight);
+}
+
+.inventory-desk-tabs button.is-active {
+  border-bottom-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.inventory-desk-search {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--caption-size);
+}
+
+.inventory-desk-search input {
+  width: 100%;
+  min-height: var(--control-height-secondary);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-size);
+}
+
+.inventory-desk-search input:focus-visible,
+.inventory-desk-tabs button:focus-visible,
+.inventory-desk-metric:focus-visible,
+.inventory-desk-table tr:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.inventory-desk-split {
+  display: grid;
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.inventory-desk-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  overflow: hidden;
+}
+
+.inventory-desk-table th,
+.inventory-desk-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.inventory-desk-table thead th {
+  color: var(--text-muted);
   font-size: var(--caption-size);
   font-weight: var(--label-weight);
-  padding: 2px var(--space-3);
-  border-radius: var(--rounded-full);
 }
 
-.kpi-widget .kpi-trend.up {
+.inventory-desk-table tbody tr {
+  cursor: pointer;
+}
+
+.inventory-desk-table tbody tr.is-selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.inventory-desk-table tbody th {
+  font-weight: var(--label-weight);
+}
+
+.inventory-desk-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--rounded-full);
+  font-size: var(--micro-size);
+  font-weight: var(--micro-weight);
+}
+
+.inventory-desk-pill.is-available {
   background: var(--ok-bg);
   color: var(--ok);
 }
 
-.kpi-widget .kpi-trend.down {
+.inventory-desk-pill.is-below-min {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.inventory-desk-pill.is-in-transit {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.inventory-desk-pill.is-on-hold {
   background: var(--err-bg);
   color: var(--err);
 }
 
-.kpi-widget .kpi-trend.neutral {
-  background: var(--off-bg);
-  color: var(--off);
+.inventory-desk-detail {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  background: var(--surface);
 }
 
-/* List Widget Styles */
-.list-widget .activity-list {
-  list-style: none;
-  padding: 0;
+.inventory-desk-detail h3,
+.inventory-desk-sku {
   margin: 0;
 }
 
-.activity-item {
-  display: flex;
-  justify-content: space-between;
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.activity-item:last-child {
-  border-bottom: none;
-}
-
-.activity-action {
-  font-weight: 500;
-  color: var(--text);
-  flex: 2;
-}
-
-.activity-user {
+.inventory-desk-sku {
   color: var(--text-muted);
-  font-size: var(--text-size);
-  flex: 1;
-  text-align: center;
+  font-size: var(--caption-size);
+  font-weight: var(--label-weight);
 }
 
-.activity-time {
+.inventory-desk-detail dl {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.inventory-desk-detail dt {
   color: var(--text-muted);
-  font-size: var(--text-size);
-  flex: 1;
-  text-align: right;
+  font-size: var(--caption-size);
 }
 
-/* Responsive Design */
-@media (max-width: 768px) {
-  .dashboard-controls {
-    flex-direction: column;
-    align-items: flex-start;
+.inventory-desk-detail dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.inventory-desk-detail .secondary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-height-secondary);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  color: var(--accent);
+  font-weight: var(--label-weight);
+  text-decoration: none;
+}
+
+.inventory-desk-empty {
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--rounded);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+@media (max-width: 599px) {
+  .inventory-desk-table th:nth-child(4),
+  .inventory-desk-table td:nth-child(4) {
+    display: none;
+  }
+}
+
+@media (min-width: 600px) {
+  .inventory-desk-metrics {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1101px) {
+  .inventory-desk-toolbar {
+    grid-template-columns: minmax(0, 1fr) 240px;
+    align-items: end;
   }
 
-  .dashboard-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-grid-item.size-2x1,
-  .dashboard-grid-item.size-2x2 {
-    grid-column: span 1;
-  }
-
-  .activity-item {
-    flex-direction: column;
-    gap: 5px;
-  }
-
-  .activity-user,
-  .activity-time {
-    text-align: left;
+  .inventory-desk-split {
+    grid-template-columns: minmax(0, 1fr) 280px;
   }
 }

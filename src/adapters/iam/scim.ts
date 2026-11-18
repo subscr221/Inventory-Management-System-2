@@ -11,6 +11,7 @@ import {
 } from '../../read/projections/users.js';
 import type { RoleAssignment } from '../../read/projections/users.js';
 import { AppError } from '../../middleware/error.js';
+import { listLiveGrantsHeldBy } from '../../read/projections/standing_grant.js';
 
 export interface ProvisionUserRequest {
   externalId: string;
@@ -181,6 +182,32 @@ export async function updateUserRoles(
   );
 }
 
+/**
+ * Story 4.8 (D12, AC 5): when an account is disabled, every standing approval and self-approval
+ * limit the person HOLDS is revoked in the same call, as the system. Grants they assigned stay live
+ * (their pruning list moves to the finance approver). One event per grant, each its own
+ * transaction; a failure part-way fails the request and a retry lands in the already-inactive
+ * branch below, which sweeps whatever is still live - so the sweep is idempotent.
+ */
+async function revokeGrantsHeldBy(
+  userId: string,
+  externalId: string,
+  traceId?: string,
+): Promise<void> {
+  for (const grant of await listLiveGrantsHeldBy(userId)) {
+    await persistEvent(
+      {
+        stream_type: 'standing_grant',
+        stream_id: grant.grant_id,
+        event_type: 'standing_grant.revoked',
+        payload: { grant_id: grant.grant_id, revoke_reason: 'account_disabled' },
+        metadata: systemActorMetadata(),
+      },
+      systemAuditCtx(`${SCIM_USERS_ENDPOINT}/${externalId}`, 'PATCH', 200, traceId),
+    );
+  }
+}
+
 /** Deactivates a user so their next request fails authentication. Emits `user.deprovisioned`. */
 export async function deprovisionUser(externalId: string, traceId?: string): Promise<void> {
   const userId = await getUserIdByExternalId(externalId);
@@ -200,13 +227,16 @@ export async function deprovisionUser(externalId: string, traceId?: string): Pro
       },
       systemAuditCtx(`${SCIM_USERS_ENDPOINT}/${externalId}`, 'PATCH', 200, traceId),
     );
+    await revokeGrantsHeldBy(userId, externalId, traceId);
   } else {
-    // Already inactive: idempotent no-op, no duplicate event - but still edit-logged (AC1).
+    // Already inactive: idempotent no-op, no duplicate event - but still edit-logged (AC1). A
+    // retry after a partly failed first call still sweeps the grants left live.
     await logNoOpAuditEntry(
       `${SCIM_USERS_ENDPOINT}/${externalId}`,
       'PATCH',
       traceId,
       'deprovision: user already inactive',
     );
+    await revokeGrantsHeldBy(userId, externalId, traceId);
   }
 }

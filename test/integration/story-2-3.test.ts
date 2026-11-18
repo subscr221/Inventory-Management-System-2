@@ -21,6 +21,14 @@ const SKU = 'EQ-0500';
 const SKU_LOT = 'RM-0042';
 const SKU_FIFO = 'RM-FIFO-DIFF';
 
+// Triage 2026-10-04: lots were seeded with hardcoded expiry dates (2026-09-30, 2026-12-31). Once
+// the wall clock passed 2026-09-30 the "early expiry" lot expired, FEFO correctly stopped selecting
+// it and AC4's setup allocation was rejected LOT_EXPIRED, and both tests failed for a reason that
+// had nothing to do with the code. All live-lot dates are relative to today now, so every scenario
+// stays true whenever it runs (same fix as the 2026-09-05 FIFO triage below).
+const daysAhead = (n: number): string =>
+  new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+
 interface HttpResult {
   status: number;
   body: Record<string, unknown>;
@@ -254,7 +262,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
           target_location_id: locAId,
           quantity: 100,
           lot_id: lot1Number,
-          expiry_date: '2026-09-30',
+          expiry_date: daysAhead(30),
         },
         { actor_location_id: locAId },
       ),
@@ -268,7 +276,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
           target_location_id: locAId,
           quantity: 100,
           lot_id: lot2Number,
-          expiry_date: '2026-12-31',
+          expiry_date: daysAhead(120),
         },
         { actor_location_id: locAId },
       ),
@@ -415,7 +423,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
           target_location_id: locAId,
           quantity: 50,
           lot_id: heldLotNumber,
-          expiry_date: '2026-12-31',
+          expiry_date: daysAhead(150),
         },
         { actor_location_id: locAId },
       ),
@@ -652,9 +660,8 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
     // Triage 2026-09-05: these expiry dates were hardcoded as 2026-12-31 and 2026-08-31. Once the
     // wall clock passed 2026-08-31 the "early expiry" lot was simply EXPIRED, FEFO correctly
     // refused to select it, and this test began failing for a reason that had nothing to do with
-    // the code. Dates are now relative to today so the scenario stays true whenever it runs.
-    const daysAhead = (n: number): string =>
-      new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+    // the code. Dates are now relative to today (module-level daysAhead above) so the scenario
+    // stays true whenever it runs.
     await persistEvent(
       stockEnvelope(
         'stock.received',
@@ -787,7 +794,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
         target_location_id: locAId,
         quantity: 25,
         lot_id: 'LOT-IDEMPOTENT-001',
-        expiry_date: '2026-12-31',
+        expiry_date: daysAhead(200),
       },
       { idempotency_key: idempotencyKey, actor_location_id: locAId },
     );
@@ -969,7 +976,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
           target_location_id: locAId,
           quantity: 10,
           lot_id: tracedLot,
-          expiry_date: '2026-12-31',
+          expiry_date: daysAhead(300),
         },
         { actor_location_id: locAId },
       ),

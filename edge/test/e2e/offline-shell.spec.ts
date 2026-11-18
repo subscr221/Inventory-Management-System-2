@@ -12,10 +12,12 @@ async function provision(page: Page) {
           JSON.stringify({
             user_id: '11111111-1111-4111-8111-111111111111',
             user_name: 'Asha Offline Officer',
-            site_id: '55555555-5555-4555-8555-555555555555',
-            site_name: 'North Gate',
-            role: 'gate_officer',
-            navigation: ['Dashboard', 'Frontline'],
+site_id: '55555555-5555-4555-8555-555555555555',
+site_name: 'North Gate',
+site_code_ext: 'site-A',
+gate_id: 'GATE-01',
+role: 'gate_officer',
+navigation: ['Dashboard', 'Frontline'],
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
@@ -108,14 +110,13 @@ test('keyboard navigation reaches role navigation and capture action', async ({ 
   // deterministic sequence regardless of the autofocus.
   await page.getByText('Skip to content').focus();
   await expect(page.getByText('Skip to content')).toBeFocused();
-  // The sidebar comes first in the tab order, then the top bar, then the primary navigation.
+  // The sidebar's primary navigation comes first in the tab order, then the top bar, then content.
   const nav = page.getByRole('navigation', { name: 'Primary navigation' });
-  await tabTo(page, page.getByRole('button', { name: 'Open search' }));
   await tabTo(page, nav.getByRole('link', { name: 'Dashboard' }));
   await page.keyboard.press('Tab');
   await expect(nav.getByRole('link', { name: 'Frontline' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByLabel('Cross-dock task ID')).toBeFocused();
+  await tabTo(page, page.getByRole('button', { name: 'Open search' }));
+  await tabTo(page, page.getByLabel('Cross-dock task ID'));
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Load known task' })).toBeFocused();
   // The frontline view stacks several capture forms (cross-dock, then indent with seven inputs)

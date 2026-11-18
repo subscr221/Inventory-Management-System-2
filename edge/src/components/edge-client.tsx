@@ -4,10 +4,23 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PowerSyncDatabase } from '@powersync/web';
 import { createTestCaptureEvent } from '../capture/test-capture';
 import { createCrossDockCompletionEvent } from '../capture/cross-dock';
-import { assertLotNotHeld } from '../capture/held-lot';
+import { assertLotNotHeld, getHeldLot } from '../capture/held-lot';
 import { createIndentRaisedEvent } from '../capture/indent';
 import { createDamageCaptureEvents } from '../capture/damage';
 import type { CaptureSettlement, DamageSubmitInput, DamageSubmitResult } from './report-damage';
+import { createGateEnteredEvent, createWeighbridgeRecordedEvent } from '../capture/gate';
+import type { ReceiptRow, ReceiptSubmission } from '../capture/receiving';
+import type { DoneRow } from './stores-inbox-model';
+import type { ReceiptSubmitResult } from './stores-accept';
+import { confirmPayload, type PickLineConfirmInput } from './pick-line-model';
+import type {
+  GateSubmitInput,
+  GateSubmitResult,
+  OpenTruck,
+  StampState,
+  WeighmentSubmitInput,
+  WeighmentSubmitResult,
+} from './gate-entry/gate-entry';
 import { pendingPhotoStore } from '../local-db/pending-photos';
 import { reencodeAsJpeg, uploadPendingPhotos } from '../sync/attachment-uploader';
 import {
@@ -35,13 +48,16 @@ import {
   hasAuthRequired,
   insertCaptureEvent,
   readCachedContext,
+  readCaptureRefusalCode,
   readCaptureSettlement,
   readFailures,
   readOutboxCounts,
+  readPendingReceipts,
   readWaitingForOtherOwners,
   resetAuthRequired,
   salvageUnheldOutboxRows,
 } from '../local-db/outbox';
+import { createOutboxEvent } from '../capture/outbox-event';
 import {
   applyWorklistSnapshot,
   nextStreamVersion,
@@ -58,7 +74,12 @@ import { refreshWorklist } from '../sync/worklist-refresh';
 import { authorizedFetch } from '../session/api-fetch';
 import { classifyBootstrapRefusal } from '../session/bootstrap-refusal';
 import { AuthConfigUnavailableError, loadAuthConfig } from '../session/auth-config';
-import { createBrowserSession, getActiveSession, setActiveSession, type EdgeSession } from '../session/session';
+import {
+  createBrowserSession,
+  getActiveSession,
+  setActiveSession,
+  type EdgeSession,
+} from '../session/session';
 
 interface BootstrapResponse {
   user_id: string;
@@ -67,6 +88,10 @@ interface BootstrapResponse {
   site_name: string;
   role: string;
   navigation: string[];
+  // Story 3.13: the gate capture needs the operating site's external code and the gate id.
+  site_code_ext?: string | null;
+  gate_id?: string | null;
+  inspection_bay_code?: string | null;
 }
 
 interface WorklistMeta {
@@ -80,6 +105,12 @@ interface RuntimeState {
   userName: string;
   siteId: string;
   siteName: string;
+  // Story 3.13: bootstrap-supplied gate context (empty until a live bootstrap confirms it).
+  siteCodeExt: string | null;
+  gateId: string | null;
+  // Story 3.14: the site's inspection bay for the acceptance screen, and the receipts still queued.
+  inspectionBayCode: string | null;
+  pendingReceipts: DoneRow[];
   role: string;
   navigation: string[];
   pendingCount: number;
@@ -119,6 +150,10 @@ const initialState: RuntimeState = {
   userName: '',
   siteId: '',
   siteName: '',
+  siteCodeExt: null,
+  gateId: null,
+  inspectionBayCode: null,
+  pendingReceipts: [],
   role: '',
   navigation: [],
   pendingCount: 0,
@@ -160,7 +195,10 @@ function readKnownUsers(): Record<string, string> {
 
 function rememberKnownUser(userId: string, userName: string): void {
   try {
-    localStorage.setItem(KNOWN_USERS_KEY, JSON.stringify({ ...readKnownUsers(), [userId]: userName }));
+    localStorage.setItem(
+      KNOWN_USERS_KEY,
+      JSON.stringify({ ...readKnownUsers(), [userId]: userName }),
+    );
   } catch {
     // Storage unavailable: the notice falls back to a generic owner label.
   }
@@ -215,7 +253,15 @@ export function EdgeClient({
     | 'check-stock'
     | 'my-requests'
     | 'report-damage'
-    | 'damage-cases';
+    | 'damage-cases'
+    | 'standing-grants'
+    | 'gate'
+    | 'stores'
+    | 'stores-accept'
+    | 'stores-issue'
+    | 'putaway-task'
+    | 'grn-read'
+    | 'floor-tasks';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
@@ -252,47 +298,58 @@ export function EdgeClient({
       });
   }, []);
 
-  const insertOwnCapture = useCallback(async (db: PowerSyncDatabase, event: Parameters<typeof insertCaptureEvent>[1]) => {
-    if (signingOut.current) throw new Error('Signing out: capture is closed');
-    await insertCaptureEvent(db, event);
-  }, []);
+  const insertOwnCapture = useCallback(
+    async (db: PowerSyncDatabase, event: Parameters<typeof insertCaptureEvent>[1]) => {
+      if (signingOut.current) throw new Error('Signing out: capture is closed');
+      await insertCaptureEvent(db, event);
+    },
+    [],
+  );
 
-  const refreshLocalState = useCallback(async (db: PowerSyncDatabase) => {
-    const currentUser = signedInUserId.current;
-    const [counts, failures, rowsAuthRequired, waiting, ownUnsettled] = await Promise.all([
-      readOutboxCounts(db),
-      readFailures(db),
-      hasAuthRequired(db, currentUser ?? undefined),
-      currentUser ? readWaitingForOtherOwners(db, currentUser) : Promise.resolve([]),
-      currentUser ? countUnsettled(db, currentUser) : Promise.resolve(0),
-    ]);
-    const authRequired = rowsAuthRequired || sessionAuthLost.current;
-    const knownUsers = readKnownUsers();
-    const online = navigator.onLine;
-    const syncing = Boolean(db.currentStatus.dataFlowStatus.uploading);
-    setState((current) => ({
-      ...current,
-      ...counts,
-      failures: failures.map((failure) => ({
-        eventId: failure.id,
-        eventType: failure.event_type,
-        errorCode: failure.server_error_code ?? 'INVALID_EVENT_ENVELOPE',
-        failedAt: failure.created_at,
-      })),
-      authRequired,
-      waitingForOthers: waiting.map((entry) => ({
-        userName: knownUsers[entry.userId] ?? '',
-        count: entry.count,
-      })),
-      // Story 1.12 (AC4): once nothing is left to upload, the sign-out gate notice goes away.
-      signOutBlockedCount: ownUnsettled === 0 ? 0 : current.signOutBlockedCount,
-      online,
-      syncState: authRequired
-        ? 'error'
-        : deriveSyncUiState({ online, syncing, ...counts }),
-    }));
-    uploadPhotos();
-  }, [uploadPhotos]);
+  const refreshLocalState = useCallback(
+    async (db: PowerSyncDatabase) => {
+      const currentUser = signedInUserId.current;
+      const [counts, failures, rowsAuthRequired, waiting, ownUnsettled, pendingReceipts] =
+        await Promise.all([
+          readOutboxCounts(db),
+          readFailures(db),
+          hasAuthRequired(db, currentUser ?? undefined),
+          currentUser ? readWaitingForOtherOwners(db, currentUser) : Promise.resolve([]),
+          currentUser ? countUnsettled(db, currentUser) : Promise.resolve(0),
+          currentUser ? readPendingReceipts(db, currentUser) : Promise.resolve([]),
+        ]);
+      const authRequired = rowsAuthRequired || sessionAuthLost.current;
+      const knownUsers = readKnownUsers();
+      const online = navigator.onLine;
+      const syncing = Boolean(db.currentStatus.dataFlowStatus.uploading);
+      setState((current) => ({
+        ...current,
+        ...counts,
+        failures: failures.map((failure) => ({
+          eventId: failure.id,
+          eventType: failure.event_type,
+          errorCode: failure.server_error_code ?? 'INVALID_EVENT_ENVELOPE',
+          failedAt: failure.created_at,
+        })),
+        authRequired,
+        waitingForOthers: waiting.map((entry) => ({
+          userName: knownUsers[entry.userId] ?? '',
+          count: entry.count,
+        })),
+        pendingReceipts: pendingReceipts.map((row) => ({
+          id: row.grnId,
+          title: row.challan ?? row.grnId,
+          statusKey: 'stores.done.captured' as const,
+        })),
+        // Story 1.12 (AC4): once nothing is left to upload, the sign-out gate notice goes away.
+        signOutBlockedCount: ownUnsettled === 0 ? 0 : current.signOutBlockedCount,
+        online,
+        syncState: authRequired ? 'error' : deriveSyncUiState({ online, syncing, ...counts }),
+      }));
+      uploadPhotos();
+    },
+    [uploadPhotos],
+  );
 
   // Story 7.8: read the cached worklist (survives restarts; the snapshot meta lives in localStorage).
   const loadWorklistFromCache = useCallback(async (db: PowerSyncDatabase) => {
@@ -349,11 +406,9 @@ export function EdgeClient({
       const current = session.current;
       if (!current || current.mode !== 'oidc' || !navigator.onLine || redirecting.current) return;
       redirecting.current = true;
-      void current
-        .requestSignIn(window.location.pathname + window.location.search)
-        .catch(() => {
-          redirecting.current = false;
-        });
+      void current.requestSignIn(window.location.pathname + window.location.search).catch(() => {
+        redirecting.current = false;
+      });
     }
 
     function onAuthLost() {
@@ -425,7 +480,9 @@ export function EdgeClient({
         }
 
         try {
-          const response = await authorizedFetch('/api/v1/edge/bootstrap', { credentials: 'include' });
+          const response = await authorizedFetch('/api/v1/edge/bootstrap', {
+            credentials: 'include',
+          });
           if (!response.ok) {
             const refusal = await classifyBootstrapRefusal(response);
             if (refusal === 'unavailable') throw new Error('bootstrap unavailable');
@@ -474,7 +531,13 @@ export function EdgeClient({
             role: bootstrap.role,
             siteId: bootstrap.site_id,
             siteName: bootstrap.site_name,
-            navigation: bootstrap.navigation,
+            siteCodeExt: bootstrap.site_code_ext?.trim() || null,
+            gateId: bootstrap.gate_id?.trim() || null,
+            inspectionBayCode: bootstrap.inspection_bay_code?.trim() || null,
+            // No site on the bootstrap: gate capture is closed, so hide its nav row.
+            navigation: bootstrap.site_code_ext?.trim()
+              ? bootstrap.navigation
+              : bootstrap.navigation.filter((name) => name !== 'Gate entry'),
             navigationConfirmed: true,
             firstSyncRequired: false,
             siteRefusal: null,
@@ -591,12 +654,15 @@ export function EdgeClient({
 
   // Story 1.14 (AC 6): drop the device's retained copy of one refused capture, then recompute the
   // counts and failure list from the tables (the STREAM_CONFLICT park is read from the same table).
-  const dismissFailure = useCallback(async (eventId: string) => {
-    const db = database.current;
-    if (!db) throw new Error('Database not available');
-    await dismissRetainedRow(db, eventId);
-    await refreshLocalState(db);
-  }, [refreshLocalState]);
+  const dismissFailure = useCallback(
+    async (eventId: string) => {
+      const db = database.current;
+      if (!db) throw new Error('Database not available');
+      await dismissRetainedRow(db, eventId);
+      await refreshLocalState(db);
+    },
+    [refreshLocalState],
+  );
 
   const capture = useCallback(async () => {
     const db = database.current;
@@ -613,115 +679,136 @@ export function EdgeClient({
     await refreshLocalState(db);
   }, [refreshLocalState, state.role, state.siteId, state.userId]);
 
-  const loadCrossDockTask = useCallback(async (taskId: string): Promise<CrossDockTaskContext | null> => {
-    const response = await authorizedFetch(`/api/v1/cross-dock-tasks/${encodeURIComponent(taskId)}`, { credentials: 'include' });
-    if (!response.ok) return null;
-    const body = (await response.json()) as { task?: CrossDockTaskContext };
-    return body.task ?? null;
-  }, []);
+  const loadCrossDockTask = useCallback(
+    async (taskId: string): Promise<CrossDockTaskContext | null> => {
+      const response = await authorizedFetch(
+        `/api/v1/cross-dock-tasks/${encodeURIComponent(taskId)}`,
+        { credentials: 'include' },
+      );
+      if (!response.ok) return null;
+      const body = (await response.json()) as { task?: CrossDockTaskContext };
+      return body.task ?? null;
+    },
+    [],
+  );
 
-  const confirmCrossDock = useCallback(async (task: CrossDockTaskContext, stagingBinCode: string): Promise<string> => {
-    const db = database.current;
-    if (!db || !state.userId || !state.siteId) {
-      throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
-    }
-    // Story 8.5 (AC 2): pre-capture held-lot guard - the technician is told BEFORE capture; the
-    // central LOT_ON_HOLD rejection plus needs_attention/syncFailures remains the authority.
-    if (task.lot_number) {
-      await assertLotNotHeld(db, task.lot_number);
-    }
-    const event = createCrossDockCompletionEvent({
-      taskId: task.cross_dock_task_id,
-      stagingBinCode,
-      userId: state.userId,
-      role: state.role,
-      siteId: state.siteId,
-      correlationId: task.correlation_id,
-      deviceId: deviceId(),
-    });
-    await insertOwnCapture(db, event);
-    await refreshLocalState(db);
-    return event.event_id;
-  }, [refreshLocalState, state.role, state.siteId, state.userId]);
+  const confirmCrossDock = useCallback(
+    async (task: CrossDockTaskContext, stagingBinCode: string): Promise<string> => {
+      const db = database.current;
+      if (!db || !state.userId || !state.siteId) {
+        throw new Error(
+          'Database or authentication state not available. Ensure the device is synced and logged in.',
+        );
+      }
+      // Story 8.5 (AC 2): pre-capture held-lot guard - the technician is told BEFORE capture; the
+      // central LOT_ON_HOLD rejection plus needs_attention/syncFailures remains the authority.
+      if (task.lot_number) {
+        await assertLotNotHeld(db, task.lot_number);
+      }
+      const event = createCrossDockCompletionEvent({
+        taskId: task.cross_dock_task_id,
+        stagingBinCode,
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+        correlationId: task.correlation_id,
+        deviceId: deviceId(),
+      });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [refreshLocalState, state.role, state.siteId, state.userId],
+  );
 
-  const submitIndent = useCallback(async (input: IndentSubmitInput): Promise<string> => {
-    const db = database.current;
-    if (!db || !state.userId || !state.siteId) {
-      throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
-    }
-    const event = createIndentRaisedEvent({
-      ...input,
-      userId: state.userId,
-      role: state.role,
-      siteId: state.siteId,
-      deviceId: deviceId(),
-    });
-    await insertOwnCapture(db, event);
-    await refreshLocalState(db);
-    return event.event_id;
-  }, [refreshLocalState, state.role, state.siteId, state.userId]);
+  const submitIndent = useCallback(
+    async (input: IndentSubmitInput): Promise<string> => {
+      const db = database.current;
+      if (!db || !state.userId || !state.siteId) {
+        throw new Error(
+          'Database or authentication state not available. Ensure the device is synced and logged in.',
+        );
+      }
+      const event = createIndentRaisedEvent({
+        ...input,
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+        deviceId: deviceId(),
+      });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [refreshLocalState, state.role, state.siteId, state.userId],
+  );
 
   // --- Story 8.9: report damage (the submitIndent pattern) ---------------------------------------
 
-  const submitDamage = useCallback(async (input: DamageSubmitInput): Promise<DamageSubmitResult> => {
-    const db = database.current;
-    if (!db || !state.userId || !state.siteId) {
-      throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
-    }
-    if (signingOut.current) throw new Error('Signing out: capture is closed');
-    const occurredAt = new Date().toISOString();
-    const reportId = crypto.randomUUID();
-    const photoAttachmentId = crypto.randomUUID();
-    // The photo first: a report whose photo was never stored would wait forever for it.
-    await pendingPhotoStore.put({
-      attachmentId: photoAttachmentId,
-      blob: input.photo,
-      contentType: input.photo.type,
-      ownerUserId: state.userId,
-      createdAt: occurredAt,
-    });
-    const events = createDamageCaptureEvents({
-      sku: input.sku,
-      lotNumber: input.lotNumber,
-      quantity: input.quantity,
-      foundAt: input.foundAt,
-      binCode: input.binCode,
-      reasonCode: input.reasonCode,
-      reasonNote: input.reasonNote,
-      photoAttachmentId,
-      wholeLotRequested: input.wholeLotRequested,
-      replacement: input.replacement
-        ? { ...input.replacement, reason: t('damage.replacementReason') }
-        : null,
-      userId: state.userId,
-      role: state.role,
-      siteId: state.siteId,
-      deviceId: deviceId(),
-      reportId,
-      occurredAt,
-    });
-    // One local transaction, damage event first: the outbox uploads it before the linked indent.
-    const insertAll = async (tx: Parameters<typeof insertCaptureEvent>[0]) => {
-      for (const event of events) await insertCaptureEvent(tx, event);
-    };
-    try {
-      if (db.writeTransaction) await db.writeTransaction(insertAll);
-      else await insertAll(db);
-    } catch (err) {
-      // Code review 2026-09-28: the photo above is already stored under photoAttachmentId; if the
-      // event insert that would reference it never lands, remove it rather than leave an orphaned
-      // blob with no owning report.
-      await pendingPhotoStore.remove(photoAttachmentId).catch(() => undefined);
-      throw err;
-    }
-    await refreshLocalState(db);
-    const damage = events[0]!;
-    return {
-      eventId: damage.event_id,
-      reportId,
-      replacementIndentId: (damage.payload['replacement_indent_id'] as string | null) ?? null,
-    };
-  }, [refreshLocalState, state.role, state.siteId, state.userId]);
+  const submitDamage = useCallback(
+    async (input: DamageSubmitInput): Promise<DamageSubmitResult> => {
+      const db = database.current;
+      if (!db || !state.userId || !state.siteId) {
+        throw new Error(
+          'Database or authentication state not available. Ensure the device is synced and logged in.',
+        );
+      }
+      if (signingOut.current) throw new Error('Signing out: capture is closed');
+      const occurredAt = new Date().toISOString();
+      const reportId = crypto.randomUUID();
+      const photoAttachmentId = crypto.randomUUID();
+      // The photo first: a report whose photo was never stored would wait forever for it.
+      await pendingPhotoStore.put({
+        attachmentId: photoAttachmentId,
+        blob: input.photo,
+        contentType: input.photo.type,
+        ownerUserId: state.userId,
+        createdAt: occurredAt,
+      });
+      const events = createDamageCaptureEvents({
+        sku: input.sku,
+        lotNumber: input.lotNumber,
+        quantity: input.quantity,
+        foundAt: input.foundAt,
+        binCode: input.binCode,
+        reasonCode: input.reasonCode,
+        reasonNote: input.reasonNote,
+        photoAttachmentId,
+        wholeLotRequested: input.wholeLotRequested,
+        replacement: input.replacement
+          ? { ...input.replacement, reason: t('damage.replacementReason') }
+          : null,
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+        deviceId: deviceId(),
+        reportId,
+        occurredAt,
+      });
+      // One local transaction, damage event first: the outbox uploads it before the linked indent.
+      const insertAll = async (tx: Parameters<typeof insertCaptureEvent>[0]) => {
+        for (const event of events) await insertCaptureEvent(tx, event);
+      };
+      try {
+        if (db.writeTransaction) await db.writeTransaction(insertAll);
+        else await insertAll(db);
+      } catch (err) {
+        // Code review 2026-09-28: the photo above is already stored under photoAttachmentId; if the
+        // event insert that would reference it never lands, remove it rather than leave an orphaned
+        // blob with no owning report.
+        await pendingPhotoStore.remove(photoAttachmentId).catch(() => undefined);
+        throw err;
+      }
+      await refreshLocalState(db);
+      const damage = events[0]!;
+      return {
+        eventId: damage.event_id,
+        reportId,
+        replacementIndentId: (damage.payload['replacement_indent_id'] as string | null) ?? null,
+      };
+    },
+    [refreshLocalState, state.role, state.siteId, state.userId],
+  );
 
   const damageSettlement = useCallback(async (eventId: string): Promise<CaptureSettlement> => {
     const db = database.current;
@@ -734,7 +821,9 @@ export function EdgeClient({
   const requireReady = useCallback((): PowerSyncDatabase => {
     const db = database.current;
     if (!db || !state.userId || !state.siteId) {
-      throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
+      throw new Error(
+        'Database or authentication state not available. Ensure the device is synced and logged in.',
+      );
     }
     return db;
   }, [state.siteId, state.userId]);
@@ -743,6 +832,300 @@ export function EdgeClient({
     () => ({ userId: state.userId, role: state.role, siteId: state.siteId, deviceId: deviceId() }),
     [state.role, state.siteId, state.userId],
   );
+
+  // --- Story 3.13: gate entry and weighbridge capture -------------------------------------------
+
+  // Trucks on site and weighbridge stamp state. Fail soft: offline or any fetch failure leaves the
+  // stamp unknown ("not verified, server will confirm") and the operator types the truck. Only an
+  // explicit server `overdue` blocks weighing (AC 9).
+  const [gateLookups, setGateLookups] = useState<{
+    openTrucks: OpenTruck[];
+    stamp: StampState | null;
+    stampUnverified: boolean;
+  }>({ openTrucks: [], stamp: null, stampUnverified: false });
+  useEffect(() => {
+    const site = state.siteCodeExt;
+    if (!site || !state.online) {
+      setGateLookups({ openTrucks: [], stamp: null, stampUnverified: Boolean(site) });
+      return;
+    }
+    let cancelled = false;
+    const query = `site=${encodeURIComponent(site)}`;
+    void (async () => {
+      let openTrucks: OpenTruck[] = [];
+      let stamp: StampState | null = null;
+      let stampUnverified = false;
+      try {
+        const res = await authorizedFetch(`/api/v1/gate-events?${query}&status=open`, {
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const body = (await res.json()) as { gate_events?: Array<Record<string, unknown>> };
+          openTrucks = (body.gate_events ?? []).flatMap((row) => {
+            const correlationId =
+              typeof row['correlation_id'] === 'string' ? row['correlation_id'] : '';
+            const poRef = typeof row['po_ref_ext'] === 'string' ? row['po_ref_ext'] : '';
+            if (!correlationId) return [];
+            return [
+              {
+                correlationId,
+                vehicleRegExt:
+                  typeof row['vehicle_reg_ext'] === 'string' ? row['vehicle_reg_ext'] : '',
+                poRefExt: poRef === 'UNKNOWN' ? '' : poRef,
+                lineNo: 1,
+                status: typeof row['binding_status'] === 'string' ? row['binding_status'] : '',
+              },
+            ];
+          });
+        }
+      } catch {
+        /* fail soft: the operator types the truck */
+      }
+      try {
+        const res = await authorizedFetch(`/api/v1/weighbridge-events/stamp-status?${query}`, {
+          credentials: 'include',
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const body = (await res.json()) as {
+          stamp_status?: Array<{ device_key?: string; status?: string; next_due_date?: string }>;
+        };
+        const rows = (body.stamp_status ?? []).filter(
+          (r) => r.status === 'overdue' || r.status === 'compliant',
+        );
+        const pick = rows.find((r) => r.status === 'overdue') ?? rows[0];
+        if (pick) {
+          stamp = {
+            deviceKey: pick.device_key ?? '',
+            status: pick.status as 'compliant' | 'overdue',
+            nextDueDate: pick.next_due_date ?? '',
+          };
+        } else {
+          stampUnverified = true;
+        }
+      } catch {
+        stampUnverified = true;
+      }
+      if (!cancelled) setGateLookups({ openTrucks, stamp, stampUnverified });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // pendingCount: refresh the truck list after the outbox changes (a gate entry or weighment).
+  }, [state.siteCodeExt, state.online, state.pendingCount]);
+
+  const submitGate = useCallback(
+    async (input: GateSubmitInput): Promise<GateSubmitResult> => {
+      const db = database.current;
+      if (!db || !state.userId || !state.siteId) {
+        throw new Error(
+          'Database or authentication state not available. Ensure the device is synced and logged in.',
+        );
+      }
+      if (signingOut.current) throw new Error('Signing out: capture is closed');
+      if (!state.siteCodeExt || !state.gateId) {
+        throw new Error('No site or gate is assigned to this device; gate capture is closed.');
+      }
+      const occurredAt = new Date().toISOString();
+      const photoAttachmentId = crypto.randomUUID();
+      await pendingPhotoStore.put({
+        attachmentId: photoAttachmentId,
+        blob: input.photo,
+        contentType: input.photo.type,
+        ownerUserId: state.userId,
+        createdAt: occurredAt,
+      });
+      const event = createGateEnteredEvent({
+        challanNumberExt: input.challanNumberExt,
+        poRefExt: input.poRefExt,
+        vehicleRegExt: input.vehicleRegExt,
+        driverName: input.driverName,
+        supplierRefExt: input.supplierRefExt,
+        supplierUnlisted: input.supplierUnlisted,
+        supplierNameUnlisted: input.supplierNameUnlisted,
+        challanPhotoRef: photoAttachmentId,
+        siteCodeExt: state.siteCodeExt,
+        gateId: state.gateId,
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+        deviceId: deviceId(),
+        occurredAt,
+      });
+      try {
+        await insertCaptureEvent(db, event);
+      } catch (error) {
+        // No event row will reference the blob, so drop it rather than leave an orphan.
+        await pendingPhotoStore.remove(photoAttachmentId).catch(() => undefined);
+        throw error;
+      }
+      await refreshLocalState(db);
+      return { eventId: event.event_id, correlationId: event.metadata.correlation_id };
+    },
+    [refreshLocalState, state.gateId, state.role, state.siteCodeExt, state.siteId, state.userId],
+  );
+
+  const submitWeighment = useCallback(
+    async (input: WeighmentSubmitInput): Promise<WeighmentSubmitResult | { errorCode: string }> => {
+      const db = requireReady();
+      if (!state.siteCodeExt)
+        throw new Error('No site is assigned to this device; weighing is closed.');
+      const event = createWeighbridgeRecordedEvent({
+        ...input,
+        siteCodeExt: state.siteCodeExt,
+        deviceId: deviceId(),
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+      });
+      if ('errorCode' in event) return { errorCode: event.errorCode };
+      await insertCaptureEvent(db, event);
+      await refreshLocalState(db);
+      return { eventId: event.event_id };
+    },
+    [refreshLocalState, requireReady, state.role, state.siteCodeExt, state.siteId, state.userId],
+  );
+
+  const submitReceipt = useCallback(
+    async (submission: ReceiptSubmission, rows: ReceiptRow[]): Promise<ReceiptSubmitResult> => {
+      if (navigator.onLine) {
+        for (const row of rows) {
+          const response = await authorizedFetch('/api/v1/grn-lines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...row.body,
+              idempotency_key: `stores-receipt-${row.grn_line_id}`,
+            }),
+          }).catch(() => null);
+          if (!response) return { kind: 'error', errorCode: 'STORES_OFFLINE' };
+          if (response.ok) continue;
+          const body = (await response.json().catch(() => null)) as {
+            error_code?: unknown;
+          } | null;
+          return {
+            kind: 'error',
+            errorCode:
+              typeof body?.error_code === 'string' ? body.error_code : 'INVALID_EVENT_ENVELOPE',
+          };
+        }
+        const current = database.current;
+        if (current) await refreshLocalState(current);
+        return { kind: 'posted', grnId: submission.grnId };
+      }
+      const db = requireReady();
+      const occurredAt = new Date().toISOString();
+      for (const row of rows) {
+        const eventId = crypto.randomUUID();
+        await insertCaptureEvent(
+          db,
+          createOutboxEvent({
+            eventId,
+            streamType: 'receiving',
+            streamId: row.grn_line_id,
+            eventType: 'goods.received',
+            payload: row.body,
+            userId: state.userId,
+            role: state.role,
+            siteId: state.siteId,
+            correlationId: submission.bindingToken,
+            deviceId: deviceId(),
+            idempotencyKey: `edge-receipt-${row.grn_line_id}`,
+            occurredAt,
+            captureMethod: 'MANUAL',
+          }),
+        );
+      }
+      await refreshLocalState(db);
+      return { kind: 'pending', grnId: submission.grnId };
+    },
+    [refreshLocalState, requireReady, state.role, state.siteId, state.userId],
+  );
+
+  const storeReceiptPhoto = useCallback(
+    async (file: File): Promise<string> => {
+      if (signingOut.current) throw new Error('Signing out: capture is closed');
+      if (!state.userId) throw new Error('Sign-in is not ready');
+      const attachmentId = crypto.randomUUID();
+      await pendingPhotoStore.put({
+        attachmentId,
+        blob: file,
+        contentType: file.type || 'image/jpeg',
+        ownerUserId: state.userId,
+        createdAt: new Date().toISOString(),
+      });
+      return attachmentId;
+    },
+    [state.userId],
+  );
+
+  // Story 3.16: the pre-capture held-lot guard for the pick lot scan. Reads the synced held_lot
+  // table; fail soft so the authoritative LOT_ON_HOLD refusal still catches a held lot on replay.
+  const checkHeldLot = useCallback(async (lotNumber: string): Promise<string | null> => {
+    const db = database.current;
+    if (!db) return null;
+    try {
+      const held = await getHeldLot(db, lotNumber);
+      return held ? held.lot_number : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Story 3.16 (AC 5): confirm a pick line by writing one `pick_line.confirmed` event (stream
+  // warehouse) to the edge outbox. capture_method is always PWA; the server stamps confirmed_by.
+  const confirmPickLine = useCallback(
+    async (input: PickLineConfirmInput): Promise<string> => {
+      const db = requireReady();
+      if (input.directedLotNumber) {
+        try {
+          await assertLotNotHeld(db, input.directedLotNumber);
+        } catch {
+          throw new Error('LOT_ON_HOLD');
+        }
+      }
+      const event = createOutboxEvent({
+        eventId: crypto.randomUUID(),
+        streamType: 'warehouse',
+        streamId: input.pickTaskId,
+        eventType: 'pick_line.confirmed',
+        payload: confirmPayload({
+          pickTaskId: input.pickTaskId,
+          pickLineId: input.pickLineId,
+          confirmedLotId: input.confirmedLotId,
+          confirmedQuantity: input.confirmedQuantity,
+        }),
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+        correlationId: crypto.randomUUID(),
+        deviceId: deviceId(),
+        idempotencyKey: input.idempotencyKey,
+        occurredAt: new Date().toISOString(),
+        captureMethod: 'AUTO',
+      });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [refreshLocalState, requireReady, state.role, state.siteId, state.userId],
+  );
+
+  // Story 3.16: where a just-confirmed pick line stands after upload.
+  const pickSettlement = useCallback(
+    async (eventId: string): Promise<'pending' | 'synced' | 'refused'> => {
+      const db = database.current;
+      if (!db) return 'pending';
+      return readCaptureSettlement(db, eventId);
+    },
+    [],
+  );
+
+  // Story 3.16: the server error code behind a refused pick line, for the pick screen copy.
+  const pickRefusalCode = useCallback(async (eventId: string): Promise<string | null> => {
+    const db = database.current;
+    if (!db) return null;
+    return readCaptureRefusalCode(db, eventId).catch(() => null);
+  }, []);
 
   const selectWorkOrder = useCallback(async (workOrderId: string) => {
     const db = database.current;
@@ -754,83 +1137,104 @@ export function EdgeClient({
     }));
   }, []);
 
-  const submitFaultReport = useCallback(async (input: FaultReportSubmitInput): Promise<string> => {
-    const db = requireReady();
-    const event = createFaultReportedEvent({ ...input, ...actor() });
-    await insertOwnCapture(db, event);
-    await refreshLocalState(db);
-    return event.event_id;
-  }, [actor, refreshLocalState, requireReady]);
+  const submitFaultReport = useCallback(
+    async (input: FaultReportSubmitInput): Promise<string> => {
+      const db = requireReady();
+      const event = createFaultReportedEvent({ ...input, ...actor() });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [actor, refreshLocalState, requireReady],
+  );
 
-  const submitStatusUpdate = useCallback(async (input: WorkOrderStatusSubmitInput): Promise<string> => {
-    const db = requireReady();
-    const workOrder = state.workOrders.find((row) => row.work_order_id === input.workOrderId);
-    if (!workOrder) throw new Error('Work order is not cached on this device');
-    const eventVersion = await nextStreamVersion(db, 'cached_work_order', input.workOrderId);
-    const event = createWorkOrderStatusUpdatedEvent({
-      workOrderId: input.workOrderId,
-      assetId: workOrder.asset_id,
-      newStatus: input.newStatus,
-      note: input.note,
-      eventVersion,
-      ...actor(),
-    });
-    await insertOwnCapture(db, event);
-    await refreshLocalState(db);
-    return event.event_id;
-  }, [actor, refreshLocalState, requireReady, state.workOrders]);
+  const submitStatusUpdate = useCallback(
+    async (input: WorkOrderStatusSubmitInput): Promise<string> => {
+      const db = requireReady();
+      const workOrder = state.workOrders.find((row) => row.work_order_id === input.workOrderId);
+      if (!workOrder) throw new Error('Work order is not cached on this device');
+      const eventVersion = await nextStreamVersion(db, 'cached_work_order', input.workOrderId);
+      const event = createWorkOrderStatusUpdatedEvent({
+        workOrderId: input.workOrderId,
+        assetId: workOrder.asset_id,
+        newStatus: input.newStatus,
+        note: input.note,
+        eventVersion,
+        ...actor(),
+      });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [actor, refreshLocalState, requireReady, state.workOrders],
+  );
 
-  const submitMeterReading = useCallback(async (input: MeterReadingSubmitInput): Promise<string> => {
-    const db = requireReady();
-    const workOrder = state.workOrders.find((row) => row.work_order_id === state.selectedWorkOrderId);
-    if (!workOrder) throw new Error('Work order is not cached on this device');
-    const event = createMeterReadingRecordedEvent({
-      meterId: input.meterId,
-      assetId: workOrder.asset_id,
-      readingValue: input.readingValue,
-      ...actor(),
-    });
-    await insertOwnCapture(db, event);
-    await refreshLocalState(db);
-    return event.event_id;
-  }, [actor, refreshLocalState, requireReady, state.selectedWorkOrderId, state.workOrders]);
+  const submitMeterReading = useCallback(
+    async (input: MeterReadingSubmitInput): Promise<string> => {
+      const db = requireReady();
+      const workOrder = state.workOrders.find(
+        (row) => row.work_order_id === state.selectedWorkOrderId,
+      );
+      if (!workOrder) throw new Error('Work order is not cached on this device');
+      const event = createMeterReadingRecordedEvent({
+        meterId: input.meterId,
+        assetId: workOrder.asset_id,
+        readingValue: input.readingValue,
+        ...actor(),
+      });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [actor, refreshLocalState, requireReady, state.selectedWorkOrderId, state.workOrders],
+  );
 
-  const submitSpareIssue = useCallback(async (input: SpareIssueSubmitInput): Promise<string> => {
-    const db = requireReady();
-    const reservation = state.selectedReservations.find(
-      (row) => row.reservation_id === input.reservationId,
-    );
-    if (!reservation) throw new Error('Reservation is not cached on this device');
-    const eventVersion = await nextStreamVersion(db, 'cached_spare_reservation', input.reservationId);
-    const event = createSpareIssuedEvent({
-      reservationId: input.reservationId,
-      quantity: reservation.quantity,
-      eventVersion,
-      ...actor(),
-    });
-    await insertOwnCapture(db, event);
-    await refreshLocalState(db);
-    return event.event_id;
-  }, [actor, refreshLocalState, requireReady, state.selectedReservations]);
+  const submitSpareIssue = useCallback(
+    async (input: SpareIssueSubmitInput): Promise<string> => {
+      const db = requireReady();
+      const reservation = state.selectedReservations.find(
+        (row) => row.reservation_id === input.reservationId,
+      );
+      if (!reservation) throw new Error('Reservation is not cached on this device');
+      const eventVersion = await nextStreamVersion(
+        db,
+        'cached_spare_reservation',
+        input.reservationId,
+      );
+      const event = createSpareIssuedEvent({
+        reservationId: input.reservationId,
+        quantity: reservation.quantity,
+        eventVersion,
+        ...actor(),
+      });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [actor, refreshLocalState, requireReady, state.selectedReservations],
+  );
 
-  const submitClosure = useCallback(async (input: WorkOrderClosureSubmitInput): Promise<string> => {
-    const db = requireReady();
-    const workOrder = state.workOrders.find((row) => row.work_order_id === input.workOrderId);
-    if (!workOrder) throw new Error('Work order is not cached on this device');
-    const eventVersion = await nextStreamVersion(db, 'cached_work_order', input.workOrderId);
-    const event = createWorkOrderCompletedEvent({
-      workOrderId: input.workOrderId,
-      assetId: workOrder.asset_id,
-      faultCode: input.faultCode,
-      causeCode: input.causeCode,
-      remedyCode: input.remedyCode,
-      eventVersion,
-      ...actor(),
-    });
-    await insertOwnCapture(db, event);
-    await refreshLocalState(db);
-    return event.event_id;
-  }, [actor, refreshLocalState, requireReady, state.workOrders]);
+  const submitClosure = useCallback(
+    async (input: WorkOrderClosureSubmitInput): Promise<string> => {
+      const db = requireReady();
+      const workOrder = state.workOrders.find((row) => row.work_order_id === input.workOrderId);
+      if (!workOrder) throw new Error('Work order is not cached on this device');
+      const eventVersion = await nextStreamVersion(db, 'cached_work_order', input.workOrderId);
+      const event = createWorkOrderCompletedEvent({
+        workOrderId: input.workOrderId,
+        assetId: workOrder.asset_id,
+        faultCode: input.faultCode,
+        causeCode: input.causeCode,
+        remedyCode: input.remedyCode,
+        eventVersion,
+        ...actor(),
+      });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [actor, refreshLocalState, requireReady, state.workOrders],
+  );
 
   const selectedWorkOrder =
     state.workOrders.find((row) => row.work_order_id === state.selectedWorkOrderId) ?? null;
@@ -863,6 +1267,39 @@ export function EdgeClient({
         onSubmit: submitDamage,
         settlementOf: damageSettlement,
         outboxVersion: `${state.pendingCount}:${state.failedCount}`,
+      }}
+      gateCapture={{
+        siteCodeExt: state.siteCodeExt,
+        gateId: state.gateId,
+        openTrucks: gateLookups.openTrucks,
+        stamp: gateLookups.stamp,
+        stampUnverified: gateLookups.stampUnverified,
+        onSubmitGate: submitGate,
+        onSubmitWeighment: submitWeighment,
+      }}
+      storesInbox={{
+        online: state.online,
+        siteCodeExt: state.siteCodeExt,
+        siteId: state.siteId,
+        navigation: state.navigation,
+        pendingReceipts: state.pendingReceipts,
+      }}
+      storesAccept={{
+        online: state.online,
+        siteCodeExt: state.siteCodeExt,
+        inspectionBayCode: state.inspectionBayCode,
+        onSubmitReceipt: submitReceipt,
+        storePhoto: storeReceiptPhoto,
+      }}
+      floorTasks={{
+        online: state.online,
+        ready: state.navigationConfirmed,
+        siteId: state.siteId,
+        userId: state.userId,
+        checkHeldLot,
+        onConfirmPickLine: confirmPickLine,
+        settlementOf: pickSettlement,
+        refusalCodeOf: pickRefusalCode,
       }}
       userId={state.userId}
       onRetry={() => {

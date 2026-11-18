@@ -116,6 +116,8 @@ const PERMANENT_ERROR_CODES = new Set([
   'WEIGHBRIDGE_SITE_MISMATCH',
   'WEIGHBRIDGE_NET_NEGATIVE',
   'WEIGHBRIDGE_PO_LINE_NOT_FOUND',
+  // Story 3.13 (AC 4): a weighbridge out of statutory stamp is a permanent refusal.
+  'WEIGHBRIDGE_OUT_OF_STAMP',
   // Story 3.6: pick-task permanent business rejections
   'PICK_TASK_NOT_FOUND',
   'PICK_LINE_NOT_FOUND',
@@ -201,6 +203,19 @@ const PERMANENT_ERROR_CODES = new Set([
   'INDENT_PENDING_CONFIRMATION',
   'INDENT_LINE_REQUIRED',
   'APPROVAL_UNRESOLVED',
+  // Story 4.10: per-line decisions and the no-band refusal at raise; structural, never retried.
+  'INDENT_APPROVAL_BAND_MISSING',
+  'INDENT_LINE_NOT_FOUND',
+  'INDENT_LINE_ALREADY_DECIDED',
+  // Story 4.11: stores counter issue refusals; structural, never retried.
+  'INDENT_LINE_NOT_APPROVED',
+  'INDENT_LINE_FULLY_ISSUED',
+  'INDENT_LINE_CLOSED',
+  'INDENT_ISSUE_EXCEEDS_APPROVED',
+  'INDENT_NOT_ISSUABLE',
+  'INDENT_ISSUE_BIN_OUTSIDE_SITE',
+  'INDENT_ISSUE_LINE_REQUIRED',
+  'INDENT_LINE_CLOSE_REASON_REQUIRED',
   // Story 7.8: maintenance technician-flow permanent business rejections (FR-M-17). Every code a
   // seam behind the five edge flows can raise settles the single event as needs_attention; the
   // twin set in src/sync/upload.ts carries the identical block (the Story 4.3 rule).

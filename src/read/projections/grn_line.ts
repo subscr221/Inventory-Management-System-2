@@ -46,6 +46,12 @@ export interface GrnLine {
   reason_detail: string | null;
   reason_note: string | null;
   reason_photo_ref: string | null;
+  /** Story 3.14: inspection-on-opening evidence (a note for QC, never a disposition). */
+  inspect_on_opening: 'suspected' | 'observed' | null;
+  inspect_note: string | null;
+  inspect_photo_ref: string | null;
+  /** Story 3.14: one material photo of what arrived. */
+  material_photo_ref: string | null;
   source_event_id: string;
   created_at: string;
   updated_at: string;
@@ -76,6 +82,10 @@ export interface InsertGrnLineInput {
   reason_detail?: string | null;
   reason_note?: string | null;
   reason_photo_ref?: string | null;
+  inspect_on_opening?: 'suspected' | 'observed' | null;
+  inspect_note?: string | null;
+  inspect_photo_ref?: string | null;
+  material_photo_ref?: string | null;
   source_event_id: string;
 }
 
@@ -103,6 +113,7 @@ function grnLineColumns(prefix = ''): string {
         ${p}rejection_reason, ${p}cross_dock, ${p}matched_dispatch_order_line_id,
         ${p}cross_dock_nonqualification_reason, ${p}line_condition, ${p}reason_code,
         ${p}reason_detail, ${p}reason_note, ${p}reason_photo_ref, ${p}source_event_id,
+        ${p}inspect_on_opening, ${p}inspect_note, ${p}inspect_photo_ref, ${p}material_photo_ref,
         ${p}created_at, ${p}updated_at`;
 }
 
@@ -137,6 +148,10 @@ function mapRow(row: Record<string, unknown>): GrnLine {
     reason_detail: (row['reason_detail'] as string | null) ?? null,
     reason_note: (row['reason_note'] as string | null) ?? null,
     reason_photo_ref: (row['reason_photo_ref'] as string | null) ?? null,
+    inspect_on_opening: (row['inspect_on_opening'] as GrnLine['inspect_on_opening'] | null) ?? null,
+    inspect_note: (row['inspect_note'] as string | null) ?? null,
+    inspect_photo_ref: (row['inspect_photo_ref'] as string | null) ?? null,
+    material_photo_ref: (row['material_photo_ref'] as string | null) ?? null,
     source_event_id: row['source_event_id'] as string,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
@@ -211,8 +226,9 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
         stock_class, weighbridge_correlation_id, qc_hold, shortage_variance_qty, target_location_id,
         status, rejection_reason, cross_dock, matched_dispatch_order_line_id,
         cross_dock_nonqualification_reason, source_event_id, line_condition, reason_code,
-        reason_detail, reason_note, reason_photo_ref)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10, $11, $12, $13::numeric, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+        reason_detail, reason_note, reason_photo_ref, inspect_on_opening, inspect_note,
+        inspect_photo_ref, material_photo_ref)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10, $11, $12, $13::numeric, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
       ON CONFLICT (grn_line_id) DO NOTHING`,
     [
       input.grn_line_id,
@@ -240,6 +256,10 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
       input.reason_detail ?? null,
       input.reason_note ?? null,
       input.reason_photo_ref ?? null,
+      input.inspect_on_opening ?? null,
+      input.inspect_note ?? null,
+      input.inspect_photo_ref ?? null,
+      input.material_photo_ref ?? null,
     ],
   );
   const existing = await client.query(
@@ -255,7 +275,9 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
         AND cross_dock_nonqualification_reason IS NOT DISTINCT FROM $19 AND source_event_id = $20
         AND line_condition = $21 AND reason_code IS NOT DISTINCT FROM $22
         AND reason_detail IS NOT DISTINCT FROM $23 AND reason_note IS NOT DISTINCT FROM $24
-        AND reason_photo_ref IS NOT DISTINCT FROM $25`,
+        AND reason_photo_ref IS NOT DISTINCT FROM $25
+        AND inspect_on_opening IS NOT DISTINCT FROM $26 AND inspect_note IS NOT DISTINCT FROM $27
+        AND inspect_photo_ref IS NOT DISTINCT FROM $28 AND material_photo_ref IS NOT DISTINCT FROM $29`,
     [
       input.grn_line_id,
       input.grn_id,
@@ -282,6 +304,10 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
       input.reason_detail ?? null,
       input.reason_note ?? null,
       input.reason_photo_ref ?? null,
+      input.inspect_on_opening ?? null,
+      input.inspect_note ?? null,
+      input.inspect_photo_ref ?? null,
+      input.material_photo_ref ?? null,
     ],
   );
   if (existing.rows.length === 0) {

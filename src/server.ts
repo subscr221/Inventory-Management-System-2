@@ -121,6 +121,7 @@ import {
 import {
   createWeighbridgeEventHandler,
   getWeighbridgeEventHandler,
+  getWeighbridgeStampStatusHandler,
   listWeighbridgeEventsHandler,
 } from './api/v1/weighbridge.js';
 import { createAsnHandler, getAsnHandler } from './api/v1/asn.js';
@@ -129,6 +130,7 @@ import {
   getGrnHandler,
   listGrnsHandler,
   listDiscrepanciesHandler,
+  listArrivalsHandler,
   releasePutawayTaskHandler,
 } from './api/v1/receiving.js';
 import {
@@ -180,6 +182,10 @@ import {
   approveIndentHandler,
   rejectIndentHandler,
   cancelIndentHandler,
+  issueIndentHandler,
+  closeIndentLineHandler,
+  listIndentIssuesHandler,
+  getIndentIssueHandler,
 } from './api/v1/indents.js';
 import {
   createDamageReportHandler,
@@ -552,7 +558,17 @@ import { runExpiryCycle } from './notify/expire.js';
 import { runRetentionExpiryCycle } from './notify/retention-expiry.js';
 import { runBisLicenceExpiryCycle } from './compliance/bis-licence-expiry.js';
 import { runJobworkClockSweepCycle } from './notify/jobwork-clock-sweep.js';
+import {
+  assignGrantHandler,
+  financeApproveGrantHandler,
+  financeRejectGrantHandler,
+  revokeGrantHandler,
+  listGrantsHandler,
+  getGrantHandler,
+  putPruneSettingHandler,
+} from './api/v1/standing-grants.js';
 import { runJobWorkBillingFeedSweepCycle } from './notify/jobwork-billing-sweep.js';
+import { runStandingGrantSweepCycle } from './notify/standing-grant-sweep.js';
 import {
   listRefusedCapturesHandler,
   getRefusedCaptureHandler,
@@ -587,6 +603,15 @@ export function createAppRouter(): Router {
   router.get('/api/v1/items/:sku', getItemHandler);
   // Story 2.10 Table 1, in order: literal paths before /:code (the router takes the first match).
   router.get('/api/v1/item-groups/ungrouped-items', listUngroupedItemsHandler);
+  // Story 4.8: standing approvals and self-approval limits (online only, D11). The static
+  // prune-setting path is registered before the :id routes.
+  router.put('/api/v1/standing-grants/prune-setting', putPruneSettingHandler);
+  router.post('/api/v1/standing-grants', assignGrantHandler);
+  router.get('/api/v1/standing-grants', listGrantsHandler);
+  router.get('/api/v1/standing-grants/:id', getGrantHandler);
+  router.post('/api/v1/standing-grants/:id/finance-approve', financeApproveGrantHandler);
+  router.post('/api/v1/standing-grants/:id/finance-reject', financeRejectGrantHandler);
+  router.post('/api/v1/standing-grants/:id/revoke', revokeGrantHandler);
   router.get('/api/v1/item-groups/rights', listItemGroupRightsHandler);
   router.put('/api/v1/item-groups/rights/:userId', putItemGroupRightsHandler);
   router.get('/api/v1/item-groups/recipients', listItemGroupRecipientsHandler);
@@ -766,6 +791,8 @@ export function createAppRouter(): Router {
 
   // Story 3.3: Weighbridge Event Capture and Tolerance Enforcement
   router.post('/api/v1/weighbridge-events', createWeighbridgeEventHandler);
+  // Story 3.13 (AC 4): must be registered before the :weighbridgeEventId route.
+  router.get('/api/v1/weighbridge-events/stamp-status', getWeighbridgeStampStatusHandler);
   router.get('/api/v1/weighbridge-events/:weighbridgeEventId', getWeighbridgeEventHandler);
   router.get('/api/v1/weighbridge-events', listWeighbridgeEventsHandler);
 
@@ -776,6 +803,8 @@ export function createAppRouter(): Router {
   router.get('/api/v1/grns/:grnId', getGrnHandler);
   router.get('/api/v1/grns', listGrnsHandler);
   router.get('/api/v1/receiving/discrepancies', listDiscrepanciesHandler);
+  // Story 3.14: the stores inbox arrivals read.
+  router.get('/api/v1/receiving/arrivals', listArrivalsHandler);
   router.post('/api/v1/putaway-tasks/:putawayTaskId/release', releasePutawayTaskHandler);
 
   // Story 3.5: Directed Putaway and Location Override
@@ -834,6 +863,12 @@ export function createAppRouter(): Router {
   router.post('/api/v1/indents/:indentId/approve', approveIndentHandler);
   router.post('/api/v1/indents/:indentId/reject', rejectIndentHandler);
   router.post('/api/v1/indents/:indentId/cancel', cancelIndentHandler);
+  // Story 4.11: stores counter issue against a requisition. `/indents/issues/:issueId` has a
+  // different segment count from the `/:indentId/...` routes, so the two cannot swallow each other.
+  router.get('/api/v1/indents/issues/:issueId', getIndentIssueHandler);
+  router.post('/api/v1/indents/:indentId/issue', issueIndentHandler);
+  router.post('/api/v1/indents/:indentId/lines/:lineId/close', closeIndentLineHandler);
+  router.get('/api/v1/indents/:indentId/issues', listIndentIssuesHandler);
 
   // Story 8.9: report damage - universal capture, QC task, two keys and the commercial outcome.
   router.post('/api/v1/damage-reports', createDamageReportHandler);
@@ -1549,6 +1584,13 @@ export function backgroundCycles(): BackgroundCycle[] {
       name: 'jobwork billing feed retry',
       intervalMs: config.jobwork.billingSweepIntervalMs,
       cycle: () => runJobWorkBillingFeedSweepCycle(),
+    },
+    // Story 4.8 (D13): expire grants past their end date and send each assigner the pruning list of
+    // their live grants (in_app and web_push), flagging any unused for 90 days.
+    {
+      name: 'standing grant pruning',
+      intervalMs: config.standingGrant.sweepIntervalMs,
+      cycle: () => runStandingGrantSweepCycle(),
     },
   ];
 }

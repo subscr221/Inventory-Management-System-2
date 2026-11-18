@@ -1,0 +1,28 @@
+# postgres:18.4 with pgBackRest installed.
+#
+# pgBackRest has to be in the image rather than apt-installed into a running container: the compose
+# postgres service is recreated by `docker compose up -d` on every deploy (deploy/pipeline/deploy.sh),
+# and anything installed interactively would vanish, taking the backup tooling with it.
+#
+# The base image is Debian trixie with the PGDG apt repository already configured, so pgbackrest
+# comes from the same package source as the server itself.
+FROM postgres:18.4
+
+# Installed at 2.59.x from PGDG. `apt-get install` without --no-install-recommends would drag in
+# recommended packages the image does not need.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pgbackrest \
+ && rm -rf /var/lib/apt/lists/*
+
+# The Debian package ships its own /etc/pgbackrest.conf; ours replaces it. Two details matter and
+# are load-bearing on this build:
+#   * the pg1-* options belong INSIDE [main], not in a [main:pg1] section, otherwise 2.59 resolves
+#     repo1-* but reports "requires option: pg1-path" and never binds the cluster
+#   * the file must be readable by the postgres user, which runs every backup command
+COPY pgbackrest.conf /etc/pgbackrest.conf
+RUN chown postgres:postgres /etc/pgbackrest.conf \
+ && chmod 0640 /etc/pgbackrest.conf
+
+# pgBackRest's own scratch/lock area. /var/lib/postgresql/pgbackrest (the repository) is created at
+# runtime inside the pg_data volume so backups survive a container rebuild.
+RUN mkdir -p /var/lib/pgbackrest && chown postgres:postgres /var/lib/pgbackrest

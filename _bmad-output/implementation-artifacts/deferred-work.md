@@ -939,7 +939,7 @@ Suite after the sweep and its follow-up: 2111/2111, 0 failures.
 - `getExcludedPlatformRefs` loads the entire `migration_domain_platform_exclusion` table for a site+domain on every verification run with no cap comparable to `MAX_EVENT_ARRAY_ENTRIES` [src/read/projections/migration_domain_verification.ts:712-720]. Same class as the already-deferred 10,000-finding cap; pilot volumes are far below any real bound.
 - `POST /api/v1/migration/domains/:domain/platform-exclusions` accepts `platform_ref` with no existence check against the domain's real platform table - a typo'd or wrong-domain reference is silently accepted and downgrades nothing. Consistent with the route's existing trust-the-authenticated-actor design elsewhere in this story, not a regression; would need a per-domain platform-ref lookup to fix.
 - `document_ref_prefix` has no upper-bound length check, unlike waiver narratives (`MAX_WAIVER_NARRATIVE_CHARS`) [src/api/v1/migration.ts:1506-1513]. Low risk: role-gated internal route.
-- The platform-exclusion feature (register → downgrade → sign-off) has only one happy-path integration test - no coverage for registering an exclusion with no matching finding, the duplicate-registration-via-different-idempotency-key no-op, or registering under the wrong domain [test/integration/story-13-2.test.ts]. Same class as the already-deferred lot/GRN coverage gap.
+- The platform-exclusion feature (register â†’ downgrade â†’ sign-off) has only one happy-path integration test - no coverage for registering an exclusion with no matching finding, the duplicate-registration-via-different-idempotency-key no-op, or registering under the wrong domain [test/integration/story-13-2.test.ts]. Same class as the already-deferred lot/GRN coverage gap.
 - A header-only CSV import (0 data rows, 0 rejections) returns 201 with `manifest_loaded: false` and no field explaining why nothing loaded [src/api/v1/migration.ts:1418-1429]. Cosmetic; the caller can infer the cause from `rows.length`/`rejections.length` being both zero.
 
 ## Deferred from: code review of story-13-3 (2026-09-12)
@@ -1166,7 +1166,7 @@ No earlier row is closed by this batch. Row 192 (no lock on reserve source-bin s
 
 ## Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)
 
-- Escalation to `warehouse_manager` per the DOA "Tolerance-breach acceptance band" (primary `unloading_supervisor`, escalation `warehouse_manager`) is not built. Corrected 2026-09-27 code review: the band is not timeout-based — it conditions the *initial* routing itself on breach magnitude (`unloading_supervisor` accepts up to 5 percent over tolerance; above 5 percent, or if unavailable, `warehouse_manager` is the approver). `applyWeighbridgeProjection` routes every `tolerance_breach` unconditionally to `unloading_supervisor` regardless of size or availability, and the `notification.created` payload carries no `escalation` field, so no escalation path exists for either condition. Deferred: pilot is single-site/single-holder with no greater-than-5-percent breach traffic yet; implementing the magnitude/availability check (DOA delegation lookup, payload shape, dispatch routing) is scoped to a follow-up story before scaling past pilot.
+- Escalation to `warehouse_manager` per the DOA "Tolerance-breach acceptance band" (primary `unloading_supervisor`, escalation `warehouse_manager`) is not built. Corrected 2026-09-27 code review: the band is not timeout-based â€” it conditions the *initial* routing itself on breach magnitude (`unloading_supervisor` accepts up to 5 percent over tolerance; above 5 percent, or if unavailable, `warehouse_manager` is the approver). `applyWeighbridgeProjection` routes every `tolerance_breach` unconditionally to `unloading_supervisor` regardless of size or availability, and the `notification.created` payload carries no `escalation` field, so no escalation path exists for either condition. Deferred: pilot is single-site/single-holder with no greater-than-5-percent breach traffic yet; implementing the magnitude/availability check (DOA delegation lookup, payload shape, dispatch routing) is scoped to a follow-up story before scaling past pilot.
 - No breach acceptance or disposition action exists after Story 3.3: the breach is a notification, not a durable task row, so nothing records that the unloading supervisor accepted, rejected or re-weighed the load.
 - Breach notifications emitted before this fix on staging targeted `receiving_supervisor`, a role with no holder; the dispatcher claimed them with zero recipients, and they are not re-emitted. They are rehearsal data only; production starts clean.
 - The edge app has no notification inbox screen (`git grep api/v1/notifications -- edge/src` is empty), so a supervisor sees a breach only through `GET /api/v1/notifications` or web push until one is built.
@@ -1281,7 +1281,82 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 
 - `store_controller` (owner ruling 2026-10-02, round 2) was added by Story 2.10 only as a provisioned, notified role. Its duties (physical tracking of inventory, responsibility for stores and warehouses), its capability rows in access matrix section 3.3, its place in `REQUIRED_SITE_ROLES`, any forbidden pairs, and how it divides work with `warehouse_manager` and `store_assistant` need a correct-course and a new story.
 
-
 - Found during Story 2.10 dev (2026-10-02): item group notifications are delivered as in-app rows to every Table 2 holder, but in the pilot roles pack only `cmf_supervisor@ancorlabs.org` holds `notification` read, so `ceo1@`, `accounts@`, `anupam@` and `invctl1@` cannot open the inbox (`GET /api/v1/notifications` answers 403 `MODULE_ACCESS_DENIED`). Runbook row 2.10i checks their rows by SQL. Follow-up: an owner ruling on whether those hats (or the `employee` base hat) gain `notification` read, then a roles-pack change.
 
-- Found during Story 2.10 dev (2026-10-02): `test/integration/story-2-3.test.ts` AC1 (FEFO) and AC4 (lot trace) fail on the baseline `fd6c5c8` as well. AC1 hardcodes lot expiry `2026-09-30`, so from 2026-10-01 `LOT-2026-001` is expired and FEFO picks `LOT-2026-002`; AC4 depends on the same lots. Follow-up: derive the expiry dates from today (for example today plus 30 and plus 90 days) instead of fixed dates.
+- Found during Story 2.10 dev (2026-10-02): `test/integration/story-2-3.test.ts` AC1 (FEFO) and AC4 (lot trace) fail on the baseline `fd6c5c8` as well. AC1 hardcodes lot expiry `2026-09-30`, so from 2026-10-01 `LOT-2026-001` is expired and FEFO picks `LOT-2026-002`; AC4 depends on the same lots. Follow-up: derive the expiry dates from today (for example today plus 30 and plus 90 days) instead of fixed dates.`n`n## Deferred from: code review of story-2-10 (2026-10-05)
+
+- Undeclared verbs on the literal item group sub-paths (`DELETE /api/v1/item-groups/rights`, `PATCH /api/v1/item-groups/recipients`) fall through to the `/:code` handlers and answer 403 or 404 instead of 405. Pre-existing first-match router behaviour in `src/api/router.ts`, not introduced by Story 2.10. The collision stays latent only because `ITEM_GROUP_CODE_REGEX` is uppercase-only; relaxing that regex would make a group coded `RIGHTS` unreachable.
+- No pagination, `LIMIT` or offset on any item group list route (`listItemGroups`, `listActiveItemsByGroup`, `listUngroupedActiveItems`, `listItemGroupRights`, `listItemGroupRecipients`). D10 explicitly placed pagination out of scope for Story 2.10; revisit when the item master grows past a few thousand active SKUs.
+- The access matrix carries 38 pre-existing permission rows that use em dashes for "not permitted", against the `NO-EMDASH` rule in `FORMATTING_RULES.md`. The six rows Story 2.10 adds correctly use hyphens, which makes the table internally inconsistent until the older rows are converted in a formatting pass.
+- Items assigned to a deactivated item group are invisible in every working report: `listUngroupedActiveItems` filters `item_group_id IS NULL` so they are not ungrouped, and re-sending their existing group on a PATCH is refused 400 `ITEM_GROUP_INACTIVE`. Owner ruling 2026-10-06: deferred, because the pilot holds no item groups yet so no item is stranded today. The follow-up story that defines the store controller's duties should add an items-in-inactive-groups report or force reassignment before deactivation.
+
+## Deferred from: code review of story-2-10, pass 2 (2026-10-06)
+
+- `src/api/v1/items.ts` attributes `item.updated` and the item group notification to the gate-authorized assignment, so a caller holding both `warehouse_manager` and `inventory_controller` is recorded as `warehouse_manager` when assigning an item group. Deferred because the item event is an inventory write and the attribution is defensible; the item actor handling is pre-existing. Revisit if audit review wants the group change attributed to `inventory_controller`.
+- `putRightsBase` reads the existing rights without a row lock before its no-op comparison. Two CEO or Finance Head users changing rights for the same grantee at the same instant can let a real revoke be treated as a no-op and skip its event and notification. Deferred because it needs two grantors racing on one grantee.
+- `PATCH /api/v1/items/:sku` reads the item with no lock, so two concurrent PATCHes of one SKU can both see the same current group and one can skip `markEverAssigned`. Deferred because `fk_item_master_item_group ON DELETE RESTRICT` is the backstop and `deleteGroupBase` maps its 23503 to 409 `ITEM_GROUP_IN_USE`.
+
+## Deferred from: code review of story-4-10 (2026-10-21)
+
+- Pre-approved (non-doa) lines write no audit entry and no notification at raise. Story 4.8 owns the grant path. RESOLVED in Story 4.8 (2026-10-21): a grant-approved line writes an `indent.line_standing_approved` audit entry and tells the stores role once.
+- A line whose band role is held by the requester is frozen with the requester as approver and SOD-01 blocks it permanently. Pre-existing; Story 4.9.
+- The role-holder fallback ignores value bands, so a large line can reach a smaller band's holder. Moved verbatim from `resolveApprover`; Story 4.9.
+- My Requests list rows get no `lines[]`, so the per-line chips need a detail screen to appear.
+
+## Deferred from: dev of story-4-11 (2026-10-21)
+
+- Offline-first counter issue (UX mock `key-stores.html` line 452 "Issued - Captured - pending sync"), scanner wiring and the "Scan anything" bar on the stores issue page. Story 4.11 D11 ships the page online only; `indent.issued` is refused at the events door and at edge sync. Needs a story of its own once the pilot confirms the counter flow.
+- The stores issue page is reached by URL (`/stores/issue`) and by the `Stores issue` nav entry only when the server bootstrap advertises that name; the bootstrap navigation list is not extended here.
+- Slip quantities print as the NUMERIC text the storekeeper typed (`2` or `2.500`); no unit-aware formatting.
+
+## Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)
+
+- Slip number sequence never resets per year and a rolled-back issue burns a number; document gaps as expected or use a per-year counter.
+- Per-line `getLocationByCode` lookups in the issue route loop (N+1); bounded once the lines[] cap lands.
+- Issue audit entry hard-codes `http_status` and logs `indent.line_issued` in `error_code`; matches the existing audit precedent.
+- Stores issuable list is capped at 100 with no pagination.
+- Story 4-11 integration tests TRUNCATE shared tables CASCADE; repo-wide test pattern.
+- `correlation_id ?? randomUUID()` in the issue and close routes breaks trace continuity for untagged indents.
+- Header of a requisition with a pending or rejected line stays `raised`/`approved` after every approved line is issued or closed; define terminal header handling in Story 4.8.
+- Smoke step issues 2 of 100 then closes the remainder; INDENT_LINE_FULLY_ISSUED is covered by test/integration/story-4-11.test.ts and runbook 2.10k only.
+
+## Deferred from: dev of story-4-8 (2026-10-21)
+
+- Screens for the grant lifecycle (assign, the finance approver's inbox entry, revoke, my grants, the pruning list) are not built; Story 4.8 D14 puts edge UI out of scope. The API and the notifications carry everything a screen needs. The stores issue page shows the grant sentence under a covered line; nothing else changed in the edge app.
+- Web push of the pruning list follows the platform rule that push is opt-in per event type (`standing_grant_review`, default off) and needs a push subscription; in-app delivery is unconditional. If the pilot wants push by default, seed the preference at provisioning.
+- Cap is counted on quantity ISSUED (D7). A requisition raised under a grant does not reserve any cap, so two requisitions can both ride a grant and the later issue lapses and re-routes to normal approval (D8). This is the ruled behaviour, not a defect, but it surprises a storekeeper who sees a line approved at raise and refused at the counter; the refusal names the lapsed line and the line is re-routed in the same call.
+- A line part-issued under a grant and then re-routed resolves its DOA band on the whole line value, not on the remaining open quantity.
+- Re-routing a lapsed line needs a resolvable DOA approver for the line value. With none (Story 4.9 owns the no-band and no-holder fallback) the issue stays refused 409 `STANDING_APPROVAL_LAPSED`, the line stays `standing_approval`, and the response lists it under `reroute_failed` with the resolver's error code.
+- Item group membership is read when the requisition is raised (D5); moving an item to another group afterwards does not change a line already routed.
+- The expiry and pruning sweep runs as one transaction per tick and expires at most `STANDING_GRANT_SWEEP_BATCH_SIZE` (500) grants per tick; a larger backlog drains over successive daily ticks.
+- Terminal header handling for a requisition whose approved lines are all issued or closed while another line is pending or rejected (deferred from Story 4.11 review) is still undefined; Story 4.8 does not change header derivation.
+- `findRoleHolder` with a location still returns the oldest of the site's own and every-location holders. Story 4.8 does not depend on it for authority (assign and finance approval are membership tests on the DOA role at the site, so a newer site holder is never locked out; covered by test); it uses it only to pick the active delegate and the finance approver whose list receives a disabled assigner's grants.
+
+## Deferred from: dev of story-3-13 (2026-10-21)
+
+- OCR number-plate pre-fill on the Vehicle step is not built (EXPERIENCE.md:122); the officer types the registration.
+- Webcam capture on desktop is not built; the desktop pupil uploads a challan photo file (Q3).
+- The weighbridge indicator AUTO link protocol is post-pilot (Q5). Every pilot reading is MANUAL and the `Read from weighbridge indicator` button renders disabled with its reason.
+- The offline PO and ASN PowerSync bucket (`erp_open_purchase_orders`) is a follow-up. At pilot the challan resolves ASN then PO online with a typed fallback; a typed challan records `po_ref_ext` `UNKNOWN` (Q1, Q2).
+- The Trucks on site list is fed by the `openTrucks` prop; deriving it on-device from the synced `edge_site_events` bucket joined to unsynced outbox rows is a follow-up once the gate bucket is replicated.
+- Gate challan photos are stored in `pendingPhotoStore` and ride the existing attachment PUT path; there is no dedicated gate-photo document route, so the gate event's `challan_photo_ref` is the attachment id.
+- The gate e2e and axe specs (`edge/test/e2e/gate-entry.spec.ts`, `edge/test/accessibility/gate-accessibility.spec.ts`) are authored but could not be executed in this environment: the existing e2e suite fails identically at bootstrap/session setup (all 5 report-damage specs fail the same way), so the Playwright/axe environment is pre-existing broken here. They must be run in CI or a configured device browser.
+
+
+## Deferred from: code review of story-3.13 (2026-10-22)
+
+- Typed or rejected challans bind `po_ref_ext` `UNKNOWN` and the weigh tab cannot rebind them later. Resolves with the offline PO and ASN bucket (Q1, Q2).
+- `test/integration/story-3-13.test.ts` teardown truncates a long table list with CASCADE on shared state. Matches the existing integration convention; revisit if suites move to parallel databases.
+
+## Deferred from: create-story of 3-15 (2026-10-22)
+
+- Offline putaway.completed: the edge door accepted the event with completed_by unstamped from the device payload and no execute-role gate. Story 3.15 refuses putaway.completed and location.override at the edge door with 403 CENTRAL_ONLY_OPERATION; an offline putaway path needs actor stamping and an execute-role gate before it can ship.
+- Alternative-rack list on the putaway detail: the screen offers the suggested bin and scan-or-type; ranked alternatives are deferred.
+- Stock-by-location read for the putaway card: the card shows the task quantity and source bay, not live bin occupancy.
+- Server-side label print queue: labels are device-local IndexedDB only; there is no cross-device restore or print server.
+
+## Deferred from: code review of story-3.16 (2026-10-23)
+
+- Integration coverage for AC 6 exercises the direct confirm route (POST /api/v1/pick-tasks/:id/lines/:lineId/confirm) rather than the edge outbox replay path the PWA actually uses (pick_line.confirmed through src/api/v1/edge.ts ingest and inline finalize). The outbox ingest plus finalize-after-last-line path is unit-tested for payload shape only; an end-to-end outbox replay test would close the gap.
+- Offline inbox refresh after completion relies on the next sync pass: eload() cannot fetch while offline, so the two-pane list reconciles only after connectivity returns.
+

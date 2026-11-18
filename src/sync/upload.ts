@@ -106,6 +106,8 @@ const PERMANENT_ERROR_CODES = new Set([
   'WEIGHBRIDGE_SITE_MISMATCH',
   'WEIGHBRIDGE_NET_NEGATIVE',
   'WEIGHBRIDGE_PO_LINE_NOT_FOUND',
+  // Story 3.13 (AC 4): a weighbridge out of statutory stamp is a permanent refusal.
+  'WEIGHBRIDGE_OUT_OF_STAMP',
   // Story 3.6: pick-task permanent business rejections (INSUFFICIENT_STOCK is already present
   // above; INSUFFICIENT_STOCK_FOR_PICK is the pick-specific variant)
   'PICK_TASK_NOT_FOUND',
@@ -198,6 +200,19 @@ const PERMANENT_ERROR_CODES = new Set([
   'INDENT_PENDING_CONFIRMATION',
   'INDENT_LINE_REQUIRED',
   'APPROVAL_UNRESOLVED',
+  // Story 4.10: per-line decisions and the no-band refusal at raise; structural, never retried.
+  'INDENT_APPROVAL_BAND_MISSING',
+  'INDENT_LINE_NOT_FOUND',
+  'INDENT_LINE_ALREADY_DECIDED',
+  // Story 4.11: stores counter issue refusals; structural, never retried.
+  'INDENT_LINE_NOT_APPROVED',
+  'INDENT_LINE_FULLY_ISSUED',
+  'INDENT_LINE_CLOSED',
+  'INDENT_ISSUE_EXCEEDS_APPROVED',
+  'INDENT_NOT_ISSUABLE',
+  'INDENT_ISSUE_BIN_OUTSIDE_SITE',
+  'INDENT_ISSUE_LINE_REQUIRED',
+  'INDENT_LINE_CLOSE_REASON_REQUIRED',
   // Story 7.8: maintenance technician-flow permanent business rejections (FR-M-17). Every code a
   // seam behind the five edge flows can raise settles the single event as needs_attention; the
   // twin set in edge/src/sync/connector.ts carries the identical block (the Story 4.3 rule).
@@ -360,6 +375,60 @@ export function assertEdgeDamageEventAllowed(envelope: EventEnvelope): void {
     403,
     'CENTRAL_ONLY_OPERATION',
     'This damage-case decision must be recorded online, not from an edge device',
+    { stream_type: envelope.stream_type, event_type: envelope.event_type },
+  );
+}
+
+/**
+ * Story 4.11 (D8; review): counter issue and remainder closure are online-only. The events door
+ * refuses them and so must the edge door, otherwise an offline upload would reach the appliers,
+ * which trust the envelope, and move stock with no stores-role or site check.
+ */
+const EDGE_REFUSED_INDENT_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'indent.issued',
+  'indent.line_closed',
+]);
+
+export function assertEdgeIndentIssueEventRefused(envelope: EventEnvelope): void {
+  if (!EDGE_REFUSED_INDENT_EVENT_TYPES.has(envelope.event_type)) return;
+  throw new AppError(
+    403,
+    'CENTRAL_ONLY_OPERATION',
+    'Counter issue and line closure must be recorded online at the stores desk, not from an edge device',
+    { event_type: envelope.event_type },
+  );
+}
+
+/**
+ * Story 3.15 (AC 6): putaway completion and location override are online-only. Both events live on
+ * the 'putaway' stream (`src/events/schema.ts`), and the edge door previously accepted them with
+ * `completed_by` taken unstamped from the device payload and no execute-role gate.
+ */
+const EDGE_REFUSED_PUTAWAY_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'putaway.completed',
+  'location.override',
+]);
+
+/**
+ * Story 3.15 (AC 6): putaway completion and location override are online-only. Both events live on
+ * the 'putaway' stream (`src/events/schema.ts`), and the edge door previously accepted them with
+ * `completed_by` taken unstamped from the device payload and no execute-role gate.
+ *
+ * Only the two named event types are refused. Other putaway-stream events (e.g. putaway.started) are
+ * not central-only and must still pass through the door. event_type is normalized before comparison
+ * so casing/whitespace variants cannot bypass the gate; the refusal keys on the event type, so
+ * location.override is refused on any stream, not only the putaway stream.
+ */
+export function assertEdgePutawayEventRefused(envelope: EventEnvelope): void {
+  if (!envelope) return;
+  const eventType = typeof envelope.event_type === 'string'
+    ? envelope.event_type.trim().toLowerCase()
+    : '';
+  if (!EDGE_REFUSED_PUTAWAY_EVENT_TYPES.has(eventType)) return;
+  throw new AppError(
+    403,
+    'CENTRAL_ONLY_OPERATION',
+    'Putaway completion and location override must be recorded online through the putaway route, not from an edge device',
     { stream_type: envelope.stream_type, event_type: envelope.event_type },
   );
 }

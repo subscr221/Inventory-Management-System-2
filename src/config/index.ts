@@ -314,6 +314,12 @@ export const config = {
   port: Number.isNaN(parsedPort) ? 3000 : parsedPort,
   hostname: process.env['HOSTNAME'] ?? '0.0.0.0',
   nodeEnv,
+  /**
+   * Story 4.11 (AC 7): the role notified at a requisition's site when a further line is approved
+   * after the requisition was already partly issued. Configuration, never a literal in workflow
+   * code (AD-3); the pilot storekeeper holds the default.
+   */
+  storesIssueRole: process.env['IMS_STORES_ISSUE_ROLE']?.trim() || 'store_assistant',
   db: {
     host: process.env['DB_HOST'] ?? 'localhost',
     port: Number.isNaN(parsedDbPort) ? 5432 : parsedDbPort,
@@ -343,6 +349,11 @@ export const config = {
   },
   edge: {
     siteName: process.env['EDGE_SITE_NAME'] ?? 'Pilot Gate Site',
+  },
+  // Story 3.13 (AC 3, Q4): the single gate identifier at the pilot site. One gate per site, so a
+  // static config value with a default; the edge bootstrap returns it and gate.entered requires it.
+  gate: {
+    id: process.env['GATE_ID'] ?? 'GATE-01',
   },
   powerSync: {
     url: process.env['POWERSYNC_URL'] ?? '/powersync',
@@ -387,6 +398,20 @@ export const config = {
     // Story 4.3 (AC 2 / AC 3): the trailing open window, in days, within which a second
     // requisition for the same SKU by the same requester counts as a potential duplicate.
     duplicateWindowDays: parsePositiveIntEnv('INDENT_DUPLICATE_WINDOW_DAYS', 7),
+  },
+  standingGrant: {
+    // Story 4.8 (D13): the daily standing-grant sweep that expires grants past their end date and
+    // sends each assigner their pruning list when it falls due (cadence is per assigner, default
+    // 30 days, in standing_grant_prune_setting). Same interval-knob shape as the job-work sweeps.
+    sweepIntervalMs: parsePositiveIntEnv(
+      'STANDING_GRANT_SWEEP_INTERVAL_MS',
+      86_400_000,
+      MAX_INTERVAL_MS,
+      true,
+    ),
+    sweepBatchSize: parsePositiveIntEnv('STANDING_GRANT_SWEEP_BATCH_SIZE', 500, 10_000, true),
+    // A live grant not used for this many days is flagged "consider revoking" on the pruning list.
+    unusedFlagDays: parsePositiveIntEnv('STANDING_GRANT_UNUSED_FLAG_DAYS', 90, 3_650, true),
   },
   erp: {
     // Story 2.9 (INT-ERP-01): an ERP inbound reference projection is stale when its heartbeat's

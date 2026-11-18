@@ -1023,6 +1023,38 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 2.10: an item carries at most one group; existing items stay NULL (ungrouped).
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS item_group_id UUID;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_item_master_item_group'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT fk_item_master_item_group FOREIGN KEY (item_group_id)
+        REFERENCES item_group (item_group_id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_item_master_item_group ON item_master (item_group_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE, DELETE ON item_group TO app_user;
+    GRANT INSERT, SELECT, UPDATE, DELETE ON item_group_right TO app_user;
+    GRANT INSERT, SELECT, UPDATE, DELETE ON item_group_recipient TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON item_group TO readonly_user;
+    GRANT SELECT ON item_group_right TO readonly_user;
+    GRANT SELECT ON item_group_recipient TO readonly_user;
+  END IF;
+END $$;
+
 -- -------------------------------------------------------------------------------------------
 -- Location register (Story 2.1). The section below MUST stay identical to the canonical
 -- read/projections/location_register.sql (applied by src/events/migrate.ts and the
@@ -2288,10 +2320,13 @@ CREATE TABLE IF NOT EXISTS gate_event (
   driver_name       TEXT,
   challan_number_ext TEXT,
   challan_photo_ref TEXT NOT NULL,
-  gate_id           TEXT NOT NULL,
-  gate_officer_id   UUID NOT NULL,
-  correlation_id    UUID NOT NULL,
-  entered_at        TIMESTAMPTZ NOT NULL,
+gate_id TEXT NOT NULL,
+gate_officer_id UUID NOT NULL,
+correlation_id UUID NOT NULL,
+supplier_ref_ext TEXT,
+supplier_name_unlisted TEXT,
+supplier_unlisted BOOLEAN NOT NULL DEFAULT false,
+entered_at TIMESTAMPTZ NOT NULL,
   business_date     DATE NOT NULL,
   status            TEXT NOT NULL DEFAULT 'open',
   reversal_reason   TEXT,
@@ -2300,9 +2335,12 @@ CREATE TABLE IF NOT EXISTS gate_event (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_gate_event_binding_status CHECK (binding_status IN ('matched', 'unmatched')),
   CONSTRAINT chk_gate_event_status CHECK (status IN ('open', 'reversed')),
-  CONSTRAINT chk_gate_event_vehicle_reg_nonempty CHECK (length(trim(vehicle_reg_ext)) > 0),
-  CONSTRAINT chk_gate_event_challan_photo_nonempty CHECK (length(trim(challan_photo_ref)) > 0)
+CONSTRAINT chk_gate_event_vehicle_reg_nonempty CHECK (length(trim(vehicle_reg_ext)) > 0),
+CONSTRAINT chk_gate_event_challan_photo_nonempty CHECK (length(trim(challan_photo_ref)) > 0)
 );
+
+-- Story 3.13 (D3): explicit unlisted-supplier flag; supplier_ref_ext stays null when set.
+ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_unlisted BOOLEAN NOT NULL DEFAULT false;
 
 DO $$
 BEGIN
@@ -3886,6 +3924,108 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 4.10: per-line approval route and decision state. Header status derives from these.
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS approval_route TEXT NOT NULL DEFAULT 'doa';
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS line_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS approver_actor_id TEXT;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS doa_entry_id UUID;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS decided_by TEXT;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_route' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_route
+      CHECK (approval_route IN ('doa', 'standing_approval', 'self_approval'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_status' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_status
+      CHECK (line_status IN ('pending', 'approved', 'rejected'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_rejection_reason' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_rejection_reason
+      CHECK (line_status <> 'rejected' OR (rejection_reason IS NOT NULL AND length(trim(rejection_reason)) > 0));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_indent_line_status ON indent_line (indent_id, line_status);
+
+-- Story 4.10 backfill (idempotent): lines of indents decided before per-line state existed
+-- inherit the header decision; undecided headers copy the routing only.
+UPDATE indent_line l
+SET line_status = CASE WHEN i.status = 'rejected' THEN 'rejected' ELSE 'approved' END,
+    approver_actor_id = i.approver_actor_id::text,
+    doa_entry_id = i.doa_entry_id,
+    decided_at = i.decided_at,
+    decided_by = i.decided_by::text,
+    rejection_reason = i.rejection_reason
+FROM indent i
+WHERE l.indent_id = i.indent_id
+  AND l.decided_at IS NULL
+  AND i.decided_at IS NOT NULL
+  AND i.status IN ('approved', 'ordered', 'closed', 'rejected');
+
+UPDATE indent_line l
+SET approver_actor_id = i.approver_actor_id::text,
+    doa_entry_id = i.doa_entry_id
+FROM indent i
+WHERE l.indent_id = i.indent_id
+  AND l.decided_at IS NULL
+  AND l.approver_actor_id IS NULL
+  AND i.approver_actor_id IS NOT NULL;
+
+-- Story 4.11: per-line fulfilment state for stores counter issue. Separate from the approval
+-- fact (line_status): a rejected line stays 'open' and is never issuable. issued never exceeds
+-- requested (Story 4.10 approves whole lines, so requested_qty is the approved quantity).
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS issued_qty NUMERIC(18,3) NOT NULL DEFAULT 0;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS issue_state TEXT NOT NULL DEFAULT 'open';
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS closed_reason TEXT;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS closed_by TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_issue_state' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_issue_state
+      CHECK (issue_state IN ('open', 'issued', 'closed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_issued_qty' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_issued_qty
+      CHECK (issued_qty >= 0 AND issued_qty <= requested_qty);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_line_closed_reason' AND conrelid = 'indent_line'::regclass
+  ) THEN
+    ALTER TABLE indent_line ADD CONSTRAINT chk_indent_line_closed_reason
+      CHECK (issue_state <> 'closed' OR (closed_reason IS NOT NULL AND length(btrim(closed_reason)) > 0));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_indent_line_issue_state ON indent_line (indent_id, issue_state);
+
+-- Story 4.8: the grant a line rode on at raise (standing_approval) and the limit a requester used to
+-- approve their own line (self_approval). Both nullable; no FK (projection convention).
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS standing_grant_id UUID;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS self_approved BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS self_approval_grant_id UUID;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
@@ -3895,6 +4035,197 @@ BEGIN
     GRANT SELECT ON indent_line TO readonly_user;
   END IF;
 END $$;
+
+-- Stores counter issue slip read model (Story 4.11). CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent.
+--
+-- Derived state ONLY: rows are rebuildable by replaying indent.issued domain events; mutation
+-- happens exclusively through persistEvent inside the same transaction as the domain_events
+-- insert. One slip per indent.issued event; the slip text is immutable once written. Follows the
+-- indent.sql / indent_line.sql header-plus-line precedent (no FK to indent, same-transaction
+-- inserts).
+
+CREATE TABLE IF NOT EXISTS indent_issue (
+  issue_id          UUID PRIMARY KEY,
+  issue_number_ext  TEXT NOT NULL,
+  indent_id         UUID NOT NULL,
+  site_id           UUID NOT NULL,
+  issued_by         TEXT NOT NULL,
+  issued_at         TIMESTAMPTZ NOT NULL,
+  slip_content      TEXT NOT NULL DEFAULT '',
+  source_event_id   UUID NOT NULL,
+  correlation_id    UUID,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_indent_issue_number_ext UNIQUE (issue_number_ext),
+  CONSTRAINT uq_indent_issue_source_event UNIQUE (source_event_id)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_indent_issue_number_ext' AND conrelid = 'indent_issue'::regclass
+  ) THEN
+    ALTER TABLE indent_issue ADD CONSTRAINT uq_indent_issue_number_ext UNIQUE (issue_number_ext);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_indent_issue_source_event' AND conrelid = 'indent_issue'::regclass
+  ) THEN
+    ALTER TABLE indent_issue ADD CONSTRAINT uq_indent_issue_source_event UNIQUE (source_event_id);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_indent_issue_indent ON indent_issue (indent_id, issued_at);
+
+CREATE TABLE IF NOT EXISTS indent_issue_line (
+  issue_line_id          UUID PRIMARY KEY,
+  issue_id               UUID NOT NULL,
+  indent_id              UUID NOT NULL,
+  indent_line_id         UUID NOT NULL,
+  line_no                INTEGER NOT NULL,
+  sku                    TEXT NOT NULL,
+  quantity               NUMERIC(18,3) NOT NULL,
+  uom                    TEXT NOT NULL,
+  location_id            UUID NOT NULL,
+  location_code          TEXT NOT NULL,
+  lot_id                 TEXT,
+  serials                JSONB,
+  stock_issued_event_id  UUID NOT NULL,
+  approval_basis         TEXT NOT NULL,
+  -- Story 4.8: the standing approval a line rode on; null for a line that did not ride a grant.
+  standing_grant_id      UUID,
+  CONSTRAINT chk_indent_issue_line_qty_positive CHECK (quantity > 0)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_indent_issue_line_qty_positive' AND conrelid = 'indent_issue_line'::regclass
+  ) THEN
+    ALTER TABLE indent_issue_line ADD CONSTRAINT chk_indent_issue_line_qty_positive CHECK (quantity > 0);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_indent_issue_line_issue ON indent_issue_line (issue_id);
+CREATE INDEX IF NOT EXISTS idx_indent_issue_line_indent_line ON indent_issue_line (indent_line_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_indent_issue_line_issue_line ON indent_issue_line (issue_id, indent_line_id);
+
+-- Story 4.8 (D7): month-to-date issued quantity per grant is summed from here.
+CREATE INDEX IF NOT EXISTS idx_indent_issue_line_grant ON indent_issue_line (standing_grant_id) WHERE standing_grant_id IS NOT NULL;
+
+-- Server-side human-ID allocation for the ISS-YYYY-NNNN format (the indent_number_seq idiom).
+CREATE SEQUENCE IF NOT EXISTS indent_issue_number_seq;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON indent_issue TO app_user;
+    GRANT INSERT, SELECT ON indent_issue_line TO app_user;
+    GRANT USAGE ON SEQUENCE indent_issue_number_seq TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON indent_issue TO readonly_user;
+    GRANT SELECT ON indent_issue_line TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/standing_grant.sql (canonical source).
+-- Standing approval and self-approval limit read model (Story 4.8). CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent.
+--
+-- Derived state ONLY: rows are rebuildable by replaying standing_grant.* domain events; mutation
+-- happens exclusively through persistEvent inside the same transaction as the domain_events
+-- insert (the one exception is standing_grant_prune_setting, a per-assigner preference).
+-- item_master.sql runs before this file (the scope FK targets item_group).
+--
+-- One table, two kinds (D1): a standing approval links one person to one SKU or one item group with
+-- an optional monthly quantity cap and end date; a self-approval limit gives one person a rupee
+-- ceiling on approving their own requisition lines. Both follow assign, finance-approve, revoke.
+
+CREATE SEQUENCE IF NOT EXISTS standing_grant_ref_seq;
+
+CREATE TABLE IF NOT EXISTS standing_grant (
+  grant_id                  UUID PRIMARY KEY,
+  grant_ref                 TEXT NOT NULL,
+  grant_kind                TEXT NOT NULL,
+  grantee_user_id           UUID NOT NULL,
+  assigner_user_id          UUID NOT NULL,
+  site_id                   UUID NOT NULL,
+  scope_sku                 TEXT,
+  scope_item_group_id       UUID,
+  monthly_qty_cap           NUMERIC(18,3),
+  limit_amount              NUMERIC(18,4),
+  end_date                  DATE,
+  status                    TEXT NOT NULL DEFAULT 'pending-finance',
+  finance_approver_user_id  UUID,
+  finance_decided_at        TIMESTAMPTZ,
+  finance_rejection_reason  TEXT,
+  revoked_at                TIMESTAMPTZ,
+  revoked_by                TEXT,
+  revoke_reason             TEXT,
+  expired_at                TIMESTAMPTZ,
+  correlation_id            UUID,
+  source_event_id           UUID NOT NULL,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_standing_grant_ref UNIQUE (grant_ref),
+  CONSTRAINT chk_standing_grant_kind CHECK (grant_kind IN ('standing_approval', 'self_approval_limit')),
+  CONSTRAINT chk_standing_grant_status CHECK (status IN ('pending-finance', 'active', 'rejected', 'revoked', 'expired')),
+  CONSTRAINT chk_standing_grant_shape CHECK (
+    (grant_kind = 'standing_approval' AND limit_amount IS NULL
+      AND ((scope_sku IS NOT NULL) <> (scope_item_group_id IS NOT NULL)))
+    OR (grant_kind = 'self_approval_limit' AND limit_amount > 0
+      AND scope_sku IS NULL AND scope_item_group_id IS NULL AND monthly_qty_cap IS NULL)
+  ),
+  CONSTRAINT chk_standing_grant_cap CHECK (monthly_qty_cap IS NULL OR monthly_qty_cap > 0),
+  CONSTRAINT chk_standing_grant_parties CHECK (grantee_user_id <> assigner_user_id),
+  CONSTRAINT chk_standing_grant_revoke_reason CHECK (revoke_reason IS NULL OR revoke_reason IN ('assigner', 'account_disabled'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_standing_grant_item_group' AND conrelid = 'standing_grant'::regclass
+  ) THEN
+    ALTER TABLE standing_grant
+      ADD CONSTRAINT fk_standing_grant_item_group FOREIGN KEY (scope_item_group_id)
+        REFERENCES item_group (item_group_id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+
+-- The hot lookups: a requester's covering grant at raise, and their limit at decision.
+CREATE INDEX IF NOT EXISTS idx_standing_grant_active_grantee
+  ON standing_grant (grantee_user_id, grant_kind, site_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_standing_grant_assigner ON standing_grant (assigner_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_standing_grant_status_end ON standing_grant (status, end_date);
+
+-- Per-assigner pruning cadence (default every 30 days) and the last time the list was sent.
+CREATE TABLE IF NOT EXISTS standing_grant_prune_setting (
+  assigner_user_id    UUID PRIMARY KEY,
+  prune_interval_days INTEGER NOT NULL DEFAULT 30,
+  last_prune_sent_at  TIMESTAMPTZ,
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_standing_grant_prune_interval CHECK (prune_interval_days >= 1)
+);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON standing_grant TO app_user;
+    GRANT INSERT, SELECT, UPDATE ON standing_grant_prune_setting TO app_user;
+    GRANT USAGE ON SEQUENCE standing_grant_ref_seq TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON standing_grant TO readonly_user;
+    GRANT SELECT ON standing_grant_prune_setting TO readonly_user;
+  END IF;
+END $$;
+
 
 -- MUST stay identical to read/projections/purchase_order.sql (canonical source).
 -- Purchase order read model (Story 4.4). This file is the CANONICAL definition,
@@ -15037,3 +15368,31 @@ END $$;
 ALTER TABLE indent ADD COLUMN IF NOT EXISTS damage_report_id UUID;
 
 CREATE INDEX IF NOT EXISTS idx_indent_damage_report ON indent (damage_report_id) WHERE damage_report_id IS NOT NULL;
+
+-- grn_line_inspect: MIRROR of read/projections/grn_line_inspect.sql (Story 3.14; ALTER-only on
+-- grn_line above). This copy exists for first-boot container init only - change both files together.
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS inspect_on_opening TEXT;
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS inspect_note TEXT;
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS inspect_photo_ref TEXT;
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS material_photo_ref TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_grn_line_inspect_evidence'
+      AND conrelid = 'grn_line'::regclass
+  ) THEN
+    ALTER TABLE grn_line DROP CONSTRAINT IF EXISTS chk_grn_line_inspect_on_opening;
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_inspect_on_opening
+      CHECK (inspect_on_opening IS NULL OR inspect_on_opening IN ('suspected', 'observed'));
+
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_inspect_evidence
+      CHECK (
+        inspect_on_opening IS NOT NULL
+        OR (inspect_note IS NULL AND inspect_photo_ref IS NULL)
+      );
+  END IF;
+END $$;
