@@ -147,6 +147,8 @@ This story owns the requisition document and its approval loop. It does NOT own:
 
 ### Offline scope - capture offline, approve online
 
+> Superseded 2026-11-19 by Story 4.12 (sprint-change-proposal-2026-10-21 Table 5): there is no central app; the approvals inbox and requisition approval detail ship on the edge PWA, online only.
+
 The PowerSync download path (`sync/sync-rules.yaml`) is a single bucket over `domain_events` filtered by the JWT `site_id`. Consequences:
 
 - Offline **capture** works with zero sync-rules and zero connector changes. `edge_outbox` plus `insertCaptureEvent` is the whole path.

@@ -259,6 +259,15 @@ export interface ListIndentsParams {
   issuable?: boolean | undefined;
   /** Location scoping resolved from the caller's role assignments (site_id filter). */
   permittedSites?: { wildcard: boolean; locations: Set<string> } | undefined;
+  /**
+   * Story 4.12 (AC 2): the caller plus the delegators they actively represent. Each row then
+   * carries `pending_for_me_line_ids` (pending lines on a raised header routed to one of them)
+   * and `line_skus`; with `pendingForMe` only rows with such a line are listed.
+   */
+  approverIds?: string[] | undefined;
+  pendingForMe?: boolean | undefined;
+  /** Story 4.12 (AC 2): only requisitions with at least one line decided by this user. */
+  decidedBy?: string | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
 }
@@ -305,13 +314,41 @@ export async function listIndents(
     );
   }
 
+  // Story 4.12 (AC 2): the approver columns come from one lateral aggregate in the same query.
+  let approverSelect = '';
+  let approverJoin = '';
+  if (params.approverIds) {
+    // indent_line.approver_actor_id and decided_by are TEXT (indent_line.sql).
+    const ref = `$${idx++}::text[]`;
+    values.push(params.approverIds.filter((id) => UUID_REGEX.test(id)));
+    approverSelect = `, ap.pending_for_me_line_ids, ap.line_skus`;
+    // approverIds[0] is the caller. Their own requisition never waits for them (SOD-01: the
+    // detail and the seam give the requester nothing to decide), even when a line names them.
+    approverJoin = `LEFT JOIN LATERAL (
+  SELECT COALESCE(array_agg(l.indent_line_id::text ORDER BY l.line_no)
+           FILTER (WHERE i.status = 'raised' AND l.line_status = 'pending'
+                   AND i.requester_user_id::text <> (${ref})[1]
+                   AND l.approver_actor_id = ANY(${ref})), '{}') AS pending_for_me_line_ids,
+         COALESCE(array_agg(DISTINCT l.sku), '{}') AS line_skus
+  FROM indent_line l WHERE l.indent_id = i.indent_id
+) ap ON true`;
+    if (params.pendingForMe) conditions.push(`cardinality(ap.pending_for_me_line_ids) > 0`);
+  }
+  if (params.decidedBy) {
+    if (!UUID_REGEX.test(params.decidedBy)) return [];
+    conditions.push(
+      `EXISTS (SELECT 1 FROM indent_line dl WHERE dl.indent_id = i.indent_id AND dl.decided_by = $${idx++})`,
+    );
+    values.push(params.decidedBy);
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit =
     Number.isInteger(params.limit) && params.limit! > 0 ? Math.min(params.limit!, 200) : 50;
   const offset = Number.isInteger(params.offset) && params.offset! >= 0 ? params.offset! : 0;
   // Story 4.10 (AC 7): line counts come from one grouped subquery, never per row.
   const result = await r.query(
-    `SELECT ${LINE_COUNT_SELECT} FROM indent i ${LINE_COUNT_JOIN} ${where} ORDER BY i.created_at DESC, i.indent_id ASC LIMIT $${idx} OFFSET $${idx + 1}`,
+    `SELECT ${LINE_COUNT_SELECT}${approverSelect} FROM indent i ${LINE_COUNT_JOIN} ${approverJoin} ${where} ORDER BY i.created_at DESC, i.indent_id ASC LIMIT $${idx} OFFSET $${idx + 1}`,
     [...values, limit, offset],
   );
   return result.rows as IndentRowWithCounts[];

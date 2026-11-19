@@ -1179,7 +1179,7 @@ No earlier row is closed by this batch. Row 192 (no lock on reserve source-bin s
 
 ## Deferred from: dev of 1-15-employee-base-role (2026-09-27)
 
-- Withdrawing or confirming one's own requisition from the base role (D3): confirm, withdraw, approve, reject and cancel stay procurement write, so an employee-only person who raises a duplicate-held requisition cannot confirm or withdraw it without help. Reasonable next step; needs an access-matrix row first.
+- Withdrawing or confirming one's own requisition from the base role (D3): confirm, withdraw, approve, reject and cancel stay procurement write, so an employee-only person who raises a duplicate-held requisition cannot confirm or withdraw it without help. Reasonable next step; needs an access-matrix row first. Annotated 2026-11-19: Story 4.12 takes the approve, reject and detail-read half (gate widened to the employee hat with per-line identity); confirm, withdraw and cancel remain deferred.
 - Availability "Low" state, "expected <date>" and "Collect at <counter>" chips (D5): need min-max levels, open PO data and a counter register. `mockups/key-requisitions.html` still shows "In stock - 12 available" and "Low - N available"; the UX owner is to amend the mock to the no-number rule.
 - Availability omits `item_name` (Table 2 lists it): `item_master` has no name or description column anywhere in the schema, and adding one is a schema change outside this story (AD-14, schema-drift). The response carries `sku`, `uom`, `in_stock`, `locations`; add the name when the item master gains one.
 - My requests cards show no line count: `GET /api/v1/indents` returns indent headers only, and fetching lines per card is one call per row. Add a `line_count` to the list projection if the count is wanted.
@@ -1372,3 +1372,19 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - Server-side enforcement of material_photo_ref on goods.received (owner ruling 3b): a server rule affects ERP inbound and every other caller.
 - Counted stepper, Damaged and Rejected reason tiles, and a Match supplier action on the unmatched arrival card (owner ruling 6b): UX pass.
 - Per-site inspection bay codes and a bay for assignments below site level (owner ruling 4b): location_code is globally unique, so only one site can own IB-01; single pilot site for now.
+
+## Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)
+
+- One inbox for every approval type (EXPERIENCE.md:169, owner question Q26): `/approvals` lists requisitions only. A follow-up folds damage-case concurrence and standing-grant decisions into it with an approval-type filter.
+- SLA column and SLA pills (mock key-approvals.html L548-551, L598-603): SLA hours are mock values (EXPERIENCE.md:171); no SLA is stored, so the column is omitted.
+- Offline read of the inbox: the lists and detail are fetched live and held in memory only; a cold start offline shows the needs-connection card. Needs a PowerSync bucket for approver rows.
+- Inbox row status for a mixed decision: a requisition where the caller rejected their line but another approver approved theirs reads Approved in the list (`rowStatus` shortcut in `edge/src/components/approvals-model.ts`); the detail shows each line's outcome. Needs per-line decision data on the list row.
+- Ask for info in the detail footer (EXPERIENCE.md:137): Story 4.13.
+
+## Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)
+
+- Delegation windows read the UTC date, not the IST calendar date: `hasIndentApprovalScope`, `isApproverOfAnyLine` and `approverIdsFor` follow the same wall-clock `today` as `decideAsApprover` and `pendingLineIdsFor`, so the inbox agrees with the seam but both are a day behind between 00:00 and 05:30 IST. Already recorded as a platform-wide convention (see the entry on `resolveDamageAuthority` and `findActiveDelegation` call sites); Story 4.12 adds three more call sites to change in the same pass.
+- A line routed to its own requester is undecidable (already recorded under Story 4.9). Story 4.12 code review patched the inbox so such a row no longer shows under Waiting for the requester; the routing itself is unchanged.
+- Approvals inbox stops at 200 rows per list (the server cap) with no "more" row, and the tab counts stop there too (`shortcut:` in `edge/src/components/approvals.tsx`). Page the lists when one approver can hold more than 200.
+- The approver band line is not scoped to a site although the Approvals nav entry is (`approverBandsFor` in `src/api/v1/indents.ts`, AC 2, AC 3, Task 1.2). A holder at two sites sees both sites' bands. Needs a location passed once the pilot has a second site.
+- The DOA note tells a delegate they are "the requester's head of department" (`doaNote` in `edge/src/components/approvals-model.ts`). Needs acting-for copy from the UX owner.

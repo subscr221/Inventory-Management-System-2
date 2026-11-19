@@ -55,6 +55,10 @@ import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
 import { routeIndentLines, headerApproverOf } from '../../compliance/indent-routing.js';
 import { damageAuthorityTypesFor } from '../../compliance/damage.js';
 import {
+  listActiveDelegatorsFor,
+  listHeldIndentApprovalBands,
+} from '../../read/projections/doa_registry.js';
+import {
   countOpenWorkOrders,
   listOpenWorkOrdersForWorklist,
 } from '../../read/projections/maintenance_work_order.js';
@@ -400,7 +404,7 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
  */
 const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   name: string;
-  modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases' | 'gate';
+  modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases' | 'gate' | 'approvals';
   functionScope: 'read' | 'write';
 }> = [
   { name: 'Dashboard', modules: '*', functionScope: 'read' },
@@ -409,6 +413,8 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   { name: 'New requisition', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'write' },
   { name: 'Check stock', modules: [EMPLOYEE_MODULE, 'inventory'], functionScope: 'read' },
   { name: 'My requests', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
+  // Story 4.12 (AC 1): the approvals inbox, for an indent_approval band holder or their delegate.
+  { name: 'Approvals', modules: 'approvals', functionScope: 'read' },
   // Story 8.9 (AC 1, AC 8): every signed-in person reports damage; the workbench shows to the
   // people who work cases - QC or stores at the site, or a damage DOA authority.
   { name: 'Report damage', modules: [EMPLOYEE_MODULE], functionScope: 'write' },
@@ -458,6 +464,20 @@ function hasGateScope(authContext: AuthContext, siteId: string): boolean {
   );
 }
 
+/**
+ * Story 4.12 (AC 1): the Approvals inbox shows to the active holder, at the site, of the role of
+ * any `indent_approval` DOA entry, or to today's active delegate of such a holder. A holder with
+ * nothing pending still gets the entry and its empty state.
+ */
+async function hasIndentApprovalScope(authContext: AuthContext, siteId: string): Promise<boolean> {
+  const today = new Date().toISOString().slice(0, 10);
+  const userIds = [
+    authContext.userId,
+    ...(await listActiveDelegatorsFor(authContext.userId, today)),
+  ];
+  return (await listHeldIndentApprovalBands(userIds, undefined, siteId)).length > 0;
+}
+
 async function navigationFor(authContext: AuthContext, siteId: string): Promise<string[]> {
   const roles = authContext.roles;
   const names: string[] = [];
@@ -473,6 +493,8 @@ async function navigationFor(authContext: AuthContext, siteId: string): Promise<
       shown = await hasDamageCaseScope(authContext, siteId);
     } else if (modules === 'gate') {
       shown = hasGateScope(authContext, siteId);
+    } else if (modules === 'approvals') {
+      shown = await hasIndentApprovalScope(authContext, siteId);
     } else {
       shown = roles.some(
         (r) =>

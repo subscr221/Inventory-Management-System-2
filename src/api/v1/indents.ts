@@ -55,7 +55,11 @@ import {
   findRoleHolder,
   findActiveDelegation,
   listActiveDoaEntries,
+  listActiveDelegatorsFor,
+  listHeldIndentApprovalBands,
+  getDoaBandsByIds,
 } from '../../read/projections/doa_registry.js';
+import { displayNamesFor } from '../../read/projections/damage_report.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 export { INDENT_DOA_TYPE } from '../../compliance/indent-routing.js';
@@ -215,17 +219,40 @@ function assertSiteReadAccess(req: IncomingMessage, siteId: string): void {
 }
 
 /**
+ * Story 4.12 (Task 1.6): is `userId` the approver or decider of any line, or today's active
+ * delegate of a line's approver (the decideAsApprover rule, one lookup per distinct approver)?
+ */
+async function isApproverOfAnyLine(indentId: string, userId: string): Promise<boolean> {
+  const lines = await getIndentLines(indentId);
+  if (lines.some((l) => l.approver_actor_id === userId || l.decided_by === userId)) return true;
+  const today = new Date().toISOString().slice(0, 10);
+  const approvers = new Set(
+    lines.map((l) => l.approver_actor_id).filter((id): id is string => id !== null),
+  );
+  for (const approver of approvers) {
+    const d = await findActiveDelegation(approver, today);
+    if (d?.delegate_user_id === userId) return true;
+  }
+  return false;
+}
+
+/**
  * Story 1.15 (AC 4): procurement read at the indent's site reads any indent there; without it the
  * caller reads only an indent they raised (the base-role "My requests" detail). A procurement
  * reader scoped elsewhere keeps today's LOCATION_ACCESS_DENIED; a caller with no procurement read
  * at all gets the requester-ownership denial the withdraw route uses.
+ *
+ * Story 4.12 (AC 3): a third admit branch for the resolved approver of any line, its active
+ * delegate today, or the person who decided any line, so a finance controller with no
+ * procurement role reads the requisitions routed to them. The seam still checks identity per line.
  */
-function assertIndentReadAccess(req: IncomingMessage, indent: IndentRow): void {
+async function assertIndentReadAccess(req: IncomingMessage, indent: IndentRow): Promise<void> {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   const scope = permittedLocationsForModuleScope(authContext.roles, 'procurement', 'read');
   if (scope.wildcard || scope.locations.has(indent.site_id)) return;
   if (indent.requester_user_id === authContext.userId) return;
+  if (await isApproverOfAnyLine(indent.indent_id, authContext.userId)) return;
   if (scope.locations.size > 0) assertSiteReadAccess(req, indent.site_id);
   throw new AppError(403, 'FUNCTION_ACCESS_DENIED', 'Only the requester can view this indent', {
     indent_id: indent.indent_id,
@@ -397,11 +424,64 @@ export const getIndentBase: RouteHandler = async (req, res, params) => {
     });
     return;
   }
-  assertIndentReadAccess(req, indent);
+  await assertIndentReadAccess(req, indent);
 
-  const lines = await presentLines((await getIndentLines(indentId)).map(withOpenQty));
-  sendJson(res, 200, { indent: await getIndentWithCounts(indentId), lines });
+  const rawLines = await getIndentLines(indentId);
+  const lines = await presentLines(rawLines.map(withOpenQty));
+  // Story 4.12 (AC 3, Task 1.7): what the approval detail needs. The requester gets no pending
+  // set: pendingLineIdsFor hands the requester every pending line so the seam refuses SOD-01,
+  // which is right for a decision and wrong for display.
+  const userId = getAuthContext(req)?.userId ?? NO_LOCATION_UUID;
+  const now = new Date().toISOString();
+  const pendingForMe =
+    indent.status === 'raised' && indent.requester_user_id !== userId
+      ? await pendingLineIdsFor(indent, userId, now)
+      : [];
+  const [names, bands, approverBands] = await Promise.all([
+    // A pre-approved line is decided by 'system', not a user id; only ids are looked up.
+    displayNamesFor(
+      [indent.requester_user_id, ...rawLines.map((l) => l.decided_by)].filter(
+        (id): id is string => id !== null && UUID_REGEX.test(id),
+      ),
+    ),
+    getDoaBandsByIds(rawLines.map((l) => l.doa_entry_id)),
+    approverBandsFor(userId, now),
+  ]);
+  sendJson(res, 200, {
+    indent: await getIndentWithCounts(indentId),
+    lines: lines.map((l) => {
+      const band = l.doa_entry_id ? bands.get(l.doa_entry_id) : undefined;
+      return {
+        ...l,
+        approver_band: band
+          ? { role: band.role, value_min: band.value_min, value_max: band.value_max }
+          : null,
+        decided_by_display_name: l.decided_by ? (names.get(l.decided_by) ?? null) : null,
+      };
+    }),
+    requester_display_name: names.get(indent.requester_user_id) ?? null,
+    pending_for_me_line_ids: pendingForMe,
+    approver_bands: approverBands,
+  });
 };
+
+/** Story 4.12: the caller plus every delegator they actively represent today. */
+async function approverIdsFor(userId: string, now: string): Promise<string[]> {
+  return [userId, ...(await listActiveDelegatorsFor(userId, now.slice(0, 10)))];
+}
+
+/**
+ * Story 4.12 (D2): the `indent_approval` bands the caller holds or acts under, for the band line.
+ * shortcut: not scoped to a site although the nav entry is, so a holder at two sites sees both
+ * sites' bands; pass a location once the pilot has a second site.
+ */
+async function approverBandsFor(
+  userId: string,
+  now: string,
+): Promise<Array<{ role: string; value_min: number | null; value_max: number | null }>> {
+  const bands = await listHeldIndentApprovalBands(await approverIdsFor(userId, now));
+  return bands.map(({ role, value_min, value_max }) => ({ role, value_min, value_max }));
+}
 
 export const listIndentsBase: RouteHandler = async (req, res, _params) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -410,6 +490,9 @@ export const listIndentsBase: RouteHandler = async (req, res, _params) => {
   const mine = url.searchParams.get('mine');
   // Story 4.11 (AC 8): the storekeeper's "Issues pending" inbox.
   const issuable = url.searchParams.get('issuable') === 'true';
+  // Story 4.12 (AC 2): the approver's Waiting and Decided tabs.
+  const pendingForMe = url.searchParams.get('pending_for_me') === 'true';
+  const decidedByMe = url.searchParams.get('decided_by_me') === 'true';
   const limitParam = url.searchParams.get('limit');
   const offsetParam = url.searchParams.get('offset');
 
@@ -465,6 +548,45 @@ export const listIndentsBase: RouteHandler = async (req, res, _params) => {
     'read',
   );
   const ownOnly = mine === 'true';
+  if (pendingForMe || decidedByMe) {
+    if ((pendingForMe && decidedByMe) || ownOnly || issuable) {
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'pending_for_me and decided_by_me exclude each other, mine and issuable',
+      );
+      return;
+    }
+    // Story 4.12 (AC 2, D1): rows follow the line's resolved approver, never a role or the
+    // raiser's site, so this branch precedes the base-role refusal and returns an empty list
+    // (not FUNCTION_ACCESS_DENIED) to a holder with nothing pending.
+    const now = new Date().toISOString();
+    const approverIds = await approverIdsFor(authContext.userId, now);
+    const [results, approverBands] = await Promise.all([
+      listIndents({
+        status,
+        search: search ?? undefined,
+        // AC 2: a Decided row carries no pending ids, so it never reads Waiting in that tab.
+        approverIds: pendingForMe ? approverIds : [],
+        pendingForMe,
+        decidedBy: decidedByMe ? authContext.userId : undefined,
+        limit,
+        offset,
+      }),
+      approverBandsFor(authContext.userId, now),
+    ]);
+    const names = await displayNamesFor(results.map((r) => r.requester_user_id));
+    sendJson(res, 200, {
+      indents: results.map((r) => ({
+        ...r,
+        requester_display_name: names.get(r.requester_user_id) ?? null,
+      })),
+      approver_bands: approverBands,
+    });
+    return;
+  }
   if (issuable && !ownOnly) {
     // Story 4.11 (AC 8, D10; review): the stores inbox is scoped by the caller's warehouse write
     // sites only - a procurement reader does not widen it.
@@ -766,7 +888,7 @@ export const closeIndentLineBase: RouteHandler = async (req, res, params) => {
 export const listIndentIssuesBase: RouteHandler = async (req, res, params) => {
   const indent = await loadIndentOr404(req, res, params?.['indentId']);
   if (!indent) return;
-  assertIssueReadAccess(req, indent);
+  await assertIssueReadAccess(req, indent);
   sendJson(res, 200, { issues: await listIndentIssuesByIndent(indent.indent_id) });
 };
 
@@ -791,7 +913,7 @@ export const getIndentIssueBase: RouteHandler = async (req, res, params) => {
     });
     return;
   }
-  assertIssueReadAccess(req, indent);
+  await assertIssueReadAccess(req, indent);
   sendJson(res, 200, {
     issue: { ...issue, lines: presentIssueLines(await getIndentIssueLines(issueId)) },
   });
@@ -813,14 +935,16 @@ function assertWarehouseWriteAtSite(req: IncomingMessage, indent: IndentRow): vo
 
 /**
  * Story 4.11 (D10): a slip is readable by anyone with warehouse read at the site, by the
- * requester, and by procurement readers (the Story 1.15 rule).
+ * requester, and by procurement readers (the Story 1.15 rule). Story 4.12 code review (owner
+ * ruling 2026-11-19): a line's approver, its active delegate and its decider read the slips too,
+ * through the approver branch of assertIndentReadAccess, to see what was issued on their approval.
  */
-function assertIssueReadAccess(req: IncomingMessage, indent: IndentRow): void {
+async function assertIssueReadAccess(req: IncomingMessage, indent: IndentRow): Promise<void> {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   const warehouseRead = permittedLocationsForModuleScope(authContext.roles, 'warehouse', 'read');
   if (warehouseRead.wildcard || warehouseRead.locations.has(indent.site_id)) return;
-  assertIndentReadAccess(req, indent);
+  await assertIndentReadAccess(req, indent);
 }
 
 async function loadIndentOr404(
@@ -1139,13 +1263,16 @@ export const withdrawIndentHandler = requireRole({
   functionScope: 'write',
 })(withdrawIndentBase);
 
+// Story 4.12 (AC 3, Q25): approve and reject admit the base hat as raise does; who may decide a
+// line is the seam's per-line identity check (resolved approver or active delegate), not a role.
+// Confirm, withdraw and cancel stay procurement write.
 export const approveIndentHandler = requireRole({
-  module: 'procurement',
+  module: [EMPLOYEE_MODULE, 'procurement'],
   functionScope: 'write',
 })(approveIndentBase);
 
 export const rejectIndentHandler = requireRole({
-  module: 'procurement',
+  module: [EMPLOYEE_MODULE, 'procurement'],
   functionScope: 'write',
 })(rejectIndentBase);
 

@@ -30,6 +30,8 @@ export const NAV_ENTRIES: NavEntry[] = [
   { name: 'Floor tasks', href: '/floor/tasks', label: 'nav.floorTasks' },
   // Story 4.8: standing approvals and self-approval limits, for everyone (the held-by-me view).
   { name: 'Standing grants', href: '/standing-grants', label: 'nav.standingGrants' },
+  // Story 4.12 (AC 1): the approvals inbox, for indent_approval band holders and delegates.
+  { name: 'Approvals', href: '/approvals', label: 'nav.approvals' },
   // Enterprise views (Phase 2/4): real paths, rendered only when the bootstrap names them.
   { name: 'Workflows', href: '/workflows', label: 'nav.workflows' },
   { name: 'Access control', href: '/access-control', label: 'nav.accessControl' },

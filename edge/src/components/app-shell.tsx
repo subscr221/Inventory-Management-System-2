@@ -40,6 +40,8 @@ import { StoresIssue } from './stores-issue';
 import { PutawayTask } from './putaway-task';
 import { GrnRead } from './grn-read';
 import { FloorTasks, type FloorTasksProps } from './floor-tasks';
+import { Approvals } from './approvals';
+import { useState } from 'react';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import { useDeviceClass, type DeviceClass } from '../lib/use-device-class';
@@ -154,7 +156,8 @@ type BaseView =
   | 'stores-issue'
   | 'putaway-task'
   | 'grn-read'
-  | 'floor-tasks';
+  | 'floor-tasks'
+  | 'approvals';
 
 /** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
 const BASE_VIEW_ENTRY: Record<BaseView, string> = {
@@ -177,6 +180,8 @@ const BASE_VIEW_ENTRY: Record<BaseView, string> = {
   'grn-read': 'Stores',
   // Story 3.16 (AC 1): the floor task inbox and pick execution screen.
   'floor-tasks': 'Floor tasks',
+  // Story 4.12 (AC 1): the approvals inbox and requisition approval detail.
+  approvals: 'Approvals',
 };
 
 function isBaseView(view: string): view is BaseView {
@@ -249,6 +254,8 @@ export function AppShell({
   const navEntries = entriesFor(navigation);
   const deviceClass = useDeviceClass();
   const navSurface = NAV_SURFACE[deviceClass];
+  // Story 4.12 (AC 8): a Handheld approval detail pins its own footer in place of the bottom nav.
+  const [taskMode, setTaskMode] = useState(false);
   const activeEntry = VIEW_NAV_ENTRY[view];
   const activeHref = navEntries.find((entry) => entry.name === activeEntry)?.href ?? null;
   return (
@@ -438,6 +445,8 @@ export function AppShell({
               />
             ) : view === 'damage-cases' ? (
               <DamageCases online={online} userId={userId} />
+            ) : view === 'approvals' ? (
+              <Approvals online={online} onTaskModeChange={setTaskMode} />
             ) : view === 'standing-grants' ? (
               <StandingGrants online={online} />
             ) : view === 'refused-captures' ? (
@@ -588,7 +597,7 @@ export function AppShell({
           </main>
         </div>
       </div>
-      {navSurface === 'bottom-nav' ? (
+      {navSurface === 'bottom-nav' && !taskMode ? (
         <BottomNav
           entries={navEntries}
           activeHref={activeHref}

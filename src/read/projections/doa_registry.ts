@@ -285,6 +285,94 @@ export async function findActiveDelegation(
   return result.rows.length > 0 ? mapDelegation(result.rows[0]!) : null;
 }
 
+/**
+ * Story 4.12 (Task 1.1): the delegators `delegateUserId` actively represents on `asOfDate`. Mirrors
+ * findActiveDelegation per delegator - the earliest-created active delegation within its dates
+ * whose delegate is an active user wins - so a second overlapping delegate, whom the decision seam
+ * would refuse NOT_RESOLVED_APPROVER, is never handed the delegator's lines.
+ */
+export async function listActiveDelegatorsFor(
+  delegateUserId: string,
+  asOfDate: string,
+  client?: PoolClient,
+): Promise<string[]> {
+  const result = await runner(client).query(
+    `SELECT w.delegator_user_id::text AS delegator_user_id FROM (
+       SELECT DISTINCT ON (d.delegator_user_id) d.delegator_user_id, d.delegate_user_id
+       FROM doa_vacation_delegations d
+       JOIN users u ON u.user_id = d.delegate_user_id
+       WHERE d.active = true
+         AND u.active = true
+         AND d.start_date <= $2::date
+         AND d.end_date >= $2::date
+         AND d.delegator_user_id IN (
+           SELECT delegator_user_id FROM doa_vacation_delegations WHERE delegate_user_id = $1::uuid
+         )
+       ORDER BY d.delegator_user_id, d.created_at ASC, d.delegation_id ASC
+     ) w
+     WHERE w.delegate_user_id = $1::uuid`,
+    [delegateUserId, asOfDate],
+  );
+  return result.rows.map((r) => r['delegator_user_id'] as string);
+}
+
+/** Story 4.12: an `indent_approval` band, as the approvals screen shows it. */
+export interface IndentApprovalBand {
+  entry_id: string;
+  role: string;
+  value_min: number | null;
+  value_max: number | null;
+}
+
+function mapBand(row: Record<string, unknown>): IndentApprovalBand {
+  return {
+    entry_id: row['entry_id'] as string,
+    role: row['role'] as string,
+    value_min: toNumberOrNull(row['value_min']),
+    value_max: toNumberOrNull(row['value_max']),
+  };
+}
+
+/**
+ * Story 4.12 (Task 1.2): the active `indent_approval` bands whose role any of `userIds` actively
+ * holds - the caller plus the delegators they represent, so a delegate sees the band they act
+ * under. With `locationId` the role must be held there or at every location ('*'), the
+ * isActiveRoleHolderForEntry rule; without it any assignment counts.
+ */
+export async function listHeldIndentApprovalBands(
+  userIds: string[],
+  client?: PoolClient,
+  locationId?: string,
+): Promise<IndentApprovalBand[]> {
+  if (userIds.length === 0) return [];
+  const atLocation = locationId !== undefined;
+  const result = await runner(client).query(
+    `SELECT DISTINCT e.entry_id, e.role, e.value_min, e.value_max
+     FROM doa_registry_entries e
+     JOIN user_role_assignments a ON a.role = e.role
+     JOIN users u ON u.user_id = a.user_id
+     WHERE e.transaction_type = 'indent_approval' AND e.active = true AND u.active = true
+       AND a.user_id = ANY($1::uuid[])${atLocation ? LOCATION_CLAUSE : ''}
+     ORDER BY e.value_max ASC NULLS LAST, e.entry_id ASC`,
+    atLocation ? [userIds, locationId] : [userIds],
+  );
+  return result.rows.map(mapBand);
+}
+
+/** Story 4.12 (Task 1.7): the DOA entries a set of lines was routed under, keyed by entry id. */
+export async function getDoaBandsByIds(
+  entryIds: (string | null)[],
+  client?: PoolClient,
+): Promise<Map<string, IndentApprovalBand>> {
+  const ids = [...new Set(entryIds.filter((id): id is string => id !== null))];
+  if (ids.length === 0) return new Map();
+  const result = await runner(client).query(
+    `SELECT entry_id, role, value_min, value_max FROM doa_registry_entries WHERE entry_id = ANY($1::uuid[])`,
+    [ids],
+  );
+  return new Map(result.rows.map((r) => [r['entry_id'] as string, mapBand(r)]));
+}
+
 export interface RoleHolder {
   user_id: string;
   external_id: string;

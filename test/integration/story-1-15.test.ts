@@ -349,20 +349,27 @@ describe('Story 1.15 Employee Base Role', () => {
     assert.strictEqual(res.body['error_code'], 'LOCATION_ACCESS_DENIED');
   });
 
-  it('AC1 (D3): the base role is raise-only; every other indent action stays procurement write', async () => {
+  it('AC1 (D3): confirm, withdraw and cancel stay procurement write; approve and reject reach the per-line seam (Story 4.12)', async () => {
     const raised = await makeRequest(port, 'POST', '/api/v1/indents', raiseBody(SKU), emp1);
     assert.strictEqual(raised.status, 201, JSON.stringify(raised.body));
     const id = (raised.body['indent'] as Record<string, string>)['indent_id']!;
-    for (const action of ['confirm', 'withdraw', 'approve', 'reject', 'cancel']) {
+    for (const [action, code] of [
+      ['confirm', 'MODULE_ACCESS_DENIED'],
+      ['withdraw', 'MODULE_ACCESS_DENIED'],
+      ['cancel', 'MODULE_ACCESS_DENIED'],
+      // Story 4.12 (AC 3, Q25): the base hat passes the gate; the seam still refuses the requester.
+      ['approve', 'INDENT_RAISER_CANNOT_APPROVE'],
+      ['reject', 'INDENT_RAISER_CANNOT_APPROVE'],
+    ]) {
       const res = await makeRequest(
         port,
         'POST',
-        `/api/v1/indents/${id}/${action}`,
+        `/api/v1/indents/${id}/${action!}`,
         { rejection_reason: 'no', cancelled_reason: 'no' },
         emp1,
       );
-      assert.strictEqual(res.status, 403, `${action}: ${JSON.stringify(res.body)}`);
-      assert.strictEqual(res.body['error_code'], 'MODULE_ACCESS_DENIED', action);
+      assert.strictEqual(res.status, 403, `${action!}: ${JSON.stringify(res.body)}`);
+      assert.strictEqual(res.body['error_code'], code, action);
     }
   });
 

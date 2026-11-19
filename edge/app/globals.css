@@ -1646,3 +1646,235 @@ textarea:focus-visible {
   justify-self: start;
   margin-top: var(--space-2);
 }
+
+/* Story 4.12: status pairs missing from the pill set (DESIGN.md:187-201). */
+.state-pill-info {
+  background: var(--info-bg);
+  color: var(--info);
+  border-color: var(--info);
+}
+
+.state-pill-off {
+  background: var(--off-bg);
+  color: var(--off);
+  border-color: var(--off);
+}
+
+/* Story 4.12: approvals inbox and requisition approval detail. Tablet and Desktop show list and
+   detail panes; Handheld shows one at a time, the detail with a pinned footer (task mode). */
+.approvals-screen {
+  display: grid;
+  gap: var(--space-4);
+}
+@media (min-width: 600px) {
+  .approvals-screen[data-device-class="tablet"],
+  .approvals-screen[data-device-class="desktop"],
+  .approvals-screen[data-device-class="desktop-touch"] {
+    grid-template-columns: minmax(18rem, 34rem) 1fr;
+    align-items: start;
+  }
+}
+
+.approvals-list,
+.approvals-detail,
+.approvals-detail-body {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.approvals-search {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.approvals-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.approvals-tabs button {
+  min-height: var(--control-height-secondary, 48px);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-full);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.approvals-tabs button[aria-pressed="true"] {
+  border-color: var(--text);
+  font-weight: 700;
+}
+
+.approvals-cards,
+.approvals-lines,
+.approvals-history {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+}
+
+.approvals-cards,
+.approvals-lines {
+  list-style: none;
+}
+
+.approvals-history {
+  padding-left: var(--space-5, 1.25rem);
+}
+
+.approvals-card,
+.approvals-row-button {
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.approvals-card {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md, 8px);
+  min-height: var(--touch-primary);
+}
+
+.approvals-card[aria-current="true"],
+.approvals-table tr[data-selected="true"] {
+  outline: 2px solid var(--text);
+}
+
+.approvals-card .state-pill {
+  justify-self: start;
+}
+
+.approvals-row-button {
+  border: 0;
+  padding: var(--space-1) 0;
+  min-height: var(--control-compact);
+}
+
+.approvals-lines li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.approvals-table-wrap {
+  overflow-x: auto;
+}
+
+.approvals-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.approvals-table caption {
+  text-align: left;
+  font-weight: 700;
+  padding-bottom: var(--space-2);
+}
+
+.approvals-table th,
+.approvals-table td {
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.approvals-table .num {
+  text-align: right;
+}
+
+.approvals-note,
+.approvals-block {
+  padding: var(--space-3);
+  border-left: 4px solid var(--info);
+  background: var(--info-bg);
+  color: var(--text);
+}
+
+.approvals-error {
+  color: var(--err);
+  font-weight: 700;
+}
+
+.approvals-reject {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.approvals-reject textarea {
+  min-height: 6rem;
+  font: inherit;
+}
+
+.approvals-hint {
+  margin: 0;
+  color: var(--off);
+}
+
+.approvals-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.approvals-danger {
+  background: var(--err);
+  border-color: var(--err);
+}
+
+/* Touch classes: Approve 56px, Reject and the rest 48px (DESIGN.md:224-229). */
+.approvals-screen[data-device-class="handheld"] .approvals-footer .primary-action,
+.approvals-screen[data-device-class="tablet"] .approvals-footer .primary-action,
+.approvals-screen[data-device-class="desktop-touch"] .approvals-footer .primary-action {
+  min-height: var(--touch-primary);
+}
+.approvals-screen[data-device-class="handheld"] .approvals-footer .secondary-action,
+.approvals-screen[data-device-class="tablet"] .approvals-footer .secondary-action,
+.approvals-screen[data-device-class="desktop-touch"] .approvals-footer .secondary-action {
+  min-height: var(--touch-secondary);
+}
+
+/* Desktop is compact: 34px controls under the sidebar. */
+.approvals-screen[data-device-class="desktop"] .approvals-footer button,
+.approvals-screen[data-device-class="desktop"] .approvals-tabs button {
+  min-height: var(--control-compact);
+}
+
+/* Handheld task mode: the footer replaces the bottom nav, Approve full width above Reject. */
+.approvals-footer[data-pinned="true"] {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  margin-inline: calc(var(--space-3) * -1);
+  padding: var(--space-3);
+  padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  background: var(--surface, #fff);
+  box-shadow: 0 -4px 12px rgb(0 0 0 / 8%);
+}
+
+.approvals-footer[data-pinned="true"] .approvals-actions {
+  display: grid;
+}
+
+.approvals-footer[data-pinned="true"] .primary-action {
+  position: static;
+  width: 100%;
+  box-shadow: none;
+}
+
+.approvals-screen[data-task-mode="true"] {
+  padding-bottom: 0;
+}

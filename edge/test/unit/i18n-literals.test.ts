@@ -41,6 +41,9 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^standingGrants\./,
   /^standing-grants-/,
   /^stores-issue-/,
+  // Story 4.12: the approvals inbox and requisition approval detail.
+  /^approvals\./,
+  /^approvals-/,
   /^Promise$/,
   /^Dashboard$/,
   /^Frontline$/,
