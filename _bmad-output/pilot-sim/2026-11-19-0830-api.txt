@@ -1,0 +1,43 @@
+
+stopped: Error: token for qc (qc1@ancorlabs.org): 522  
+    at Object.auth (D:\WINCODE\Inventory Management System_2\deploy\rehearsal\mock\ops-lib.ts:373:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async tasksIn (D:\WINCODE\Inventory Management System_2\deploy\pilot\sim\extra-flows.ts:130:11)
+    at async qcRelease (D:\WINCODE\Inventory Management System_2\deploy\pilot\sim\extra-flows.ts:144:17)
+    at async Module.extraFlows (D:\WINCODE\Inventory Management System_2\deploy\pilot\sim\extra-flows.ts:811:3)
+    at async main (D:\WINCODE\Inventory Management System_2\deploy\pilot\sim\pilot-day.ts:147:27)
+    at async <anonymous> (D:\WINCODE\Inventory Management System_2\deploy\pilot\sim\pilot-day.ts:181:68)
+
+Simulated pilot day (CMF-ALIGARH, 2026-11-19T00:30:20.948Z)
+FAIL  ERP feed: purchase order MK-PO-D2611190030                  20.25 s  token for erp (erp1@ancorlabs.org): 522  
+FAIL  ERP feed: sales order MK-SO-D2611190030                     19.77 s  token for erp (erp1@ancorlabs.org): 522  
+FAIL  inbound: gate entry                                         20.08 s  token for gate (gate1@ancorlabs.org): 522  
+SKIP  inbound: weighbridge (net within the PO line band)           0.00 s  needs "inbound: gate entry"
+SKIP  inbound: GRN plain item                                      0.00 s  needs "inbound: gate entry"
+SKIP  inbound: GRN lot item                                        0.00 s  needs "inbound: gate entry"
+SKIP  inbound: GRN consignment item (ownership agreement)          0.00 s  needs "inbound: gate entry"
+SKIP  inbound: putaway into a storage bin                          0.00 s  needs "inbound: gate entry"
+SKIP  job-work: receive customer material against the challan (~   0.00 s  needs "inbound: gate entry"
+SKIP  job-work: the same challan and lot again is refused          0.00 s  needs "inbound: gate entry"
+SKIP  count: cycle count with a variance                           0.00 s  needs "inbound: gate entry"
+SKIP  count: counter cannot approve, another person approves       0.00 s  needs "inbound: gate entry"
+FAIL  outbound: generate picks for a seeded sales order           19.81 s  token for whmanager (cmf_supervisor@ancorlabs.org): 522  
+SKIP  outbound: confirm pick lines (lot item FEFO, plain item)     0.00 s  needs "outbound: generate picks for a seeded sales order"
+SKIP  outbound: pack refuses a lot that was not picked             0.00 s  needs "outbound: generate picks for a seeded sales order"
+SKIP  outbound: pack                                               0.00 s  needs "outbound: generate picks for a seeded sales order"
+SKIP  outbound: IRN, shipping documents                            0.00 s  needs "outbound: generate picks for a seeded sales order"
+SKIP  outbound: dispatch                                           0.00 s  needs "outbound: generate picks for a seeded sales order"
+FAIL  production: planner reads stock, creates the order          20.01 s  token for planner (planner1@ancorlabs.org): 522  
+SKIP  production: release                                          0.00 s  needs "production: planner reads stock, creates the order"
+SKIP  production: stage components from storage bins               0.00 s  needs "production: planner reads stock, creates the order"
+SKIP  production: issue components                                 0.00 s  needs "production: planner reads stock, creates the order"
+SKIP  production: complete (inspection plan resolved)              0.00 s  needs "production: planner reads stock, creates the order"
+FAIL  indent: raise                                               19.99 s  token for indent (indent1@ancorlabs.org): 522  
+SKIP  indent: raiser cannot approve, department head approves      0.00 s  needs "indent: raise"
+SKIP  indent: storekeeper issues at the counter, closes the rem~   0.00 s  needs "indent: raise"
+FAIL  maintenance: technician reports a fault                     19.99 s  token for maint (maint1@ancorlabs.org): 522  
+SKIP  maintenance: supervisor accepts, work order with SLA         0.00 s  needs "maintenance: technician reports a fault"
+SKIP  maintenance: technician works and completes                  0.00 s  needs "maintenance: technician reports a fault"
+
+FAIL: 0/29 steps passed, 7 failed, 22 skipped
+report: D:\WINCODE\Inventory Management System_2\_bmad-output\pilot-sim\2026-11-19-00-30-api.json

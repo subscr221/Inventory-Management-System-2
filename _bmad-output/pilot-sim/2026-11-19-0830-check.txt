@@ -1,0 +1,15 @@
+IMS staging daily check  2026-11-19 06:21 IST
+
+OK    stack      6 containers running
+OK    events     4734 total, 10 in last 24 h
+            notification.expired 10
+OK    refused    0 open refused captures
+OK    backup     newest nightly 3 h old, 16M: ims-basebackup-202611190230-nightly.tar.gz
+            22 labelled backups kept (never rotated; they also pin the WAL archive)
+OK    disk       70% used, 57G free, WAL archive 97M
+OK    sync       slot powersync_2_5d93 active, behind by 0.0 MB
+WARN  tasks      open tasks with nobody assigned (type, count, oldest in hours):
+            putaway 33 1080
+            0 QC inspection tasks not yet inspected (QC tasks have no assignee field)
+
+RESULT: WARN, read the guide
