@@ -1060,6 +1060,35 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
         (err: unknown) => (err as { errorCode?: string }).errorCode === 'STANDING_APPROVAL_LAPSED',
       );
     });
+
+    it('the seam refuses self_approval as a raise route: self-approval is only an explicit decision (D10)', async () => {
+      const sku = await newSku('SEAMSELF');
+      const indentId = randomUUID();
+      await assert.rejects(
+        persistEvent({
+          stream_type: 'procurement',
+          stream_id: indentId,
+          event_type: 'indent.raised',
+          event_id: randomUUID(),
+          payload: {
+            indent_id: indentId,
+            requester_user_id: requesterId,
+            department_code: 'MAINT',
+            site_id: siteA,
+            business_stream: 'production',
+            need_by_date: '2026-12-01',
+            duplicate_confirmed: true,
+            lines: [{ ...line(sku, 1), approval_route: 'self_approval' }],
+          },
+          metadata: {
+            correlation_id: randomUUID(),
+            actor: { user_id: requesterId, role: 'floor_supervisor', location_id: siteA },
+            occurred_at: new Date().toISOString(),
+          },
+        }),
+        (err: unknown) => (err as { errorCode?: string }).errorCode === 'INVALID_PARAMS',
+      );
+    });
   });
 
   // --- AC 3: fallback, never reject ----------------------------------------------------------------
@@ -1099,7 +1128,7 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
       );
     });
 
-    it('an issue that would pass the cap is refused 409 STANDING_APPROVAL_LAPSED and the line is re-routed, not rejected; reaching the cap exactly is allowed', async () => {
+    it('an issue that would pass the cap issues what fits and re-routes the remainder (D8), never a rejection; with no room left it is refused 409 STANDING_APPROVAL_LAPSED', async () => {
       const sku = await newSku('CAPISSUE');
       await receive(sku, 100);
       await activeGrant(saBody(sku, { monthly_qty_cap: 6 }));
@@ -1118,33 +1147,30 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
         ).status,
         201,
       );
-      const over = await issue(b.indent['indent_id'] as string, [
-        issueLine(b.lines[0]!['indent_line_id'] as string, 4),
-      ]);
-      assert.strictEqual(over.status, 409, JSON.stringify(over.body));
-      assert.strictEqual(over.body['error_code'], 'STANDING_APPROVAL_LAPSED');
-      const details = over.body['details'] as Row;
-      assert.deepStrictEqual(details['rerouted_lines'], [b.lines[0]!['indent_line_id']]);
-      assert.strictEqual((details['lapsed_lines'] as Row[])[0]!['reason'], 'monthly_cap_exceeded');
+      const bLine = b.lines[0]!['indent_line_id'] as string;
+      const over = await issue(b.indent['indent_id'] as string, [issueLine(bLine, 4)]);
+      // 4 used of 6: the 2 that fit are issued on the grant, the other 2 fall back to DOA.
+      assert.strictEqual(over.status, 201, JSON.stringify(over.body));
+      assert.deepStrictEqual(over.body['rerouted_lines'], [bLine]);
+      const lapsedB = (over.body['lapsed_lines'] as Row[])[0]!;
+      assert.strictEqual(lapsedB['reason'], 'monthly_cap_exceeded');
+      assert.strictEqual(lapsedB['cap_left_qty'], '2.000');
+      assert.strictEqual((over.body['standing_approval_texts'] as string[]).length, 1);
 
-      // Re-routed to the DOA approver, pending, nothing issued, never rejected.
-      const rerouted = await lineRow(b.lines[0]!['indent_line_id'] as string);
+      // Re-routed to the DOA approver, pending, 2 issued, never rejected.
+      const rerouted = await lineRow(bLine);
       assert.strictEqual(rerouted['approval_route'], 'doa');
       assert.strictEqual(rerouted['line_status'], 'pending');
       assert.strictEqual(rerouted['approver_actor_id'], deptHeadId);
-      assert.strictEqual(rerouted['issued_qty'], '0.000');
+      assert.strictEqual(rerouted['issued_qty'], '2.000');
       assert.strictEqual(rerouted['rejection_reason'], null);
-      const header = await getPool().query(`SELECT status FROM indent WHERE indent_id = $1`, [
-        b.indent['indent_id'],
-      ]);
-      assert.strictEqual((header.rows[0] as Row)['status'], 'raised');
       const reroutedAudit = await getPool().query(
         `SELECT 1 FROM audit_log WHERE error_code = 'indent.line_rerouted' AND details->>'indent_line_id' = $1`,
-        [b.lines[0]!['indent_line_id']],
+        [bLine],
       );
       assert.strictEqual(reroutedAudit.rows.length, 1);
 
-      // The DOA approver now decides it, and stores issues on the DOA basis.
+      // The DOA approver now decides the remainder, and stores issues it on the DOA basis.
       const decided = await call(
         'POST',
         `/api/v1/indents/${b.indent['indent_id'] as string}/approve`,
@@ -1152,19 +1178,62 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
         deptHeadHeaders,
       );
       assert.strictEqual(decided.status, 200, JSON.stringify(decided.body));
-      const viaDoa = await issue(b.indent['indent_id'] as string, [
-        issueLine(b.lines[0]!['indent_line_id'] as string, 4),
-      ]);
+      const viaDoa = await issue(b.indent['indent_id'] as string, [issueLine(bLine, 2)]);
       assert.strictEqual(viaDoa.status, 201, JSON.stringify(viaDoa.body));
       assert.match(viaDoa.body['slip_text'] as string, /Basis: Approved by /);
       assert.deepStrictEqual(viaDoa.body['standing_approval_texts'], []);
 
-      // 4 + 2 = 6 reaches the cap exactly; the DOA-routed line above did not count against it.
-      const exact = await issue(c.indent['indent_id'] as string, [
-        issueLine(c.lines[0]!['indent_line_id'] as string, 2),
+      // 4 + 2 = 6 reached the cap exactly (the DOA-basis 2 did not count): c has no room left,
+      // so nothing is issued and the whole line falls back.
+      const cLine = c.lines[0]!['indent_line_id'] as string;
+      const full = await issue(c.indent['indent_id'] as string, [issueLine(cLine, 2)]);
+      assert.strictEqual(full.status, 409, JSON.stringify(full.body));
+      assert.strictEqual(full.body['error_code'], 'STANDING_APPROVAL_LAPSED');
+      const details = full.body['details'] as Row;
+      assert.deepStrictEqual(details['rerouted_lines'], [cLine]);
+      assert.strictEqual((details['lapsed_lines'] as Row[])[0]!['cap_left_qty'], '0.000');
+      const cRow = await lineRow(cLine);
+      assert.strictEqual(cRow['approval_route'], 'doa');
+      assert.strictEqual(cRow['issued_qty'], '0.000');
+      const header = await getPool().query(`SELECT status FROM indent WHERE indent_id = $1`, [
+        c.indent['indent_id'],
       ]);
-      assert.strictEqual(exact.status, 201, JSON.stringify(exact.body));
-      assert.deepStrictEqual((exact.body['standing_approval_texts'] as string[]).length, 1);
+      assert.strictEqual((header.rows[0] as Row)['status'], 'raised');
+    });
+
+    it('a part-issued line re-routed to DOA: a reject closes only the open quantity and what left the store stays issued', async () => {
+      const sku = await newSku('PARTREJ');
+      await receive(sku, 100);
+      await activeGrant(saBody(sku, { monthly_qty_cap: 6 }));
+      const a = await raise([line(sku, 3)]);
+      const b = await raise([line(sku, 5)]);
+      const bLine = b.lines[0]!['indent_line_id'] as string;
+      const first = await issue(a.indent['indent_id'] as string, [
+        issueLine(a.lines[0]!['indent_line_id'] as string, 3),
+      ]);
+      assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+      const part = await issue(b.indent['indent_id'] as string, [issueLine(bLine, 5)]);
+      assert.strictEqual(part.status, 201, JSON.stringify(part.body));
+      assert.strictEqual((await lineRow(bLine))['issued_qty'], '3.000');
+
+      const rej = await call(
+        'POST',
+        `/api/v1/indents/${b.indent['indent_id'] as string}/reject`,
+        { rejection_reason: 'Enough this month', line_ids: [bLine] },
+        deptHeadHeaders,
+      );
+      assert.strictEqual(rej.status, 200, JSON.stringify(rej.body));
+      const after = await lineRow(bLine);
+      assert.strictEqual(after['line_status'], 'rejected');
+      assert.strictEqual(after['issued_qty'], '3.000');
+      const issuedRows = await getPool().query(
+        `SELECT COALESCE(SUM(quantity), 0)::text AS q FROM indent_issue_line WHERE indent_line_id = $1`,
+        [bLine],
+      );
+      assert.strictEqual(Number((issuedRows.rows[0] as Row)['q']), 3);
+      // The open 2 can no longer be issued.
+      const more = await issue(b.indent['indent_id'] as string, [issueLine(bLine, 1)]);
+      assert.strictEqual(more.status, 409, JSON.stringify(more.body));
     });
 
     it('a partial issue within the cap goes through; the remainder falls back and keeps what already left the store', async () => {
@@ -1193,6 +1262,8 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
       ]);
       assert.strictEqual(rest.status, 409, JSON.stringify(rest.body));
       assert.strictEqual(rest.body['error_code'], 'STANDING_APPROVAL_LAPSED');
+      const restLapsed = ((rest.body['details'] as Row)['lapsed_lines'] as Row[])[0]!;
+      assert.strictEqual(restLapsed['cap_left_qty'], '0.000');
       const after = await lineRow(second.lines[0]!['indent_line_id'] as string);
       assert.strictEqual(after['approval_route'], 'doa');
       assert.strictEqual(after['line_status'], 'pending');
@@ -1329,6 +1400,16 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
       const row = await lineRow(lineId);
       assert.strictEqual(row['self_approved'], false);
       assert.strictEqual(row['decided_by'], deptHeadId);
+    });
+
+    it('an unpriced line has no known value, so it is never within the limit', async () => {
+      const sku = await newSku('SELFNOPRICE');
+      const raised = await raise([line(sku, 1000, null)], limitHolderHeaders);
+      const lineId = raised.lines[0]!['indent_line_id'] as string;
+      const res = await selfApprove(raised.indent['indent_id'] as string, [lineId]);
+      assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+      assert.strictEqual(res.body['error_code'], 'INDENT_RAISER_CANNOT_APPROVE');
+      assert.strictEqual((await lineRow(lineId))['line_status'], 'pending');
     });
 
     it('a self-reject is refused; a pending limit, a person without a limit and a revoked limit have no right', async () => {

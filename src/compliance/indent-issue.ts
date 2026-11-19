@@ -28,7 +28,7 @@ import { emitNotificationInTransaction } from '../notify/emit.js';
 import { toIstCalendarDate } from '../lib/business-days.js';
 import { renderIssueSlip, type IssueSlipLine } from '../warehouse/document-renderer.js';
 import { alreadyPersisted } from './indent.js';
-import { qtyExceeds, toMilli } from '../lib/milli.js';
+import { milliToText, qtyExceeds, toMilli } from '../lib/milli.js';
 import {
   getGrantById,
   getGrantForUpdate,
@@ -365,14 +365,19 @@ export interface LapsedLine {
   line_no: number;
   standing_grant_id: string | null;
   reason: 'no_grant' | 'grant_not_active' | 'end_date_passed' | 'monthly_cap_exceeded';
+  /** Position of the refused entry in the issue's `lines` (a line may appear once per bin). */
+  input_index: number;
+  /** monthly_cap_exceeded only: quantity the cap still allows for this entry (D8 partial issue). */
+  cap_left_qty?: string;
 }
 
 /**
  * Story 4.8 (D8): the binding check for every line routed standing_approval, under the grant row
  * lock (taken in id order so two issues cannot deadlock), after the Story 4.11 guards and before
  * any write. Returns nothing when every grant still holds; otherwise refuses the WHOLE issue with
- * 409 STANDING_APPROVAL_LAPSED naming each lapsed line. The route re-routes those lines to DOA in
- * its own committed transaction (this one rolls back with the refusal). Cap arithmetic is exact
+ * 409 STANDING_APPROVAL_LAPSED naming each lapsed line, and for a cap overrun the quantity the cap
+ * still allows. The route retries with that quantity (partial issue within the cap) and re-routes
+ * the lapsed lines' remainder to DOA in its own committed transaction. Cap arithmetic is exact
  * thousandths; the month is the IST calendar month of the issue (D7).
  */
 async function assertStandingGrantsHold(
@@ -395,22 +400,31 @@ async function assertStandingGrantsHold(
     const gid = line.standing_grant_id;
     const grant = gid ? (grants.get(gid) ?? null) : null;
     let reason: LapsedLine['reason'] | null = null;
+    let capLeft: bigint | null = null;
     if (!gid) reason = 'no_grant';
     else if (!grant || grant.status !== 'active') reason = 'grant_not_active';
     else if (grant.end_date !== null && grant.end_date < today) reason = 'end_date_passed';
     else if (grant.monthly_qty_cap !== null) {
-      const used = toMilli(await monthToDateIssued(gid, month, client));
-      const total = used + (issuing.get(gid) ?? 0n) + toMilli(input.quantity);
-      if (total > toMilli(grant.monthly_qty_cap)) reason = 'monthly_cap_exceeded';
+      const used = toMilli(await monthToDateIssued(gid, month, client)) + (issuing.get(gid) ?? 0n);
+      const cap = toMilli(grant.monthly_qty_cap);
+      if (used + toMilli(input.quantity) > cap) {
+        reason = 'monthly_cap_exceeded';
+        capLeft = cap > used ? cap - used : 0n;
+      }
     }
     if (reason === null && gid) {
       issuing.set(gid, (issuing.get(gid) ?? 0n) + toMilli(input.quantity));
     } else if (reason !== null) {
+      // The part the cap still allows is reserved here, so a later entry on the same grant
+      // cannot be offered the same room again.
+      if (gid && capLeft !== null) issuing.set(gid, (issuing.get(gid) ?? 0n) + capLeft);
       lapsed.push({
         indent_line_id: line.indent_line_id,
         line_no: line.line_no,
         standing_grant_id: gid,
         reason,
+        input_index: resolved.findIndex((r) => r.input === input),
+        ...(capLeft !== null ? { cap_left_qty: milliToText(capLeft) } : {}),
       });
     }
   }

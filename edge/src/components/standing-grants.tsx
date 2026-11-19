@@ -63,7 +63,8 @@ export function StandingGrants({ online = true }: { online?: boolean }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const next: Lists = { held: [], assigned: [], pending: [] };
+      // A section whose request fails stays null (no empty-state sentence); the message says why.
+      const next: Lists = { held: null, assigned: null, pending: null };
       for (const section of Object.keys(QUERY) as Section[]) {
         const response = await authorizedFetch(`/api/v1/standing-grants?${QUERY[section]}`);
         if (!response.ok) {

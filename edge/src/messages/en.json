@@ -282,6 +282,7 @@
   "errors.GRANT_SCOPE_INVALID": "Name one active item or one active item group.",
   "errors.GRANT_GRANTEE_INVALID": "The person must be an active user.",
   "errors.GRANT_NOT_FOUND": "That grant does not exist.",
+  "errors.GRANT_END_DATE_PASSED": "The end date of this grant has already passed.",
   "errors.STANDING_APPROVAL_LAPSED": "The standing approval no longer covers this line; it has gone to normal approval.",
   "errors.INDENT_LINE_CLOSED": "That requisition line was closed at stores.",
   "errors.INDENT_ISSUE_EXCEEDS_APPROVED": "The quantity exceeds what is still open on that line.",

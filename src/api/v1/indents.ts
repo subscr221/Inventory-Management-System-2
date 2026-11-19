@@ -40,7 +40,10 @@ import {
   assertHeaderIssuable,
   assertHeaderClosable,
   assertLineIssuable,
+  type IssueLineInput,
+  type LapsedLine,
 } from '../../compliance/indent-issue.js';
+import { toMilli } from '../../lib/milli.js';
 import { withOpenQty } from '../../read/projections/indent.js';
 import {
   getIndentIssueById,
@@ -749,15 +752,14 @@ export const issueIndentBase: RouteHandler = async (req, res, params) => {
   const actor = actorContext(req);
   const now = new Date().toISOString();
   const issueId = typeof suppliedIssueId === 'string' ? suppliedIssueId : randomUUID();
-  let persisted;
-  try {
-    persisted = await persistEvent(
+  const issueWith = (lines: IssueLineInput[]) =>
+    persistEvent(
       {
         stream_type: 'procurement',
         stream_id: indent.indent_id,
         event_type: 'indent.issued',
         event_id: randomUUID(),
-        payload: { indent_id: indent.indent_id, issue_id: issueId, lines: inputs },
+        payload: { indent_id: indent.indent_id, issue_id: issueId, lines },
         metadata: {
           correlation_id: indent.correlation_id ?? randomUUID(),
           actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
@@ -766,33 +768,65 @@ export const issueIndentBase: RouteHandler = async (req, res, params) => {
       },
       auditCtxFor(req, actor, 201),
     );
+  const lapsedOf = (err: unknown): LapsedLine[] | null =>
+    err instanceof AppError &&
+    err.errorCode === 'STANDING_APPROVAL_LAPSED' &&
+    Array.isArray(err.details['lapsed_lines'])
+      ? (err.details['lapsed_lines'] as LapsedLine[])
+      : null;
+  // Story 4.8 (D8): lapsed lines go back to normal approval in a committed transaction of their
+  // own. A failed reroute must not turn the outcome into a 500: report every line unrouted.
+  const rerouteLapsed = (lapsed: LapsedLine[]) =>
+    rerouteLapsedLinesToDoa(
+      indent.indent_id,
+      lapsed,
+      { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+      indent.correlation_id,
+    ).catch(() => ({
+      rerouted: [] as string[],
+      failed: lapsed.map((l) => ({
+        indent_line_id: l.indent_line_id,
+        error_code: 'REROUTE_FAILED',
+      })),
+    }));
+  const refuseLapsed = async (err: AppError, lapsed: LapsedLine[]): Promise<never> => {
+    const outcome = await rerouteLapsed(lapsed);
+    throw new AppError(409, 'STANDING_APPROVAL_LAPSED', err.message, {
+      ...err.details,
+      lapsed_lines: lapsed,
+      rerouted_lines: outcome.rerouted,
+      reroute_failed: outcome.failed,
+    });
+  };
+  let persisted;
+  let partial: { lapsed: LapsedLine[]; rerouted: string[]; failed: unknown[] } | null = null;
+  try {
+    persisted = await issueWith(inputs);
   } catch (err) {
-    // Story 4.8 (D8): the seam refused the issue because a standing approval no longer holds. That
-    // transaction is rolled back; the lapsed lines go back to normal approval in a committed one
-    // of their own, and the caller is told both facts. Never a rejection of the line.
-    const lapsed = err instanceof AppError ? err.details['lapsed_lines'] : undefined;
-    if (
-      err instanceof AppError &&
-      err.errorCode === 'STANDING_APPROVAL_LAPSED' &&
-      Array.isArray(lapsed)
-    ) {
-      const outcome = await rerouteLapsedLinesToDoa(
-        indent.indent_id,
-        lapsed as Array<{
-          indent_line_id: string;
-          reason?: string;
-          standing_grant_id?: string | null;
-        }>,
-        { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
-        indent.correlation_id,
-      );
-      throw new AppError(409, 'STANDING_APPROVAL_LAPSED', err.message, {
-        ...err.details,
-        rerouted_lines: outcome.rerouted,
-        reroute_failed: outcome.failed,
-      });
+    // Story 4.8 (D8): the seam refused the issue because a standing approval no longer holds.
+    // Partial issue within the cap is allowed and the remainder falls back: retry with each
+    // overrun entry cut to what the cap still allows (an entry naming serials cannot be cut), drop
+    // entries whose grant lapsed outright, then re-route every lapsed line's remainder to DOA.
+    const lapsed = lapsedOf(err);
+    if (!lapsed) throw err;
+    const retry = inputs.flatMap((input, i) => {
+      const hit = lapsed.find((l) => l.input_index === i);
+      if (!hit) return [input];
+      return hit.cap_left_qty && toMilli(hit.cap_left_qty) > 0n && input.serials === null
+        ? [{ ...input, quantity: hit.cap_left_qty }]
+        : [];
+    });
+    if (retry.length === 0) return refuseLapsed(err as AppError, lapsed);
+    try {
+      persisted = await issueWith(retry);
+    } catch (retryErr) {
+      // The grant moved between the two attempts: nothing was issued, every lapsed line falls back.
+      const again = lapsedOf(retryErr);
+      if (!again) throw retryErr;
+      return refuseLapsed(retryErr as AppError, [...lapsed, ...again]);
     }
-    throw err;
+    const outcome = await rerouteLapsed(lapsed);
+    partial = { lapsed, rerouted: outcome.rerouted, failed: outcome.failed };
   }
   const issue = await getIndentIssueById(issueId);
   sendJson(res, 201, {
@@ -808,6 +842,13 @@ export const issueIndentBase: RouteHandler = async (req, res, params) => {
       : [],
     indent: await getIndentWithCounts(indent.indent_id),
     lines: await presentLines((await getIndentLines(indent.indent_id)).map(withOpenQty)),
+    ...(partial
+      ? {
+          lapsed_lines: partial.lapsed,
+          rerouted_lines: partial.rerouted,
+          reroute_failed: partial.failed,
+        }
+      : {}),
   });
 };
 

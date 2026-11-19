@@ -157,7 +157,8 @@ function assertLineIdsShape(p: Record<string, unknown>): void {
   }
 }
 
-const LINE_ROUTES = new Set(['doa', 'standing_approval', 'self_approval']);
+// Story 4.8 (D10): self-approval is an explicit line decision, never a route a raise can claim.
+const RAISE_ROUTES = new Set(['doa', 'standing_approval']);
 
 function assertIndentRaisedShape(p: Record<string, unknown>): void {
   if (!isUuid(p['indent_id'])) reject('INVALID_PARAMS', 'indent_id is required and must be a UUID');
@@ -226,12 +227,9 @@ function assertIndentRaisedShape(p: Record<string, unknown>): void {
     }
     if (
       line['approval_route'] !== undefined &&
-      !LINE_ROUTES.has(line['approval_route'] as string)
+      !RAISE_ROUTES.has(line['approval_route'] as string)
     ) {
-      reject(
-        'INVALID_PARAMS',
-        `Line ${lineNo}: approval_route must be doa, standing_approval or self_approval`,
-      );
+      reject('INVALID_PARAMS', `Line ${lineNo}: approval_route must be doa or standing_approval`);
     }
     for (const key of ['approver_actor_id', 'doa_entry_id', 'standing_grant_id'] as const) {
       if (line[key] !== undefined && line[key] !== null && !isUuid(line[key])) {
@@ -587,7 +585,7 @@ async function applyIndentRaised(
   for (const line of lines) {
     lineNo += 1;
     const route = (typeof line['approval_route'] === 'string' ? line['approval_route'] : 'doa') as
-      'doa' | 'standing_approval' | 'self_approval';
+      'doa' | 'standing_approval';
     const preApproved = route !== 'doa';
     anyPreApproved ||= preApproved;
     // Story 4.8 (D6): a standing_approval line must name a grant that is real, active and covers
@@ -924,7 +922,13 @@ async function assertLineDecisionAllowed(
         toIstCalendarDate(new Date(occurredAt)),
         client,
       );
-      if (limit && limit.limit_amount !== null && amountLte(line.line_value, limit.limit_amount)) {
+      // An unpriced line has no known value (line_value is 0), so it is never within a limit.
+      if (
+        limit &&
+        limit.limit_amount !== null &&
+        line.unit_price_estimate !== null &&
+        amountLte(line.line_value, limit.limit_amount)
+      ) {
         return { selfApprovalGrantId: limit.grant_id };
       }
     }

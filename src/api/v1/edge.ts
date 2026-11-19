@@ -424,11 +424,11 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   { name: 'Gate entry', modules: 'gate', functionScope: 'write' },
   // Story 3.14 (AC 1): the storekeeper's task inbox, for receiving write at the site.
   { name: 'Stores', modules: ['receiving'], functionScope: 'write' },
-// Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
-{ name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
-// Story 3.16 (AC 1): the floor task inbox and pick execution screen, for people holding
-// warehouse write at the site (warehouse_operator picker, store_assistant, supervisors).
-{ name: 'Floor tasks', modules: ['warehouse'], functionScope: 'write' },
+  // Story 4.11 (review): the stores counter issue page, for people holding warehouse write.
+  { name: 'Stores issue', modules: ['warehouse'], functionScope: 'write' },
+  // Story 3.16 (AC 1): the floor task inbox and pick execution screen, for people holding
+  // warehouse write at the site (warehouse_operator picker, store_assistant, supervisors).
+  { name: 'Floor tasks', modules: ['warehouse'], functionScope: 'write' },
   // Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
   { name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
 ];
@@ -893,6 +893,11 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
         requesterUserId: authContext.userId,
         siteId: typeof siteId === 'string' ? siteId : '',
       });
+      // Self-approval is a server decision (Story 4.8 D10); drop any client claim, as /events does.
+      for (const line of lines) {
+        delete line['self_approved'];
+        delete line['self_approval_grant_id'];
+      }
       body.payload['lines'] = lines.map((line, i) => ({
         ...line,
         approval_route: routes[i]!.approval_route,

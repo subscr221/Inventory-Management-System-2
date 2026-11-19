@@ -1388,3 +1388,10 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - Approvals inbox stops at 200 rows per list (the server cap) with no "more" row, and the tab counts stop there too (`shortcut:` in `edge/src/components/approvals.tsx`). Page the lists when one approver can hold more than 200.
 - The approver band line is not scoped to a site although the Approvals nav entry is (`approverBandsFor` in `src/api/v1/indents.ts`, AC 2, AC 3, Task 1.2). A holder at two sites sees both sites' bands. Needs a location passed once the pilot has a second site.
 - The DOA note tells a delegate they are "the requester's head of department" (`doaNote` in `edge/src/components/approvals-model.ts`). Needs acting-for copy from the UX owner.
+
+## Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)
+
+- A standing-approval line that lapses at issue and has no resolvable DOA approver stays `standing_approval`; `rerouteLapsedLinesToDoa` reports it in `reroute_failed` and every later issue attempt answers 409 `STANDING_APPROVAL_LAPSED` (`src/compliance/standing-reroute.ts`). Belongs to the no-band fallback of Story 4.9.
+- `getIndent` and the raise response return `line_value` and `unit_price_estimate` to a requester who holds no self-approval limit; only the `mine=true` list withholds `estimated_value` (`src/api/v1/indents.ts`). Pre-existing from Story 4.10 line presentation; check against the Story 1.15 no-number rule.
+- Standing grants edge screen asks for the grantee as a raw user id (`edge/src/components/standing-grants.tsx`). Kept by user ruling 2026-11-19 as a recorded scope change from D14; add a person picker.
+- Self-approval limit is checked per line only (D10, `decideLine` in `src/compliance/indent.ts`). A requester can split a purchase across lines or requisitions and self-approve each part. Kept per line for the pilot by user ruling 2026-11-19; the planned fix is a monthly aggregate of self-approved line value per grant.
