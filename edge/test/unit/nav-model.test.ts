@@ -41,6 +41,12 @@ describe('Story 1.15 nav model', () => {
     assert.equal(names.indexOf('Damage cases'), names.indexOf('Report damage') + 1);
   });
 
+  it('Story 8.11 (AC 1): registers the QC inbox with a real path and catalog label', () => {
+    const entry = NAV_ENTRIES.find((e) => e.name === 'QC inbox');
+    assert.deepEqual(entry, { name: 'QC inbox', href: '/qc/tasks', label: 'nav.qcInbox' });
+    assert.equal(typeof message('nav.qcInbox'), 'string', 'nav.qcInbox missing from en.json');
+  });
+
   it('renders only what the server advertised, in server order', () => {
     const names = entriesFor([
       'Dashboard',

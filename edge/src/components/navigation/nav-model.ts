@@ -32,6 +32,8 @@ export const NAV_ENTRIES: NavEntry[] = [
   { name: 'Standing grants', href: '/standing-grants', label: 'nav.standingGrants' },
   // Story 4.12 (AC 1): the approvals inbox, for indent_approval band holders and delegates.
   { name: 'Approvals', href: '/approvals', label: 'nav.approvals' },
+  // Story 8.11 (AC 1): the QC inspector's inbox and lot disposition.
+  { name: 'QC inbox', href: '/qc/tasks', label: 'nav.qcInbox' },
   // Enterprise views (Phase 2/4): real paths, rendered only when the bootstrap names them.
   { name: 'Workflows', href: '/workflows', label: 'nav.workflows' },
   { name: 'Access control', href: '/access-control', label: 'nav.accessControl' },

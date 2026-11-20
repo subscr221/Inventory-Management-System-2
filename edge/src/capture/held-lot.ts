@@ -13,6 +13,7 @@ export interface HeldLotRow {
   sku: string;
   quality_hold_status: string;
   quality_hold_reason: string | null;
+  updated_at?: string | null;
 }
 
 interface HeldLotReader {
@@ -24,11 +25,19 @@ export async function getHeldLot(
   lotNumber: string,
 ): Promise<HeldLotRow | null> {
   const rows = await db.getAll<HeldLotRow>(
-    `SELECT lot_id, lot_number, sku, quality_hold_status, quality_hold_reason
+    `SELECT lot_id, lot_number, sku, quality_hold_status, quality_hold_reason, updated_at
        FROM held_lot WHERE lot_number = ? LIMIT 1`,
     [lotNumber],
   );
   return rows[0] ?? null;
+}
+
+/** Story 8.11 (AC 6): every synced held lot, for the offline "all sites" holds list. */
+export async function listHeldLots(db: HeldLotReader): Promise<HeldLotRow[]> {
+  return db.getAll<HeldLotRow>(
+    `SELECT lot_id, lot_number, sku, quality_hold_status, quality_hold_reason, updated_at
+       FROM held_lot WHERE quality_hold_status = 'held'`,
+  );
 }
 
 /** Throws with a technician-facing message when the lot is held; a no-op otherwise. */

@@ -1574,6 +1574,15 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
       assert.ok(entries.includes('Damage cases'), `${who} works damage cases`);
       assert.ok(entries.indexOf('Report damage') < entries.indexOf('Damage cases'));
     }
+    // Story 8.11 (AC 1): QC inbox is advertised to qc module holders after Standing grants, never to non-qc roles.
+    for (const who of ['qc1', 'qch']) {
+      const entries = await nav(who);
+      assert.ok(entries.includes('QC inbox'), `${who} sees QC inbox`);
+      assert.ok(entries.indexOf('Standing grants') < entries.indexOf('QC inbox'));
+    }
+    for (const who of ['emp1', 'store1', 'fin', 'ceo']) {
+      assert.ok(!(await nav(who)).includes('QC inbox'), `${who} does not see QC inbox`);
+    }
     const ceo = await makeRequest(port, 'GET', '/api/v1/edge/bootstrap', undefined, H['ceo']);
     assert.strictEqual(ceo.body['role'], 'ceo', 'the CEO operates as ceo, not as the base hat');
   });

@@ -69,6 +69,7 @@ import {
   type WorklistMeter,
 } from '../local-db/worklist';
 import { EdgePowerSyncConnector } from '../sync/connector';
+import { listHeldLots, type HeldLotRow } from '../capture/held-lot';
 import { deriveSyncUiState, type SyncUiState } from '../sync/sync-status';
 import { refreshWorklist } from '../sync/worklist-refresh';
 import { authorizedFetch } from '../session/api-fetch';
@@ -140,6 +141,9 @@ interface RuntimeState {
   closureCatalogue: { fault: string[]; cause: string[]; remedy: string[] };
   selectedWorkOrderId: string | null;
   selectedReservations: CachedReservationRow[];
+  // Story 8.11 (AC 6): the synced held_lot rows and last PowerSync sync time for offline holds.
+  heldLots: HeldLotRow[];
+  heldLotsAsOf: string | null;
 }
 
 /** Bootstrap refused for the account's site assignment: already shown, not a sync failure. */
@@ -177,6 +181,8 @@ const initialState: RuntimeState = {
   closureCatalogue: { fault: [], cause: [], remedy: [] },
   selectedWorkOrderId: null,
   selectedReservations: [],
+  heldLots: [],
+  heldLotsAsOf: null,
 };
 
 const WORKLIST_META_KEY = 'inventory-edge-worklist-meta';
@@ -262,6 +268,8 @@ export function EdgeClient({
     | 'putaway-task'
     | 'grn-read'
     | 'floor-tasks'
+    | 'qc-tasks'
+    | 'qc-holds'
     | 'approvals';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
@@ -377,7 +385,19 @@ export function EdgeClient({
     });
   }, []);
 
-  // Story 7.8 (Binding Decision 11): fetch on app start when online and on the `online` event,
+  // Story 8.11 (AC 6): read the synced held_lot rows and PowerSync sync timestamp for offline holds.
+  const loadHeldLots = useCallback(async (db: PowerSyncDatabase) => {
+    const heldLots = await listHeldLots(db).catch(() => []);
+    const rawSync = (db as unknown as { currentStatus?: { lastSyncedAt?: Date | string | null } })
+      .currentStatus?.lastSyncedAt;
+    const heldLotsAsOf =
+      rawSync instanceof Date
+        ? rawSync.toISOString()
+        : typeof rawSync === 'string' && rawSync
+          ? rawSync
+          : null;
+    setState((current) => ({ ...current, heldLots, heldLotsAsOf }));
+  }, []);
   // never on a timer. A failed fetch leaves the cached snapshot in place.
   const refreshWorklistNow = useCallback(
     async (db: PowerSyncDatabase) => {
@@ -393,8 +413,9 @@ export function EdgeClient({
         }),
       );
       await loadWorklistFromCache(db);
+      await loadHeldLots(db);
     },
-    [loadWorklistFromCache],
+    [loadWorklistFromCache, loadHeldLots],
   );
 
   useEffect(() => {
@@ -443,6 +464,7 @@ export function EdgeClient({
           }));
         }
         await loadWorklistFromCache(db);
+        await loadHeldLots(db);
 
         // Story 1.12: sign in AFTER the cached context has rendered and BEFORE any API call, so an
         // offline start never blocks on auth (AC5) and every call below carries the bearer (AC2).
@@ -566,6 +588,12 @@ export function EdgeClient({
            SELECT id, retained_reason, server_error_code, retained_at FROM edge_outbox_retained`,
           [],
           { onResult: () => void refreshLocalState(db) },
+          { signal: watchAbort.signal },
+        );
+        db.watch(
+          `SELECT lot_id, quality_hold_status, updated_at FROM held_lot`,
+          [],
+          { onResult: () => void loadHeldLots(db) },
           { signal: watchAbort.signal },
         );
         stopWatching = () => {
@@ -1312,6 +1340,19 @@ export function EdgeClient({
         onConfirmPickLine: confirmPickLine,
         settlementOf: pickSettlement,
         refusalCodeOf: pickRefusalCode,
+      }}
+      qcInbox={{
+        online: state.online,
+        ready: state.navigationConfirmed,
+        siteId: state.siteId,
+        userId: state.userId,
+        role: state.role,
+      }}
+      qcHolds={{
+        online: state.online,
+        siteId: state.siteId,
+        offlineHeldLots: state.heldLots,
+        offlineAsOf: state.heldLotsAsOf,
       }}
       userId={state.userId}
       onRetry={() => {

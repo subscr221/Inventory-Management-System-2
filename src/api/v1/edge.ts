@@ -431,6 +431,8 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   { name: 'Floor tasks', modules: ['warehouse'], functionScope: 'write' },
   // Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
   { name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
+  // Story 8.11 (AC 1): the QC inspector's inbox, for a qc module assignment covering the site.
+  { name: 'QC inbox', modules: ['qc'], functionScope: 'read' },
 ];
 
 /**

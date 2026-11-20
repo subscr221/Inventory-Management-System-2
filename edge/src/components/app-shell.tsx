@@ -41,6 +41,8 @@ import { PutawayTask } from './putaway-task';
 import { GrnRead } from './grn-read';
 import { FloorTasks, type FloorTasksProps } from './floor-tasks';
 import { Approvals } from './approvals';
+import { QcInbox, type QcInboxProps } from './qc-inbox';
+import { QcHolds, type QcHoldsProps } from './qc-holds';
 import { useState } from 'react';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
@@ -99,6 +101,9 @@ export interface AppShellProps {
   storesAccept?: StoresAcceptProps;
   /** Story 3.16: the floor task inbox and pick execution screen, injected by the edge client. */
   floorTasks?: FloorTasksProps;
+  /** Story 8.11: the QC inbox and holds page, injected by the edge client. */
+  qcInbox?: QcInboxProps;
+  qcHolds?: QcHoldsProps;
   /** Story 8.9: the signed-in user, for the damage cases workbench grouping. */
   userId?: string;
   /**
@@ -157,6 +162,8 @@ type BaseView =
   | 'putaway-task'
   | 'grn-read'
   | 'floor-tasks'
+  | 'qc-tasks'
+  | 'qc-holds'
   | 'approvals';
 
 /** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
@@ -180,6 +187,9 @@ const BASE_VIEW_ENTRY: Record<BaseView, string> = {
   'grn-read': 'Stores',
   // Story 3.16 (AC 1): the floor task inbox and pick execution screen.
   'floor-tasks': 'Floor tasks',
+  // Story 8.11 (AC 1): the QC inbox and holds page.
+  'qc-tasks': 'QC inbox',
+  'qc-holds': 'QC inbox',
   // Story 4.12 (AC 1): the approvals inbox and requisition approval detail.
   approvals: 'Approvals',
 };
@@ -237,6 +247,8 @@ export function AppShell({
   storesInbox,
   storesAccept,
   floorTasks,
+  qcInbox,
+  qcHolds,
   userId = '',
   view = 'frontline',
   online = true,
@@ -443,6 +455,18 @@ export function AppShell({
                   userId,
                 })}
               />
+            ) : view === 'qc-tasks' ? (
+              <QcInbox
+                {...(qcInbox ?? {
+                  online,
+                  ready: navigationConfirmed,
+                  siteId: '',
+                  userId,
+                  role,
+                })}
+              />
+            ) : view === 'qc-holds' ? (
+              <QcHolds {...(qcHolds ?? { online, siteId: '' })} />
             ) : view === 'damage-cases' ? (
               <DamageCases online={online} userId={userId} />
             ) : view === 'approvals' ? (

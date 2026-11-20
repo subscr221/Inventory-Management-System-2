@@ -1878,3 +1878,218 @@ textarea:focus-visible {
 .approvals-screen[data-task-mode="true"] {
   padding-bottom: 0;
 }
+
+/* ===== Story 8.11: QC inbox, inspection detail and holds ===== */
+.qc-inbox,
+.qc-screen,
+.qc-detail,
+.qc-holds {
+  display: grid;
+  gap: var(--space-3);
+}
+
+@media (min-width: 600px) {
+  .qc-screen[data-device-class="tablet"]:has(.qc-inbox-pane),
+  .qc-screen[data-device-class="desktop"]:has(.qc-inbox-pane),
+  .qc-screen[data-device-class="desktop-touch"]:has(.qc-inbox-pane) {
+    grid-template-columns: minmax(18rem, 26rem) 1fr;
+    align-items: start;
+  }
+}
+
+.qc-inbox-pane,
+.qc-detail {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.qc-inbox-header,
+.qc-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.qc-scan,
+.qc-split,
+.qc-note-compose,
+.qc-hold-release,
+.qc-retention {
+  display: grid;
+  gap: var(--space-2);
+}
+
+#qc-scan-input,
+.qc-measured,
+.qc-hold-reason,
+.qc-split input,
+.qc-note-compose textarea,
+.qc-hold-release input,
+.qc-retention input,
+.qc-detail fieldset input:not([type="radio"]):not([type="checkbox"]) {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface, #fff);
+}
+
+.qc-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.qc-facts dt {
+  font-size: var(--caption-size);
+  color: var(--off);
+}
+
+.qc-facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.qc-char-list,
+.qc-note-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.qc-char {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.qc-char-actions,
+.qc-decision-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.qc-pill,
+.qc-chip {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: var(--caption-size);
+  font-weight: 600;
+  background: var(--surface-alt, #eef2f6);
+  color: var(--ink);
+}
+
+.qc-pill.fail {
+  background: #fde8e8;
+  color: #9b1c1c;
+}
+
+.qc-hint,
+.qc-note-meta,
+.qc-scan-hint {
+  margin: 0;
+  color: var(--off);
+  font-size: var(--caption-size);
+}
+
+.qc-note-photo {
+  display: block;
+  max-width: 12rem;
+  max-height: 12rem;
+  border-radius: var(--radius);
+  object-fit: cover;
+}
+
+.qc-detail fieldset {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.qc-detail fieldset label,
+.qc-hold-release label,
+.qc-retention label,
+.qc-split label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.qc-detail fieldset label:has(> input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.qc-detail[data-device-class="handheld"] .primary-action,
+.qc-detail[data-device-class="tablet"] .primary-action,
+.qc-detail[data-device-class="desktop-touch"] .primary-action,
+.qc-inbox[data-device-class="handheld"] .primary-action,
+.qc-inbox[data-device-class="tablet"] .primary-action,
+.qc-inbox[data-device-class="desktop-touch"] .primary-action,
+.qc-screen[data-device-class="handheld"] .primary-action,
+.qc-screen[data-device-class="tablet"] .primary-action,
+.qc-screen[data-device-class="desktop-touch"] .primary-action {
+  min-height: var(--touch-primary);
+}
+
+.qc-detail[data-device-class="handheld"] .secondary-action,
+.qc-detail[data-device-class="tablet"] .secondary-action,
+.qc-detail[data-device-class="desktop-touch"] .secondary-action,
+.qc-inbox[data-device-class="handheld"] .secondary-action,
+.qc-inbox[data-device-class="tablet"] .secondary-action,
+.qc-inbox[data-device-class="desktop-touch"] .secondary-action,
+.qc-screen[data-device-class="handheld"] .secondary-action,
+.qc-screen[data-device-class="tablet"] .secondary-action,
+.qc-screen[data-device-class="desktop-touch"] .secondary-action,
+.qc-inbox[data-device-class="handheld"] #qc-scan-input,
+.qc-inbox[data-device-class="tablet"] #qc-scan-input,
+.qc-inbox[data-device-class="desktop-touch"] #qc-scan-input,
+.qc-screen[data-device-class="handheld"] #qc-scan-input,
+.qc-screen[data-device-class="tablet"] #qc-scan-input,
+.qc-screen[data-device-class="desktop-touch"] #qc-scan-input {
+  min-height: var(--touch-secondary);
+}
+
+.qc-detail[data-device-class="desktop"] button,
+.qc-detail[data-device-class="desktop"] a,
+.qc-detail[data-device-class="desktop"] input:not([type="radio"]):not([type="checkbox"]),
+.qc-inbox[data-device-class="desktop"] button,
+.qc-inbox[data-device-class="desktop"] a,
+.qc-inbox[data-device-class="desktop"] #qc-scan-input,
+.qc-screen[data-device-class="desktop"] button,
+.qc-screen[data-device-class="desktop"] a,
+.qc-screen[data-device-class="desktop"] #qc-scan-input {
+  min-height: var(--control-compact);
+}
+
+@media (pointer: coarse) {
+  .qc-holds button,
+  .qc-holds a,
+  .qc-holds input {
+    min-height: var(--touch-secondary);
+  }
+  .qc-holds .primary-action {
+    min-height: var(--touch-primary);
+  }
+}
+
+@media (pointer: fine) and (min-width: 900px) {
+  .qc-holds button,
+  .qc-holds a,
+  .qc-holds input {
+    min-height: var(--control-compact);
+  }
+}
