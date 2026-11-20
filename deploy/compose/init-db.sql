@@ -9889,7 +9889,7 @@ CREATE TABLE IF NOT EXISTS qc_inspection_task (
   CONSTRAINT uq_qc_inspection_task_lot UNIQUE (lot_id),
   CONSTRAINT uq_qc_inspection_task_source UNIQUE (source_completion_type, source_completion_id),
   CONSTRAINT chk_qc_inspection_task_quantity CHECK (quantity > 0),
-  CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order')),
+  CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order', 'goods_receipt')),
   CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected')),
   CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released', 'accepted', 'rejected', 'split')),
   CONSTRAINT chk_qc_inspection_task_plan_scope CHECK (plan_scope IN ('standard', 'customer_override')),
@@ -9944,7 +9944,7 @@ BEGIN
       AND conrelid = 'qc_inspection_task'::regclass
   ) THEN
     ALTER TABLE qc_inspection_task
-      ADD CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order'));
+      ADD CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order', 'goods_receipt'));
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -15422,5 +15422,86 @@ BEGIN
         inspect_on_opening IS NOT NULL
         OR (inspect_note IS NULL AND inspect_photo_ref IS NULL)
       );
+  END IF;
+END $$;
+
+-- Story 8.10: the qc_inspection_task source-type widening, mirrored from the guarded block in
+-- read/projections/qc_inspection_task.sql. This copy exists for first-boot container init only -
+-- change both files together.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_source_type'
+      AND conrelid = 'qc_inspection_task'::regclass
+      AND pg_get_constraintdef(oid) NOT LIKE '%goods_receipt%'
+  ) THEN
+    ALTER TABLE qc_inspection_task DROP CONSTRAINT chk_qc_inspection_task_source_type;
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order', 'goods_receipt'));
+  END IF;
+END $$;
+
+-- putaway_task_qc_release: MIRROR of read/projections/putaway_task_qc_release.sql (Story 8.10;
+-- ALTER-only on putaway_task above). This copy exists for first-boot container init only - change
+-- both files together.
+
+ALTER TABLE putaway_task ADD COLUMN IF NOT EXISTS hold_reason TEXT;
+ALTER TABLE putaway_task ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_putaway_task_hold_reason'
+      AND conrelid = 'putaway_task'::regclass
+  ) THEN
+    ALTER TABLE putaway_task
+      ADD CONSTRAINT chk_putaway_task_hold_reason
+      CHECK (
+        hold_reason IS NULL
+        OR hold_reason IN ('no_inspection_plan', 'no_lot', 'duplicate_lot')
+      );
+  END IF;
+END $$;
+
+-- qc_observation_note: MIRROR of read/projections/qc_observation_note.sql (Story 8.10). This copy
+-- exists for first-boot container init only - change both files together.
+
+CREATE TABLE IF NOT EXISTS qc_observation_note (
+  note_id         UUID PRIMARY KEY,
+  task_id         UUID NOT NULL,
+  lot_id          UUID NOT NULL,
+  note            TEXT NOT NULL,
+  attachment_id   UUID,
+  recorded_by     UUID NOT NULL,
+  recorded_at     TIMESTAMPTZ NOT NULL,
+  source_event_id UUID NOT NULL UNIQUE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_qc_observation_note_length CHECK (char_length(note) BETWEEN 1 AND 1000)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qc_observation_note_task
+  ON qc_observation_note (task_id, recorded_at);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_observation_note_length'
+      AND conrelid = 'qc_observation_note'::regclass
+  ) THEN
+    ALTER TABLE qc_observation_note
+      ADD CONSTRAINT chk_qc_observation_note_length CHECK (char_length(note) BETWEEN 1 AND 1000);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON qc_observation_note TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON qc_observation_note TO readonly_user;
   END IF;
 END $$;

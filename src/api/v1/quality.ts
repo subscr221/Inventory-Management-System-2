@@ -39,6 +39,7 @@ import {
   NCR_HOLD_TERMINAL_OUTCOME,
   RELEASABLE_DISPOSITIONS,
   QC_OBSERVATION_RECORDED,
+  QC_OBSERVATION_NOTE_RECORDED,
   QC_RETENTION_SAMPLE_LOGGED,
   QC_REWORK_REQUESTED,
   QC_RESULT_RECORDED,
@@ -92,6 +93,12 @@ import { getLocationById } from '../../read/projections/location_register.js';
 import { stampActedLocation } from './actor-stamp.js';
 import { getLotById, getLotByNumberAndSku } from '../../read/projections/lot_master.js';
 import { getQcInspectionTaskByLotId } from '../../read/projections/qc_inspection_task.js';
+import { listQcObservationNotes } from '../../read/projections/qc_observation_note.js';
+import { getPutawayTaskByGrnLine } from '../../read/projections/putaway_task.js';
+import { getGrnById } from '../../read/projections/grn.js';
+import { getGrnLineById } from '../../read/projections/grn_line.js';
+import { listStockByLot } from '../../read/projections/stock_balance.js';
+import { getPurchaseOrderByRef } from '../../read/projections/erp_purchase_order.js';
 import {
   getOpenQcQualityHoldByLotId,
   getQcQualityHoldById,
@@ -321,6 +328,11 @@ const AUDITED_REJECTIONS = new Set([
   'WITNESS_HOLD_POINT_NOT_OPEN',
   'WITNESS_NOTICE_REQUIRED',
   'APPROVAL_AUTHORITY_MISMATCH',
+  // Story 8.10 (AC 3/AC 4): a refused observation note (unknown task, malformed body, or a photo
+  // the caller does not own) is a refused action on a statutory inspection record.
+  'QC_NOTE_ATTACHMENT_NOT_OWNED',
+  'QC_TASK_NOT_FOUND',
+  'INVALID_PARAMS',
 ]);
 
 function requireBody(
@@ -862,7 +874,7 @@ const listTasksBase: RouteHandler = async (req, res, _params) => {
       res,
       400,
       'INVALID_PARAMS',
-      'gate_status must be one of: qc_hold, conditionally_released',
+      'gate_status must be one of: qc_hold, conditionally_released, accepted, rejected, split',
     );
     return;
   }
@@ -925,11 +937,44 @@ const getTaskBase: RouteHandler = async (req, res, params) => {
     assertReadSiteAccess(req, task.site_id);
     const release = await getConditionalReleaseForLot(task.lot_id);
     const sampling = await getQcSamplingPlanByTaskId(taskId);
+    // Story 8.10 (AC 5): a goods_receipt task carries the GRN line evidence, its putaway row and
+    // the lot's held locations so the QC workbench can inspect and release without a second call.
+    let receipt: Record<string, unknown> | null = null;
+    let putaway: Record<string, unknown> | null = null;
+    let holdLocations: unknown[] = [];
+    if (task.source_completion_type === 'goods_receipt') {
+      const line = await getGrnLineById(task.source_completion_id);
+      if (line) {
+        const grn = await getGrnById(line.grn_id);
+        const po = grn?.po_ref_ext ? await getPurchaseOrderByRef(grn.po_ref_ext) : null;
+        receipt = {
+          grn_number: grn?.source_ref_ext ?? line.grn_id,
+          grn_id: line.grn_id,
+          supplier_name: po?.supplier_ref_ext ?? null,
+          received_quantity: line.received_qty,
+          uom: line.uom,
+          line_condition: line.line_condition,
+          reason_code: line.reason_code,
+          reason_note: line.reason_note,
+          reason_photo_ref: line.reason_photo_ref,
+          inspect_on_opening: line.inspect_on_opening,
+          inspect_note: line.inspect_note,
+          inspect_photo_ref: line.inspect_photo_ref,
+          material_photo_ref: line.material_photo_ref,
+        };
+        putaway = (await getPutawayTaskByGrnLine(line.grn_line_id)) as unknown as Record<
+          string,
+          unknown
+        > | null;
+        holdLocations = await listStockByLot(task.lot_number, task.sku, task.site_id);
+      }
+    }
     sendJson(res, 200, {
       task,
       sampling,
       disposition: release?.disposition ?? null,
       deviation: release?.deviation ?? null,
+      ...(receipt !== null ? { receipt, putaway, hold_locations: holdLocations } : {}),
     });
   } catch (err: unknown) {
     sendAppError(req, res, err);
@@ -1293,6 +1338,90 @@ const recordResultsBase: RouteHandler = (req, res, params) =>
 const recordObservationsBase: RouteHandler = (req, res, params) =>
   recordBatch(req, res, params, 'observation');
 
+/**
+ * Story 8.10 (AC 3, D11): POST /api/v1/qc/tasks/:taskId/notes. A free-text observation note with
+ * an optional caller-owned photo. Kept as a sibling of the per-characteristic observations batch so
+ * the reading grain stays untouched. Central-only by construction (nothing routes it to the edge).
+ */
+const recordObservationNoteBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let taskId = '';
+  let lotId: string | null = null;
+  let siteId: string | undefined;
+  try {
+    taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    lotId = task.lot_id;
+    siteId = task.site_id;
+    assertWriteSiteAccess(req, task.site_id);
+
+    const note = body['note'];
+    if (typeof note !== 'string' || note.trim() === '' || note.length > 1000) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'note must be a non-empty string of at most 1000 characters',
+      );
+    }
+    const rawAttachment = body['attachment_id'];
+    if (rawAttachment !== undefined && rawAttachment !== null && !isUuid(rawAttachment)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'attachment_id must be a UUID or null');
+    }
+    const attachmentId = (rawAttachment as string | null | undefined) ?? null;
+    if (attachmentId !== null) {
+      // The Story 8.9 precedent (damage.ts:1127-1140): an unclaimed id is allowed (the Story 1.8
+      // offline upload pattern), but another user's claimed photo is refused.
+      const attachment = await getPool().query(
+        `SELECT uploaded_by FROM attachment WHERE attachment_id = $1`,
+        [attachmentId],
+      );
+      const uploadedBy = attachment.rows[0]?.['uploaded_by'] as string | undefined;
+      if (uploadedBy !== undefined && uploadedBy !== actor.userId) {
+        throw new AppError(
+          403,
+          'QC_NOTE_ATTACHMENT_NOT_OWNED',
+          'attachment_id must name a photo you uploaded',
+          { attachment_id: attachmentId },
+        );
+      }
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: taskId,
+        event_type: QC_OBSERVATION_NOTE_RECORDED,
+        payload: {
+          task_id: taskId,
+          lot_id: task.lot_id,
+          note_id: randomUUID(),
+          note: note.trim(),
+          attachment_id: attachmentId,
+          recorded_at: optionalTimestamp(body, 'recorded_at', now),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, QC_OBSERVATION_NOTE_RECORDED, 'note_id');
+    assertTaskReplay(persisted, QC_OBSERVATION_NOTE_RECORDED, taskId);
+    sendJson(res, 201, {
+      event_id: persisted.event_id,
+      notes: await listQcObservationNotes(taskId),
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { task_id: taskId, lot_id: lotId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
 const listResultsBase: RouteHandler = async (req, res, params) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const characteristicId = url.searchParams.get('characteristic_id');
@@ -1326,7 +1455,10 @@ const listResultsBase: RouteHandler = async (req, res, params) => {
       limit: limitRaw === null ? undefined : Number(limitRaw),
       offset: offsetRaw === null ? undefined : Number(offsetRaw),
     });
-    sendJson(res, 200, { results });
+    // Story 8.10 (AC 3): the free-text observation notes ride alongside the reading batch; the
+    // `results` key is unchanged.
+    const notes = await listQcObservationNotes(taskId);
+    sendJson(res, 200, { results, notes });
   } catch (err: unknown) {
     sendAppError(req, res, err);
   }
@@ -1519,6 +1651,17 @@ const recordDispositionBase: RouteHandler = async (req, res, params) => {
     siteId = task.site_id;
     assertWriteSiteAccess(req, task.site_id);
 
+    // Story 8.10 (AC 4, D12): the QC-head pre-check mirrors the seam (config.quality.qcHeadRoles).
+    const qcHeadRoles: readonly string[] = config.quality.qcHeadRoles;
+    if (!qcHeadRoles.includes(actor.role)) {
+      throw new AppError(
+        403,
+        'APPROVAL_REQUIRED',
+        'Dispositioning a lot requires QC Head-level authority',
+        { task_id: taskId, qc_head_roles: qcHeadRoles },
+      );
+    }
+
     const disposition = body['disposition'];
     if (typeof disposition !== 'string' || !LOT_DISPOSITIONS.has(disposition)) {
       throw new AppError(400, 'INVALID_PARAMS', 'disposition must be one of: accept, reject');
@@ -1602,6 +1745,17 @@ const recordSplitBase: RouteHandler = async (req, res, params) => {
     lotId = task.lot_id;
     siteId = task.site_id;
     assertWriteSiteAccess(req, task.site_id);
+
+    // Story 8.10 (AC 4, D12): split is a QC-head decision.
+    const qcHeadRoles: readonly string[] = config.quality.qcHeadRoles;
+    if (!qcHeadRoles.includes(actor.role)) {
+      throw new AppError(
+        403,
+        'APPROVAL_REQUIRED',
+        'Splitting a lot requires QC Head-level authority',
+        { task_id: taskId, qc_head_roles: qcHeadRoles },
+      );
+    }
 
     if (typeof body['justification'] !== 'string' || body['justification'].trim() === '') {
       throw new AppError(400, 'INVALID_PARAMS', 'justification must be a non-empty string');
@@ -2200,6 +2354,11 @@ export const recordQcResultsHandler = requireRole({ module: 'qc', functionScope:
 );
 export const recordQcObservationsHandler = requireRole({ module: 'qc', functionScope: 'write' })(
   recordObservationsBase,
+);
+// Story 8.10 (AC 3): the free-text observation note with an optional photo. Central-only, same RBAC
+// shell as the other task writes.
+export const recordObservationNoteHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  recordObservationNoteBase,
 );
 export const listQcResultsHandler = requireRole({ module: 'qc', functionScope: 'read' })(
   listResultsBase,

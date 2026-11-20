@@ -184,6 +184,48 @@ export async function getStockBalancesBySku(
   return result.rows.map(mapRow);
 }
 
+export interface LotStockLocation {
+  lot_id: string;
+  location_id: string;
+  location_code: string;
+  quantity: string;
+  quarantine: boolean;
+}
+
+/**
+ * Story 8.10 (AC 5, Task 7.2): the held locations of one lot with their code and on-hand quantity.
+ * The QC workbench uses this to show where a held receipt lot physically sits (ZONE-QC-HOLD and its
+ * shelves). `stock_balance.lot_id` is the lot NUMBER, so the join is textual. Scoped to the task's
+ * site and to quarantine locations only: a lot number can repeat across sites, and after a release
+ * the same lot holds stock on ordinary shelves that must not read as "held".
+ */
+export async function listStockByLot(
+  lotNumber: string,
+  sku: string,
+  siteId: string,
+  client?: PoolClient,
+): Promise<LotStockLocation[]> {
+  const result = await runner(client).query(
+    `SELECT sb.lot_id, sb.location_id, lr.location_code,
+            SUM(sb.on_hand)::text AS quantity,
+            COALESCE(lr.quarantine, false) AS quarantine
+       FROM stock_balance sb
+       JOIN location_register lr ON lr.location_id = sb.location_id
+      WHERE sb.lot_id = $1 AND sb.sku = $2 AND sb.stock_class = 'owned'
+        AND lr.site_id = $3 AND COALESCE(lr.quarantine, false) = true
+      GROUP BY sb.lot_id, sb.location_id, lr.location_code, lr.quarantine
+      ORDER BY lr.location_code`,
+    [lotNumber, sku, siteId],
+  );
+  return result.rows.map((row) => ({
+    lot_id: row['lot_id'] as string,
+    location_id: row['location_id'] as string,
+    location_code: row['location_code'] as string,
+    quantity: String(row['quantity']),
+    quarantine: row['quarantine'] === true,
+  }));
+}
+
 export interface RequestableStock {
   location_id: string;
   location_code: string | null;

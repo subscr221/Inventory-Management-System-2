@@ -41,6 +41,10 @@ export interface PutawayTask {
   assigned_at: string | null;
   /** Zone ancestor of the directed bin, resolved once at suggestion time. Null until directed. */
   zone_id: string | null;
+  /** Story 8.10 (D7): why a held putaway could not open a QC task. Null when not held for that. */
+  hold_reason: string | null;
+  /** Story 8.10 (AC 2): when the putaway was released, whichever path released it. */
+  released_at: string | null;
 }
 
 export interface InsertPutawayTaskInput {
@@ -53,6 +57,8 @@ export interface InsertPutawayTaskInput {
   site_id: string;
   status?: 'ready' | 'held' | 'completed';
   owner_role?: string | null;
+  /** Story 8.10: the closed reason a QC-held task could not be released into an inspection task. */
+  hold_reason?: string | null;
   source_event_id: string;
 }
 
@@ -84,7 +90,7 @@ const PUTAWAY_TASK_COLUMNS = `putaway_task_id, grn_line_id, sku, lot_id, quantit
        directed_location_id, directed_location_code, velocity_class_at_suggestion,
        actual_location_id, actual_location_code, override_reason_code, override_confidence,
        completed_at, completed_by,
-       priority, assigned_to, assigned_by, assigned_at, zone_id`;
+       priority, assigned_to, assigned_by, assigned_at, zone_id, hold_reason, released_at`;
 
 function mapRow(row: Record<string, unknown>): PutawayTask {
   return {
@@ -118,6 +124,8 @@ function mapRow(row: Record<string, unknown>): PutawayTask {
     assigned_by: (row['assigned_by'] as string | null) ?? null,
     assigned_at: row['assigned_at'] ? ts(row['assigned_at']) : null,
     zone_id: (row['zone_id'] as string | null) ?? null,
+    hold_reason: (row['hold_reason'] as string | null) ?? null,
+    released_at: row['released_at'] ? ts(row['released_at']) : null,
   };
 }
 
@@ -151,6 +159,40 @@ export async function getPutawayTaskByGrnLine(
   const result = await runner(client).query(
     `SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task WHERE grn_line_id = $1 ORDER BY created_at DESC LIMIT 1`,
     [grnLineId],
+  );
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
+}
+
+/**
+ * Story 8.10 (Task 4.3): the release path's row lock. The QC applier already holds the lot row and
+ * the task row; the putaway row is taken next, before any stock write, preserving the platform's
+ * fixed lot -> task -> putaway -> stock order.
+ */
+export async function getPutawayTaskByGrnLineForUpdate(
+  grnLineId: string,
+  client: PoolClient,
+): Promise<PutawayTask | null> {
+  const result = await client.query(
+    `SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task WHERE grn_line_id = $1 ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+    [grnLineId],
+  );
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
+}
+
+/**
+ * Story 8.10 (Task 4.3): the held putaway whose lot identifier matches, scoped to its site. Used
+ * where a disposition reaches the putaway through the lot rather than the GRN line.
+ */
+export async function getHeldPutawayTaskByLot(
+  lotNumber: string,
+  siteId: string,
+  client: PoolClient,
+): Promise<PutawayTask | null> {
+  const result = await client.query(
+    `SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task
+      WHERE lot_id = $1 AND site_id = $2 AND status = 'held'
+      ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+    [lotNumber, siteId],
   );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
@@ -191,8 +233,8 @@ export async function insertPutawayTask(
   await client.query(
     `INSERT INTO putaway_task
        (putaway_task_id, grn_line_id, sku, lot_id, quantity, from_location_id, site_id, status,
-        owner_role, source_event_id)
-     VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, $8, $9, $10)
+        owner_role, hold_reason, source_event_id)
+     VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (putaway_task_id) DO UPDATE SET
        grn_line_id = EXCLUDED.grn_line_id,
        sku = EXCLUDED.sku,
@@ -202,6 +244,7 @@ export async function insertPutawayTask(
        site_id = EXCLUDED.site_id,
        status = EXCLUDED.status,
        owner_role = EXCLUDED.owner_role,
+       hold_reason = EXCLUDED.hold_reason,
        source_event_id = EXCLUDED.source_event_id,
        updated_at = now()`,
     [
@@ -214,9 +257,49 @@ export async function insertPutawayTask(
       input.site_id,
       input.status ?? 'ready',
       input.owner_role ?? null,
+      input.hold_reason ?? null,
       input.source_event_id,
     ],
   );
+}
+
+/**
+ * Story 8.10 (AC 1, D7): stamp the reason a held putaway could not open a QC task. Never released
+ * by this call - the task stays held. Scoped to a currently-held row so a late duplicate cannot
+ * rewrite a release.
+ */
+export async function setPutawayHoldReason(
+  putawayTaskId: string,
+  holdReason: string,
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `UPDATE putaway_task
+        SET hold_reason = $2, updated_at = now()
+      WHERE putaway_task_id = $1 AND status = 'held'`,
+    [putawayTaskId, holdReason],
+  );
+}
+
+/**
+ * Story 8.10 (D9): retarget a held putaway onto the accepted (possibly split-child) lot and its
+ * accepted quantity before the release CAS. `putaway_task.lot_id` is the lot NUMBER (text). Scoped
+ * to a held row: after the release it is inert, which is what makes a second accepted child fail
+ * closed with PUTAWAY_TASK_NOT_HELD rather than silently moving stock twice.
+ */
+export async function retargetPutawayTask(
+  putawayTaskId: string,
+  lotNumber: string,
+  quantity: string,
+  client: PoolClient,
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE putaway_task
+        SET lot_id = $2, quantity = $3::numeric, updated_at = now()
+      WHERE putaway_task_id = $1 AND status = 'held'`,
+    [putawayTaskId, lotNumber, quantity],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**
@@ -238,6 +321,7 @@ export async function markPutawayReleased(
             released_by = $2,
             release_reason_code = $3,
             released_event_id = $4,
+            released_at = now(),
             updated_at = now()
       WHERE putaway_task_id = $1 AND status = 'held'`,
     [putawayTaskId, releasedBy, reasonCode, releasedEventId],

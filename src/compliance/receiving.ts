@@ -32,9 +32,19 @@ import type { Grn } from '../read/projections/grn.js';
 import { insertGrnLine } from '../read/projections/grn_line.js';
 import {
   insertPutawayTask,
-  getPutawayTaskById,
+  getPutawayTaskByIdForUpdate,
   markPutawayReleased,
+  retargetPutawayTask,
+  setPutawayHoldReason,
 } from '../read/projections/putaway_task.js';
+import { getLotByNumberAndSku } from '../read/projections/lot_master.js';
+import { getQcInspectionTaskByLotId } from '../read/projections/qc_inspection_task.js';
+import { resolveReceiptInspectionPlan } from './quality.js';
+import { receiveQcCompletion } from '../quality/completion.js';
+import { toIstCalendarDate } from '../lib/business-days.js';
+import { getQcLotDispositionById } from '../read/projections/qc_lot_disposition.js';
+import { getQcLotSplitByChild } from '../read/projections/qc_lot_split.js';
+import { getQcInspectionTaskById } from '../read/projections/qc_inspection_task.js';
 import { findCrossDockDemandMatch } from '../read/projections/erp_sales_order.js';
 import { insertCrossDockTask } from '../read/projections/cross_dock_task.js';
 import { isCrossDockQuantityCapacity } from './cross-dock.js';
@@ -1330,6 +1340,8 @@ export async function applyGoodsReceivedProjection(
   let nonqualificationReason: string | null = null;
   let matchedOrderLineId: string | null = null;
   let matchedLotUuid: string | null = null;
+  /** Story 8.10: the held putaway a resolved receipt inspection task is bound to. */
+  let heldPutawayTaskId: string | null = null;
   if (crossDockRequested) {
     if (needsQcHold)
       nonqualificationReason =
@@ -1498,9 +1510,11 @@ export async function applyGoodsReceivedProjection(
       client,
     );
   } else {
+    const putawayTaskId = randomUUID();
+    heldPutawayTaskId = putawayTaskId;
     await insertPutawayTask(
       {
-        putaway_task_id: randomUUID(),
+        putaway_task_id: putawayTaskId,
         grn_line_id: p['grn_line_id'] as string,
         sku,
         lot_id: resolvedLotId,
@@ -1515,9 +1529,73 @@ export async function applyGoodsReceivedProjection(
     );
   }
 
-  // AC3: the held putaway task plus this qc_inspector notification ARE the interim QC-inspection task
-  //      representation (the durable QC inspection table is Epic 8).
+  // Story 8.10 (AC 1, D7): a QC-held receipt line opens a REAL inspection task when an approved
+  // plan resolves for the item. Every gap degrades visibly instead of failing the receipt: the
+  // putaway stays held, hold_reason carries the machine reason, and the notification names it.
+  let qcHoldReason: 'no_inspection_plan' | 'no_lot' | 'duplicate_lot' | null = null;
+  let qcHoldDetail: string | null = null;
+  let qcTaskId: string | null = null;
   if (needsQcHold) {
+    const lot = resolvedLotId ? await getLotByNumberAndSku(resolvedLotId, sku, client) : null;
+    if (!lot) {
+      qcHoldReason = 'no_lot';
+      qcHoldDetail = resolvedLotId ? `lot ${resolvedLotId} did not resolve` : 'no lot on the line';
+    } else if (await getQcInspectionTaskByLotId(lot.lot_id, client)) {
+      // A duplicate-lot receipt must not be refused by a unique violation on a projection it does
+      // not control (D6); the putaway stays held and says why.
+      qcHoldReason = 'duplicate_lot';
+      qcHoldDetail = `lot ${lot.lot_number} already carries an inspection task`;
+    } else {
+      const resolution = await resolveReceiptInspectionPlan(
+        { item_id: item.item_id, business_date: toIstCalendarDate(occurredAt) },
+        client,
+      );
+      if (resolution.kind === 'no_plan') {
+        qcHoldReason = 'no_inspection_plan';
+        qcHoldDetail = resolution.reason;
+      } else {
+        const taskId = randomUUID();
+        await receiveQcCompletion(
+          {
+            source_completion_type: 'goods_receipt',
+            source_completion_id: p['grn_line_id'] as string,
+            lot_id: lot.lot_id,
+            lot_number: lot.lot_number,
+            item_id: item.item_id,
+            quantity: receivedQty,
+            uom: item.uom,
+            site_id: siteId,
+            bom_revision_id: resolution.resolved.plan.bom_revision_id,
+            completed_at: occurredAt.toISOString(),
+            business_stream: item.business_stream,
+            source_order_type: null,
+            source_order_ref: null,
+            actor: {
+              user_id: envelope.metadata.actor.user_id,
+              role: envelope.metadata.actor.role,
+              location_id: siteId,
+            },
+            task_id: taskId,
+            event_id: randomUUID(),
+            idempotency_key: `goods_receipt:${p['grn_line_id'] as string}`,
+            correlation_id: correlationId,
+            causation_id: eventId,
+          },
+          client,
+        );
+        qcTaskId = taskId;
+      }
+    }
+    if (qcHoldReason !== null && heldPutawayTaskId !== null) {
+      await setPutawayHoldReason(heldPutawayTaskId, qcHoldReason, client);
+    }
+  }
+
+  // AC3: the held putaway task plus this qc_inspector notification carry the hold. Story 8.10: when
+  // the hand-off opened the durable task, the notification points at it; when it degraded, the
+  // notification names the reason so the inspector knows why there is no task to open.
+  if (needsQcHold) {
+    const heldDescription = `Inspect ${sku}${resolvedLotId ? ` lot ${resolvedLotId}` : ''} held in ${QC_HOLD_ZONE_CODE}${reportedNonClean ? ` - reported ${describeReceiptReason(reasonColumns)} at the dock` : ''}`;
     await emitNotificationInTransaction(
       {
         target: { role: QC_INSPECTION_TARGET_ROLE, location_id: siteId },
@@ -1526,12 +1604,33 @@ export async function applyGoodsReceivedProjection(
         object_type: 'grn_line',
         object_id: p['grn_line_id'] as string,
         actor_label: 'Receiving',
-        next_step: `Inspect ${sku}${resolvedLotId ? ` lot ${resolvedLotId}` : ''} held in ${QC_HOLD_ZONE_CODE}${reportedNonClean ? ` - reported ${describeReceiptReason(reasonColumns)} at the dock` : ''}`,
+        next_step:
+          qcTaskId !== null
+            ? `${heldDescription}; inspection task ${qcTaskId} opened`
+            : `${heldDescription}; no inspection task opened (${humanizeQcHoldReason(qcHoldReason)}${qcHoldDetail ? `, ${qcHoldDetail}` : ''})`,
         actor: envelope.metadata.actor,
         correlation_id: correlationId,
       },
       client,
     );
+  }
+}
+
+/**
+ * Story 8.10 (D7): the closed hold-reason vocabulary is a machine key; the human wording lives in
+ * the notification (and the edge i18n). The machine key is still written to putaway_task.hold_reason
+ * and is the audit truth.
+ */
+function humanizeQcHoldReason(reason: string | null): string {
+  switch (reason) {
+    case 'no_inspection_plan':
+      return 'no inspection plan';
+    case 'no_lot':
+      return 'no lot';
+    case 'duplicate_lot':
+      return 'duplicate lot';
+    default:
+      return reason ?? 'unknown';
   }
 }
 
@@ -1562,6 +1661,18 @@ export function assertGoodsPutawayReleasedShape(envelope: EventEnvelope): void {
   if (!isNonEmptyString(p['reason_code']))
     throw new AppError(400, 'INVALID_PARAMS', 'reason_code is required');
   p['reason_code'] = (p['reason_code'] as string).trim();
+  // Story 8.10 (D8): a disposition-driven release carries the accepted disposition, and only a
+  // qc_accept reason may cite one. The applier re-derives the disposition under lock.
+  if (p['disposition_id'] !== undefined && p['disposition_id'] !== null) {
+    if (!isUuid(p['disposition_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'disposition_id must be a UUID when supplied');
+    }
+    if (p['reason_code'] !== 'qc_accept') {
+      throw new AppError(400, 'INVALID_PARAMS', 'disposition_id requires reason_code qc_accept', {
+        reason_code: p['reason_code'],
+      });
+    }
+  }
 }
 
 export async function applyGoodsPutawayReleasedProjection(
@@ -1574,29 +1685,104 @@ export async function applyGoodsPutawayReleasedProjection(
   const p = envelope.payload;
 
   const putawayTaskId = p['putaway_task_id'] as string;
-  const task = await getPutawayTaskById(putawayTaskId, client);
-  if (!task)
+  const putaway = await getPutawayTaskByIdForUpdate(putawayTaskId, client);
+  if (!putaway)
     throw new AppError(
       404,
       'PUTAWAY_TASK_NOT_FOUND',
       `No putaway task exists for "${putawayTaskId}"`,
       { putaway_task_id: putawayTaskId },
     );
-  if (task.status !== 'held') {
+  if (putaway.status !== 'held') {
     throw new AppError(
       409,
       'PUTAWAY_TASK_NOT_HELD',
-      `Putaway task "${putawayTaskId}" is ${task.status}; only a held task can be released`,
-      { putaway_task_id: putawayTaskId, status: task.status },
+      `Putaway task "${putawayTaskId}" is ${putaway.status}; only a held task can be released`,
+      { putaway_task_id: putawayTaskId, status: putaway.status },
     );
   }
 
   // Story 8.9 (AC 9): the held putaway of a damaged or rejected line waits for its damage case.
-  await assertDamageCaseAllowsRelease(task.grn_line_id, client);
+  // Story 8.10: this gate runs on the QC accept path too; a QC accept never overrides an open case.
+  await assertDamageCaseAllowsRelease(putaway.grn_line_id, client);
 
-  // AC3: the release is DOA-gated - a governing band must exist AND the actor must be an authorized
-  //      receiving supervisor. The reason_code rides the event payload into the standard audit path.
-  await assertReleaseApproval(envelope.metadata.actor.role, client);
+  const dispositionId = (p['disposition_id'] as string | null | undefined) ?? null;
+  if (dispositionId !== null) {
+    // Story 8.10 (D8, D9): an unforgeable, server-loaded proof replaces the DOA release check.
+    // The disposition must be an ACCEPT for this GRN line's task lot, or for a split child whose
+    // split row points back at that task. The putaway is retargeted onto the accepted lot and its
+    // accepted quantity BEFORE the CAS release, so not-usable units never move to a shelf.
+    const disposition = await getQcLotDispositionById(dispositionId, client);
+    if (!disposition) {
+      throw new AppError(
+        404,
+        'QC_DISPOSITION_NOT_FOUND',
+        `No QC lot disposition exists for "${dispositionId}"`,
+        { disposition_id: dispositionId },
+      );
+    }
+    if (disposition.disposition !== 'accept') {
+      throw new AppError(
+        409,
+        'QC_DERIVATION_MISMATCH',
+        'Only an accepted disposition can release a held putaway',
+        { disposition_id: dispositionId, disposition: disposition.disposition },
+      );
+    }
+    let acceptedLotNumber: string | null = null;
+    const directTask = await getQcInspectionTaskById(disposition.task_id, client, true);
+    if (
+      directTask &&
+      directTask.source_completion_type === 'goods_receipt' &&
+      directTask.source_completion_id === putaway.grn_line_id &&
+      directTask.lot_id === disposition.lot_id
+    ) {
+      acceptedLotNumber = directTask.lot_number;
+    } else {
+      const split = await getQcLotSplitByChild(disposition.lot_id, client);
+      if (split) {
+        const parentTask = await getQcInspectionTaskById(split.parent_task_id, client, true);
+        if (
+          parentTask &&
+          parentTask.source_completion_type === 'goods_receipt' &&
+          parentTask.source_completion_id === putaway.grn_line_id
+        ) {
+          acceptedLotNumber = split.child_lot_number;
+        }
+      }
+    }
+    if (acceptedLotNumber === null) {
+      throw new AppError(
+        409,
+        'QC_DERIVATION_MISMATCH',
+        'The disposition does not belong to the inspection task of this held putaway',
+        {
+          disposition_id: dispositionId,
+          lot_id: disposition.lot_id,
+          grn_line_id: putaway.grn_line_id,
+        },
+      );
+    }
+    const retargeted = await retargetPutawayTask(
+      putawayTaskId,
+      acceptedLotNumber,
+      disposition.quantity,
+      client,
+    );
+    if (!retargeted) {
+      throw new AppError(
+        409,
+        'PUTAWAY_TASK_NOT_HELD',
+        `Putaway task "${putawayTaskId}" was released by a concurrent request`,
+        { putaway_task_id: putawayTaskId },
+      );
+    }
+  } else {
+    // AC3: the manual release is DOA-gated - a governing band must exist AND the actor must be an
+    // authorized receiving supervisor. The reason_code rides the event payload into the standard
+    // audit path.
+    await assertReleaseApproval(envelope.metadata.actor.role, client);
+  }
 
   // The release approver identity is always the authenticated actor, never trusted from the payload
   // (mirrors received_by/weighed_by/gate_officer_id) - edge.ts and the REST handler both force

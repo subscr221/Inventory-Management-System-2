@@ -562,6 +562,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/qc/tasks/:taskId/sampling',
       'POST /api/v1/qc/tasks/:taskId/results',
       'POST /api/v1/qc/tasks/:taskId/observations',
+      'POST /api/v1/qc/tasks/:taskId/notes',
       'GET /api/v1/qc/tasks/:taskId/results',
       'POST /api/v1/qc/tasks/:taskId/inspection-completion',
       'GET /api/v1/qc/sampling-states',

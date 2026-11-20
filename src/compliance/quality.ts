@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
+import { persistEvent } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { config } from '../config/index.js';
 import type { RetentionSampleScope, StatutoryReleaseBlockMode } from '../config/index.js';
@@ -16,7 +17,7 @@ import {
   placeQualityHold,
 } from '../read/projections/lot_master.js';
 import { appendTraceEntry } from '../read/projections/lot_trace.js';
-import { getBomById, getBomRevisionById } from '../read/projections/bom.js';
+import { getBomById, getBomByParentItemId, getBomRevisionById } from '../read/projections/bom.js';
 import { locationExistsById } from '../read/projections/location_register.js';
 import { resolveActorSiteId } from './actor-site.js';
 import { assertNotRdDraft } from './bom.js';
@@ -128,7 +129,13 @@ import {
   getQcCapaById,
   insertQcCapa,
 } from '../read/projections/qc_capa.js';
-import { insertQcLotSplit } from '../read/projections/qc_lot_split.js';
+import { getQcLotSplitByChild, insertQcLotSplit } from '../read/projections/qc_lot_split.js';
+import {
+  getHeldPutawayTaskByLot,
+  getPutawayTaskByGrnLine,
+} from '../read/projections/putaway_task.js';
+import type { PutawayTask } from '../read/projections/putaway_task.js';
+import { insertQcObservationNote } from '../read/projections/qc_observation_note.js';
 import { getOpenWitnessHoldPointByQcHoldId } from '../read/projections/qc_witness_hold_point.js';
 import {
   appendRelabelTrace,
@@ -185,6 +192,11 @@ export const QC_LOT_DISPOSITIONED = 'qc.lot_dispositioned';
 export const QC_LOT_SPLIT_RECORDED = 'qc.lot_split_recorded';
 export const QC_NCR_OUTCOME_RECORDED = 'qc.ncr_outcome_recorded';
 export const QC_REWORK_REQUESTED = 'qc.rework_requested';
+// Story 8.10 (FR-Q-02/FR-Q-05 server half): a free-text observation note plus an optional photo on
+// an inspection task. Distinct from qc.observation_recorded, which is a per-characteristic reading
+// batch with NOT NULL characteristic_id/sample_unit_no - overloading it would corrupt the result
+// grain (D11).
+export const QC_OBSERVATION_NOTE_RECORDED = 'qc.observation_note_recorded';
 // Story 8.4 (FR-Q-07, FR-Q-08): the batch release record, the retention sample and the recorded
 // disposal the 30-day expiry alert raises. All three are central-only (nothing about release or
 // retention is captured at the edge PWA).
@@ -215,6 +227,7 @@ export const QUALITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   QC_LOT_SPLIT_RECORDED,
   QC_NCR_OUTCOME_RECORDED,
   QC_REWORK_REQUESTED,
+  QC_OBSERVATION_NOTE_RECORDED,
   QC_BATCH_RELEASE_RECORDED,
   QC_RETENTION_SAMPLE_LOGGED,
   QC_RETENTION_SAMPLE_DISPOSED,
@@ -265,6 +278,14 @@ export const SOURCE_COMPLETION_TYPES: ReadonlySet<string> = new Set([
   'synthetic_completion',
   'production_order',
   'job_work_order',
+  // Story 8.10 (D1): a purchase receipt line held in ZONE-QC-HOLD opens a real inspection task.
+  'goods_receipt',
+]);
+/** Story 8.10 (D7): the closed hold-reason vocabulary on putaway_task. */
+export const PUTAWAY_HOLD_REASONS: ReadonlySet<string> = new Set([
+  'no_inspection_plan',
+  'no_lot',
+  'duplicate_lot',
 ]);
 export const MAX_CHARACTERISTICS = 500;
 const MAX_TEXT_2000 = 2000;
@@ -678,7 +699,7 @@ function assertCompletionReceivedShape(envelope: EventEnvelope): void {
   ) {
     reject(
       'INVALID_PAYLOAD',
-      'source_completion_type must be one of: synthetic_completion, production_order, job_work_order',
+      'source_completion_type must be one of: synthetic_completion, production_order, job_work_order, goods_receipt',
     );
   }
   if (!isUuid(p['source_completion_id'])) {
@@ -987,6 +1008,25 @@ function assertObservationRecordedShape(envelope: EventEnvelope): void {
     ['characteristic_class', 'result_kind', 'conforms_by_result_id', 'recorded_by'],
     QC_OBSERVATION_RECORDED,
   );
+}
+
+/** Story 8.10 (D11, AC 3): a free-text observation note with an optional attachment id. */
+function assertObservationNoteRecordedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  assertTaskStream(envelope, p);
+  if (!isUuid(p['note_id'])) reject('INVALID_PAYLOAD', 'note_id must be a UUID');
+  if (!isUuid(p['lot_id'])) reject('INVALID_PAYLOAD', 'lot_id must be a UUID');
+  if (!isBoundedText(p['note'], 1000)) {
+    reject('INVALID_PAYLOAD', 'note must be a non-empty string of at most 1000 characters');
+  }
+  if (p['attachment_id'] === undefined) p['attachment_id'] = null;
+  if (p['attachment_id'] !== null && !isUuid(p['attachment_id'])) {
+    reject('INVALID_PAYLOAD', 'attachment_id must be a UUID or null');
+  }
+  if (!isIsoTimestamp(p['recorded_at'])) {
+    reject('INVALID_PAYLOAD', 'recorded_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  rejectDeclaredDerived(p, ['recorded_by'], QC_OBSERVATION_NOTE_RECORDED);
 }
 
 function assertInspectionCompletedShape(envelope: EventEnvelope): void {
@@ -1423,6 +1463,9 @@ export function assertQualityShape(envelope: EventEnvelope): void {
       return;
     case QC_OBSERVATION_RECORDED:
       assertObservationRecordedShape(envelope);
+      return;
+    case QC_OBSERVATION_NOTE_RECORDED:
+      assertObservationNoteRecordedShape(envelope);
       return;
     case QC_INSPECTION_COMPLETED:
       assertInspectionCompletedShape(envelope);
@@ -1992,6 +2035,66 @@ export async function resolveInspectionPlanForLot(
   return { plan: standard, version: resolved.version, scope: 'standard' };
 }
 
+/** Story 8.10 (D2): why a receipt line opened no inspection task. */
+export type ReceiptNoPlanReason =
+  | 'no_released_bom'
+  | 'revision_not_released'
+  | 'inspection_plan_not_found'
+  | 'inspection_plan_not_approved'
+  | 'inspection_plan_ambiguous';
+
+export type ReceiptInspectionPlanResolution =
+  | { kind: 'plan'; resolved: ResolvedInspectionPlan }
+  | { kind: 'no_plan'; reason: ReceiptNoPlanReason };
+
+/**
+ * Story 8.10 (D2, AC 1): a purchase receipt has no BOM of its own, and inspection_plan is keyed by
+ * `(item_id, bom_revision_id, scope, ...)` with a NOT NULL revision. The item's CURRENT RELEASED
+ * revision is therefore the only grain a receipt can resolve against. Unlike
+ * resolveInspectionPlanForLot this resolver never throws for a plan absence: every plan gap is a
+ * typed reason, because AC 1 requires the receipt to post and the putaway to stay held.
+ */
+export async function resolveReceiptInspectionPlan(
+  input: { item_id: string; business_date: string },
+  client?: PoolClient,
+): Promise<ReceiptInspectionPlanResolution> {
+  const bom = await getBomByParentItemId(input.item_id, client);
+  if (!bom || bom.current_revision_id === null) {
+    return { kind: 'no_plan', reason: 'no_released_bom' };
+  }
+  const revision = await getBomRevisionById(bom.current_revision_id, client);
+  if (!revision || revision.revision_status !== 'released') {
+    return { kind: 'no_plan', reason: 'revision_not_released' };
+  }
+  try {
+    const resolved = await resolveInspectionPlanForLot(
+      {
+        item_id: input.item_id,
+        bom_revision_id: bom.current_revision_id,
+        source_order_type: null,
+        source_order_ref: null,
+        business_date: input.business_date,
+      },
+      client,
+    );
+    return { kind: 'plan', resolved };
+  } catch (err: unknown) {
+    if (err instanceof AppError) {
+      switch (err.errorCode) {
+        case 'INSPECTION_PLAN_NOT_FOUND':
+          return { kind: 'no_plan', reason: 'inspection_plan_not_found' };
+        case 'INSPECTION_PLAN_NOT_APPROVED':
+          return { kind: 'no_plan', reason: 'inspection_plan_not_approved' };
+        case 'INSPECTION_PLAN_AMBIGUOUS':
+          return { kind: 'no_plan', reason: 'inspection_plan_ambiguous' };
+        default:
+          break;
+      }
+    }
+    throw err;
+  }
+}
+
 async function applyCompletionReceived(
   envelope: EventEnvelope,
   client: PoolClient,
@@ -2030,43 +2133,116 @@ async function applyCompletionReceived(
   }
   const lotRow = lotResult.rows[0]!;
 
-  const derived = await deriveItemAndSpecification(itemId, bomRevisionId, client);
-  if (lotRow['lot_number'] !== lotNumber || lotRow['sku'] !== derived.sku) {
-    reject(
-      'QC_HOLD_REQUIRED',
-      'The lot does not match the declared lot number and product item',
-      {
-        lot_id: lotId,
-        declared_lot_number: lotNumber,
-        lot_number: lotRow['lot_number'],
-        declared_sku: derived.sku,
-        lot_sku: lotRow['sku'],
-        reason: 'lot_mismatch',
-      },
-      409,
-    );
-  }
-  if (p['business_stream'] !== derived.business_stream) {
-    reject(
-      'QC_DERIVATION_MISMATCH',
-      'Declared business_stream does not match the product item',
-      {
-        declared_business_stream: p['business_stream'],
-        item_business_stream: derived.business_stream,
-      },
-      409,
-    );
-  }
-  if (p['uom'] !== derived.uom) {
-    reject(
-      'QC_DERIVATION_MISMATCH',
-      'Declared uom does not match the product item',
-      {
-        declared_uom: p['uom'],
-        item_uom: derived.uom,
-      },
-      409,
-    );
+  // Story 8.10 (D4): a goods_receipt completion is the same event and applier as a production /
+  // job-work completion, but the receipt stock already exists in ZONE-QC-HOLD (posted by the
+  // receiving seam) and there is no BOM of its own to derive from. Validate against the ITEM rather
+  // than a derived specification, and skip the production-only finished-stock check.
+  const isReceipt = sourceType === 'goods_receipt';
+  let sku: string;
+  if (isReceipt) {
+    const item = await getItemById(itemId, client);
+    if (!item) {
+      reject('ITEM_NOT_FOUND', 'The receipt item does not resolve', { item_id: itemId }, 404);
+    }
+    if (lotRow['lot_number'] !== lotNumber || lotRow['sku'] !== item.sku) {
+      reject(
+        'QC_HOLD_REQUIRED',
+        'The lot does not match the declared lot number and product item',
+        {
+          lot_id: lotId,
+          declared_lot_number: lotNumber,
+          lot_number: lotRow['lot_number'],
+          declared_sku: item.sku,
+          lot_sku: lotRow['sku'],
+          reason: 'lot_mismatch',
+        },
+        409,
+      );
+    }
+    if (p['business_stream'] !== item.business_stream) {
+      reject(
+        'QC_DERIVATION_MISMATCH',
+        'Declared business_stream does not match the product item',
+        {
+          declared_business_stream: p['business_stream'],
+          item_business_stream: item.business_stream,
+        },
+        409,
+      );
+    }
+    if (p['uom'] !== item.uom) {
+      reject(
+        'QC_DERIVATION_MISMATCH',
+        'Declared uom does not match the product item',
+        {
+          declared_uom: p['uom'],
+          item_uom: item.uom,
+        },
+        409,
+      );
+    }
+    // The seam resolved this revision before emitting; the applier must not trust it. A revision
+    // that is missing or no longer released is a derivation mismatch, not a plan-not-found. A
+    // released revision whose BOM is not this item's BOM is a mismatch too, not a plan-not-found.
+    const revision = await getBomRevisionById(bomRevisionId, client);
+    if (!revision || revision.revision_status !== 'released') {
+      reject(
+        'QC_DERIVATION_MISMATCH',
+        'The declared bom_revision_id is not a released revision',
+        { bom_revision_id: bomRevisionId },
+        409,
+      );
+    }
+    const receiptBom = await getBomById(revision.bom_id, client);
+    if (!receiptBom || receiptBom.parent_item_id !== itemId) {
+      reject(
+        'QC_DERIVATION_MISMATCH',
+        'The declared bom_revision_id does not belong to the receipt item',
+        { bom_revision_id: bomRevisionId, item_id: itemId },
+        409,
+      );
+    }
+    sku = item.sku;
+  } else {
+    const derived = await deriveItemAndSpecification(itemId, bomRevisionId, client);
+    if (lotRow['lot_number'] !== lotNumber || lotRow['sku'] !== derived.sku) {
+      reject(
+        'QC_HOLD_REQUIRED',
+        'The lot does not match the declared lot number and product item',
+        {
+          lot_id: lotId,
+          declared_lot_number: lotNumber,
+          lot_number: lotRow['lot_number'],
+          declared_sku: derived.sku,
+          lot_sku: lotRow['sku'],
+          reason: 'lot_mismatch',
+        },
+        409,
+      );
+    }
+    if (p['business_stream'] !== derived.business_stream) {
+      reject(
+        'QC_DERIVATION_MISMATCH',
+        'Declared business_stream does not match the product item',
+        {
+          declared_business_stream: p['business_stream'],
+          item_business_stream: derived.business_stream,
+        },
+        409,
+      );
+    }
+    if (p['uom'] !== derived.uom) {
+      reject(
+        'QC_DERIVATION_MISMATCH',
+        'Declared uom does not match the product item',
+        {
+          declared_uom: p['uom'],
+          item_uom: derived.uom,
+        },
+        409,
+      );
+    }
+    sku = derived.sku;
   }
 
   // Locking contract step 2: the gate grain. Unique lot task and unique source completion.
@@ -2095,9 +2271,12 @@ async function applyCompletionReceived(
 
   // Locking contract step 3: the producer-owned finished stock (read only - never inserted or
   // updated here). The stock effect must exist at or beneath the site, at exactly the completed
-  // quantity, and be held from sellable use: nothing allocated or picked yet.
-  const stock = await client.query(
-    `WITH RECURSIVE descendants AS (
+  // quantity, and be held from sellable use: nothing allocated or picked yet. Story 8.10: a
+  // receipt's held stock is posted by the receiving seam into ZONE-QC-HOLD, not at the completed
+  // quantity under the item's SKU at the site root, so this production invariant does not apply.
+  if (!isReceipt) {
+    const stock = await client.query(
+      `WITH RECURSIVE descendants AS (
        SELECT location_id, 0 AS depth FROM location_register WHERE location_id = $1
        UNION ALL
        SELECT lr.location_id, d.depth + 1
@@ -2114,37 +2293,38 @@ async function applyCompletionReceived(
        FROM stock_balance sb
       WHERE sb.sku = $2 AND sb.lot_id = $3 AND sb.stock_class = 'owned'
         AND sb.location_id IN (SELECT location_id FROM descendants)`,
-    [siteId, derived.sku, lotNumber, quantity],
-  );
-  const stockRow = stock.rows[0]!;
-  if ((stockRow['row_count'] as number) === 0 || stockRow['exact_quantity'] !== true) {
-    reject(
-      'QC_HOLD_REQUIRED',
-      'The finished-goods stock effect for this lot is missing or does not match the completed quantity',
-      {
-        lot_id: lotId,
-        lot_number: lotNumber,
-        site_id: siteId,
-        declared_quantity: quantity,
-        on_hand: stockRow['on_hand'],
-        reason: 'finished_stock_missing',
-      },
-      409,
+      [siteId, sku, lotNumber, quantity],
     );
-  }
-  if (stockRow['unconsumed'] !== true) {
-    reject(
-      'QC_HOLD_REQUIRED',
-      'The finished-goods lot is already in sellable use and cannot enter QC Hold',
-      {
-        lot_id: lotId,
-        lot_number: lotNumber,
-        allocated: stockRow['allocated'],
-        picked: stockRow['picked'],
-        reason: 'stock_sellable',
-      },
-      409,
-    );
+    const stockRow = stock.rows[0]!;
+    if ((stockRow['row_count'] as number) === 0 || stockRow['exact_quantity'] !== true) {
+      reject(
+        'QC_HOLD_REQUIRED',
+        'The finished-goods stock effect for this lot is missing or does not match the completed quantity',
+        {
+          lot_id: lotId,
+          lot_number: lotNumber,
+          site_id: siteId,
+          declared_quantity: quantity,
+          on_hand: stockRow['on_hand'],
+          reason: 'finished_stock_missing',
+        },
+        409,
+      );
+    }
+    if (stockRow['unconsumed'] !== true) {
+      reject(
+        'QC_HOLD_REQUIRED',
+        'The finished-goods lot is already in sellable use and cannot enter QC Hold',
+        {
+          lot_id: lotId,
+          lot_number: lotNumber,
+          allocated: stockRow['allocated'],
+          picked: stockRow['picked'],
+          reason: 'stock_sellable',
+        },
+        409,
+      );
+    }
   }
 
   // Resolve and freeze the plan BEFORE writing any projection (Task 5).
@@ -2168,7 +2348,7 @@ async function applyCompletionReceived(
       source_completion_type: sourceType as QcInspectionTaskRow['source_completion_type'],
       source_completion_id: sourceId,
       item_id: itemId,
-      sku: derived.sku,
+      sku,
       quantity,
       uom: p['uom'] as string,
       site_id: siteId,
@@ -2187,7 +2367,7 @@ async function applyCompletionReceived(
   );
 
   p['business_date'] = businessDate;
-  p['sku'] = derived.sku;
+  p['sku'] = sku;
   p['plan_id'] = resolvedPlan.plan.plan_id;
   p['plan_version_id'] = resolvedPlan.version.plan_version_id;
   p['plan_scope'] = resolvedPlan.scope;
@@ -2203,7 +2383,7 @@ async function applyCompletionReceived(
       status_verb: 'QC Hold',
       object_type: 'qc_inspection_task',
       object_id: taskId,
-      actor_label: `Lot ${lotNumber} (${derived.sku})`,
+      actor_label: `Lot ${lotNumber} (${sku})`,
       next_step: 'Inspect the lot against the frozen plan version',
       actor: envelope.metadata.actor,
       correlation_id: envelope.metadata.correlation_id,
@@ -2504,6 +2684,51 @@ async function lockLotForDisposition(
   };
 }
 
+/**
+ * Story 8.10 (AC 4, D12): the QC-head gate on the disposition and split seams. The role set is
+ * configuration (`config.quality.qcHeadRoles`, default qc_head); this module names no role literal.
+ * The HTTP handlers pre-check the same predicate so the caller sees the same 403 before a write.
+ */
+function assertQcHeadDispositionAuthority(actorRole: string, taskId: string): void {
+  const qcHeadRoles: readonly string[] = config.quality.qcHeadRoles;
+  if (!qcHeadRoles.includes(actorRole)) {
+    reject(
+      'APPROVAL_REQUIRED',
+      'Dispositioning a lot requires QC Head-level authority',
+      { task_id: taskId, qc_head_roles: qcHeadRoles },
+      403,
+    );
+  }
+}
+
+/**
+ * Story 8.10 (Task 4.4): the held receipt putaway behind a goods_receipt task. A direct task uses
+ * its source_completion_id (the grn_line_id); a split child resolves through qc_lot_split to the
+ * parent task, because applyLotSplitRecorded mints a random source id for every child.
+ */
+async function resolveReceiptPutawayForDisposition(
+  task: QcInspectionTaskRow,
+  lotId: string,
+  client: PoolClient,
+): Promise<PutawayTask | null> {
+  let grnLineId: string | null = null;
+  let parentLotNumber = task.lot_number;
+  const split = await getQcLotSplitByChild(lotId, client);
+  if (split) {
+    const parentTask = await getQcInspectionTaskById(split.parent_task_id, client);
+    if (parentTask && parentTask.source_completion_type === 'goods_receipt') {
+      grnLineId = parentTask.source_completion_id;
+      parentLotNumber = parentTask.lot_number;
+    }
+  } else if (task.source_completion_type === 'goods_receipt') {
+    grnLineId = task.source_completion_id;
+  }
+  if (grnLineId === null) return null;
+  const byGrnLine = await getPutawayTaskByGrnLine(grnLineId, client);
+  if (byGrnLine) return byGrnLine;
+  return getHeldPutawayTaskByLot(parentLotNumber, task.site_id, client);
+}
+
 /** Story 8.3 (FR-Q-05, AC 1): accept or reject. A reject also raises the one open NCR. */
 async function applyLotDispositioned(
   envelope: EventEnvelope,
@@ -2520,6 +2745,10 @@ async function applyLotDispositioned(
 
   const held = await lockLotForDisposition(lotId, taskId, client);
   const { task } = held;
+
+  // Story 8.10 (AC 4, D12): the QC-head gate is additive to the SoD check below and applies to
+  // receipt and production tasks alike.
+  assertQcHeadDispositionAuthority(envelope.metadata.actor.role, taskId);
 
   // NFR-SEC-05, segregation of duties. ACCEPTANCE is the binding quality decision - it is what
   // lets stock leave the QC gate - so the person who recorded the results may not also sign it.
@@ -2599,6 +2828,45 @@ async function applyLotDispositioned(
     );
   }
 
+  // Story 8.10 (AC 2): an accept releases the held receipt putaway in the same transaction through
+  // a nested goods.putaway_released event carrying the disposition as its proof. The release
+  // applier retargets the task to the accepted lot and quantity, runs the damage-case gate, and
+  // skips the DOA release check (D8). A reject never releases; a line with no held putaway
+  // (cross-dock, no lot) accepts without a release and says so in the notification.
+  let releasedPutawayId: string | null = null;
+  if (disposition === 'accept' && task.source_completion_type === 'goods_receipt') {
+    const putaway = await resolveReceiptPutawayForDisposition(task, lotId, client);
+    // Code review 2026-11-20 (Story 8.10): a supervisor may already have released the putaway by
+    // hand. The QC decision must not roll back over that logistics row, so the nested release only
+    // fires when there is still work to do. A `qc_accept` release on a no-longer-held row is the
+    // D10 second-child case and is deliberately left to fail closed in the release applier.
+    if (
+      putaway !== null &&
+      (putaway.status === 'held' || putaway.release_reason_code === 'qc_accept')
+    ) {
+      await persistEvent(
+        {
+          stream_type: 'receiving',
+          stream_id: putaway.putaway_task_id,
+          event_type: 'goods.putaway_released',
+          payload: {
+            putaway_task_id: putaway.putaway_task_id,
+            grn_line_id: putaway.grn_line_id,
+            reason_code: 'qc_accept',
+            disposition_id: dispositionId,
+          },
+          metadata: {
+            ...envelope.metadata,
+            causation_id: eventId,
+          },
+        },
+        undefined,
+        client,
+      );
+      releasedPutawayId = putaway.putaway_task_id;
+    }
+  }
+
   p['lot_number'] = held.lot_number;
   p['sku'] = task.sku;
   p['site_id'] = task.site_id;
@@ -2624,7 +2892,11 @@ async function applyLotDispositioned(
       actor_label: `Lot ${held.lot_number} (${task.sku})`,
       next_step:
         disposition === 'accept'
-          ? 'The lot has left the QC gate and is available to downstream operations'
+          ? releasedPutawayId !== null
+            ? `The lot has left the QC gate; held putaway ${releasedPutawayId} is released`
+            : task.source_completion_type === 'goods_receipt'
+              ? 'The lot has left the QC gate; there was no held putaway to release'
+              : 'The lot has left the QC gate and is available to downstream operations'
           : 'Record the NCR outcome (rework, downgrade or scrap) for this lot',
       actor: envelope.metadata.actor,
       correlation_id: envelope.metadata.correlation_id,
@@ -2650,6 +2922,9 @@ async function applyLotSplitRecorded(
 
   const held = await lockLotForDisposition(lotId, taskId, client);
   const { task } = held;
+
+  // Story 8.10 (AC 4, D12): split is a QC-head decision too.
+  assertQcHeadDispositionAuthority(envelope.metadata.actor.role, taskId);
 
   const splits = [...(p['splits'] as Array<Record<string, unknown>>)].sort(
     (a, b) => (a['sequence'] as number) - (b['sequence'] as number),
@@ -4461,6 +4736,54 @@ async function applyRetentionSampleDisposed(
   }
 }
 
+/**
+ * Story 8.10 (D11, AC 3): persists the free-text observation note on a task. The task row is
+ * locked first (the fixed lot -> task order; the lot row is not needed because the note is not a
+ * decision on the lot), the declared lot is verified against the task, and recorded_by is derived
+ * from the authenticated actor - never trusted from the payload.
+ */
+async function applyObservationNoteRecorded(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const taskId = p['task_id'] as string;
+  const lotId = p['lot_id'] as string;
+  const task = await getQcInspectionTaskById(taskId, client, true);
+  if (!task) {
+    reject(
+      'QC_TASK_NOT_FOUND',
+      'No QC inspection task exists for this note',
+      { task_id: taskId },
+      404,
+    );
+  }
+  if (task.lot_id !== lotId) {
+    reject(
+      'QC_DERIVATION_MISMATCH',
+      'The declared lot_id is not the inspection task lot',
+      { task_id: taskId, declared_lot_id: lotId, lot_id: task.lot_id },
+      409,
+    );
+  }
+  const recordedBy = envelope.metadata.actor.user_id;
+  await insertQcObservationNote(
+    {
+      note_id: p['note_id'] as string,
+      task_id: taskId,
+      lot_id: lotId,
+      note: (p['note'] as string).trim(),
+      attachment_id: (p['attachment_id'] as string | null) ?? null,
+      recorded_by: recordedBy,
+      recorded_at: p['recorded_at'] as string,
+      source_event_id: eventId,
+    },
+    client,
+  );
+  p['recorded_by'] = recordedBy;
+}
+
 export async function applyQualityProjection(
   envelope: EventEnvelope,
   client: PoolClient,
@@ -4491,6 +4814,9 @@ export async function applyQualityProjection(
       return;
     case QC_OBSERVATION_RECORDED:
       await applyResultBatch(envelope, client, eventId, 'observation');
+      return;
+    case QC_OBSERVATION_NOTE_RECORDED:
+      await applyObservationNoteRecorded(envelope, client, eventId);
       return;
     case QC_INSPECTION_COMPLETED:
       await applyInspectionCompleted(envelope, client, eventId);

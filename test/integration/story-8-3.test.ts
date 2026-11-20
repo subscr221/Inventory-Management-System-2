@@ -411,7 +411,7 @@ describe('Story 8.3 Lot Disposition - Accept, Reject, Conditional Release', () =
   async function split(
     taskId: string,
     quantities: string[],
-    headers: Record<string, string> = inspectorHeaders,
+    headers: Record<string, string> = qcHeadHeaders,
   ): Promise<HttpResult> {
     return makeRequest(
       port,
@@ -1407,31 +1407,33 @@ describe('Story 8.3 Lot Disposition - Accept, Reject, Conditional Release', () =
   it('NFR-SEC-05: a result recorder cannot approve the acceptance of their own lot', async () => {
     // Acceptance is the binding quality decision - it is what lets stock leave the QC gate - so the
     // person who recorded the results may not also sign it. Conditional release has always enforced
-    // this; acceptance did not, which is the gap this closes.
-    const held = await inspected(planDefault, '7.000000');
-    const selfApproved = await disposition(held.taskId, 'accept', inspectorHeaders);
+    // this; acceptance did not, which is the gap this closes. Story 8.10 (AC 4) adds the QC-head
+    // gate in front of this check, so the recorder and the self-approver are a QC head.
+    const held = await inspected(planDefault, '7.000000', true, binA1Id, siteAId, approverHeaders);
+    const selfApproved = await disposition(held.taskId, 'accept', approverHeaders);
     assert.strictEqual(selfApproved.status, 409, JSON.stringify(selfApproved.body));
     assert.strictEqual(selfApproved.body['error_code'], 'SOD_VIOLATION');
-    assert.strictEqual(detailsOf(selfApproved.body)['approver_user_id'], inspectorUserId);
+    assert.strictEqual(detailsOf(selfApproved.body)['approver_user_id'], approverUserId);
     assert.strictEqual(await countRows('qc_lot_disposition', 'lot_id = $1', [held.lotId]), 0);
     assert.strictEqual((await taskRow(held.taskId))?.['gate_status'], 'qc_hold');
     // The refused approval is a statutory record of a refused quality decision.
     assert.ok(
       (await countRows('audit_log', `error_code = 'SOD_VIOLATION' AND user_id = $1`, [
-        inspectorUserId,
+        approverUserId,
       ])) > 0,
     );
 
-    // A second party can then sign it, and the same lot proceeds normally.
-    const approved = await disposition(held.taskId, 'accept', approverHeaders);
+    // A second QC head can then sign it, and the same lot proceeds normally.
+    const approved = await disposition(held.taskId, 'accept', qcHeadHeaders);
     assert.strictEqual(approved.status, 201, JSON.stringify(approved.body));
   });
 
   it('NFR-SEC-05: a result recorder may still REJECT their own lot', async () => {
     // Deliberately unguarded: a reject is not a self-approval, and forcing a second signature to
-    // contain bad material would delay containment, which is actively harmful.
-    const held = await inspected(planDefault, '7.000000', false);
-    const res = await disposition(held.taskId, 'reject', inspectorHeaders);
+    // contain bad material would delay containment, which is actively harmful. Story 8.10 still
+    // requires the actor to hold QC-head authority.
+    const held = await inspected(planDefault, '7.000000', false, binA1Id, siteAId, approverHeaders);
+    const res = await disposition(held.taskId, 'reject', approverHeaders);
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.strictEqual(await countRows('qc_ncr', 'lot_id = $1', [held.lotId]), 1);
   });

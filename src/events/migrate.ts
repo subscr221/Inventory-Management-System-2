@@ -339,6 +339,11 @@ const MIGRATIONS = [
   '../../read/projections/damage_report.sql',
   '../../read/projections/attachment.sql',
   '../../read/projections/indent_damage_link.sql',
+  // Story 8.10: the QC-governed putaway release (hold_reason and released_at, forward-only on
+  // putaway_task) and the free-text observation note projection (a new table). Appended at the
+  // tail; putaway_task.sql is NOT edited.
+  '../../read/projections/putaway_task_qc_release.sql',
+  '../../read/projections/qc_observation_note.sql',
 ];
 
 async function migrate(): Promise<void> {

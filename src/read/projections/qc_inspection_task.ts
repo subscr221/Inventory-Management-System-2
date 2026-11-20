@@ -24,7 +24,8 @@ export type QcGateStatus = 'qc_hold' | 'conditionally_released' | 'accepted' | '
 /** Story 8.2 (Binding Scope Decision 5): the inspection axis, independent of the gate axis. */
 export type QcTaskStatus = 'open' | 'sampling_determined' | 'inspected';
 export type QcSamplingOutcome = 'accepted' | 'not_accepted';
-export type QcSourceCompletionType = 'synthetic_completion' | 'production_order' | 'job_work_order';
+export type QcSourceCompletionType =
+  'synthetic_completion' | 'production_order' | 'job_work_order' | 'goods_receipt';
 
 export const QC_GATE_BLOCKED_STATUSES: readonly QcGateStatus[] = [
   'qc_hold',
@@ -72,6 +73,10 @@ export interface QcInspectionTaskRow {
   critical_nonconformities: number | null;
   inspected_by: string | null;
   inspected_at: string | null;
+  /** Story 8.10 (AC 5): additive list-row enrichment. Absent on get-by-id reads. */
+  disposition?: 'accept' | 'reject' | 'split' | 'conditional_release' | null;
+  disposition_at?: string | null;
+  released_at?: string | null;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -125,6 +130,15 @@ function mapTask(row: Record<string, unknown>): QcInspectionTaskRow {
     critical_nonconformities: toNullableInt(row['critical_nonconformities']),
     inspected_by: (row['inspected_by'] as string | null) ?? null,
     inspected_at: toNullableIso(row['inspected_at']),
+    ...(row['disposition'] !== undefined
+      ? {
+          disposition: (row['disposition'] as QcInspectionTaskRow['disposition']) ?? null,
+        }
+      : {}),
+    ...(row['disposition_at'] !== undefined
+      ? { disposition_at: toNullableIso(row['disposition_at']) }
+      : {}),
+    ...(row['released_at'] !== undefined ? { released_at: toNullableIso(row['released_at']) } : {}),
   };
 }
 
@@ -170,6 +184,11 @@ export async function getQcInspectionTaskBySource(
   return result.rows.length > 0 ? mapTask(result.rows[0]!) : null;
 }
 
+/** Task columns qualified with `t.`, for the Story 8.10 list join. */
+const TASK_COLUMNS_ALIASED = TASK_COLUMNS.split(',')
+  .map((column) => `t.${column.trim()}`)
+  .join(', ');
+
 export interface ListQcInspectionTasksParams {
   gate_status?: QcGateStatus | undefined;
   task_status?: QcTaskStatus | undefined;
@@ -191,18 +210,28 @@ export async function listQcInspectionTasks(
     values.push(value);
     where.push(clause.replace('?', `$${values.length}`));
   };
-  if (params.gate_status) push('gate_status = ?', params.gate_status);
-  if (params.task_status) push('task_status = ?', params.task_status);
-  if (params.site_id) push('site_id = ?', params.site_id);
-  if (params.site_ids) push('site_id = ANY(?::uuid[])', params.site_ids);
-  if (params.sku) push('sku = ?', params.sku);
+  if (params.gate_status) push('t.gate_status = ?', params.gate_status);
+  if (params.task_status) push('t.task_status = ?', params.task_status);
+  if (params.site_id) push('t.site_id = ?', params.site_id);
+  if (params.site_ids) push('t.site_id = ANY(?::uuid[])', params.site_ids);
+  if (params.sku) push('t.sku = ?', params.sku);
   const limit = Math.min(Math.max(params.limit ?? 50, 1), 500);
   const offset = Math.max(params.offset ?? 0, 0);
   values.push(limit, offset);
   const result = await runner(client).query(
-    `SELECT ${TASK_COLUMNS} FROM qc_inspection_task
+    `SELECT ${TASK_COLUMNS_ALIASED},
+            d.disposition AS disposition, d.decided_at AS disposition_at,
+            pt.released_at AS released_at
+       FROM qc_inspection_task t
+       LEFT JOIN qc_lot_disposition d ON d.lot_id = t.lot_id
+       LEFT JOIN LATERAL (
+         SELECT released_at FROM putaway_task
+          WHERE grn_line_id = t.source_completion_id
+          ORDER BY created_at DESC
+          LIMIT 1
+       ) pt ON t.source_completion_type = 'goods_receipt'
       ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY business_date ASC, created_at ASC, task_id ASC
+      ORDER BY t.business_date ASC, t.created_at ASC, t.task_id ASC
       LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
   );

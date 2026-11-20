@@ -311,66 +311,77 @@ export async function setupOperations(ctx: Ctx): Promise<void> {
     return `${agreements.length} items x ${codes.length} locations (receiving docks and storage bins)`;
   });
 
-  await step('setup: inspection plans for finished goods, approved by the QC head', async () => {
-    const author = await ctx.as('qc');
-    const notes: string[] = [];
-    for (const plan of ops['inspection_plans'] as Json[]) {
-      const { sku, ...body } = plan;
-      const itemId = await itemIdOf(ctx, String(sku));
-      const { revisionId } = await releasedBomOf(ctx, String(sku));
-      const existing = listOf(
-        must(
+  await step(
+    'setup: inspection plans for finished goods and receipt test items, approved by the QC head',
+    async () => {
+      const author = await ctx.as('qc');
+      const notes: string[] = [];
+      // Story 8.10: a receipt with no released BOM of its own resolves against the item's current
+      // released revision, so a receipt QC rehearsal only gets a live task when the pack names a
+      // receipt item that already has a released BOM. `receipt_qc_items` entries use the same shape
+      // as `inspection_plans` and are seeded here, in one place.
+      const plans = [
+        ...(ops['inspection_plans'] as Json[]),
+        ...((ops['receipt_qc_items'] as Json[] | undefined) ?? []),
+      ];
+      for (const plan of plans) {
+        const { sku, ...body } = plan;
+        const itemId = await itemIdOf(ctx, String(sku));
+        const { revisionId } = await releasedBomOf(ctx, String(sku));
+        const existing = listOf(
+          must(
+            await ctx.request(
+              'GET',
+              `/api/v1/qc/inspection-plans?item_id=${itemId}&bom_revision_id=${revisionId}&limit=50`,
+              undefined,
+              author,
+            ),
+            200,
+            'list plans',
+          ),
+          'plans',
+          'inspection_plans',
+        );
+        if (existing.length > 0) {
+          notes.push(`${String(sku)} existed`);
+          continue;
+        }
+        const made = must(
           await ctx.request(
-            'GET',
-            `/api/v1/qc/inspection-plans?item_id=${itemId}&bom_revision_id=${revisionId}&limit=50`,
-            undefined,
+            'POST',
+            '/api/v1/qc/inspection-plans',
+            {
+              ...body,
+              item_id: itemId,
+              bom_revision_id: revisionId,
+              effective_from: new Date(Date.now() - 86_400_000).toISOString().slice(0, 10),
+            },
             author,
           ),
-          200,
-          'list plans',
-        ),
-        'plans',
-        'inspection_plans',
-      );
-      if (existing.length > 0) {
-        notes.push(`${String(sku)} existed`);
-        continue;
-      }
-      const made = must(
-        await ctx.request(
-          'POST',
-          '/api/v1/qc/inspection-plans',
-          {
-            ...body,
-            item_id: itemId,
-            bom_revision_id: revisionId,
-            effective_from: new Date(Date.now() - 86_400_000).toISOString().slice(0, 10),
-          },
-          author,
-        ),
-        201,
-        `plan ${String(sku)}`,
-      );
-      const planRow = (made['plan'] as Json | undefined) ?? made;
-      const version = (made['version'] as Json | undefined) ?? planRow;
-      const planId = (planRow['plan_id'] ?? made['plan_id']) as string;
-      const versionId = (version['plan_version_id'] ?? made['plan_version_id']) as string;
-      must(
-        await approveAs(ctx, 'qchead', { role: 'qc_head', module: 'qc' }, (headers) =>
-          ctx.request(
-            'POST',
-            `/api/v1/qc/inspection-plans/${planId}/versions/${versionId}/approve`,
-            { idempotency_key: uuid() },
-            headers,
+          201,
+          `plan ${String(sku)}`,
+        );
+        const planRow = (made['plan'] as Json | undefined) ?? made;
+        const version = (made['version'] as Json | undefined) ?? planRow;
+        const planId = (planRow['plan_id'] ?? made['plan_id']) as string;
+        const versionId = (version['plan_version_id'] ?? made['plan_version_id']) as string;
+        must(
+          await approveAs(ctx, 'qchead', { role: 'qc_head', module: 'qc' }, (headers) =>
+            ctx.request(
+              'POST',
+              `/api/v1/qc/inspection-plans/${planId}/versions/${versionId}/approve`,
+              { idempotency_key: uuid() },
+              headers,
+            ),
           ),
-        ),
-        [200, 201],
-        `approve plan ${String(sku)}`,
-      );
-      notes.push(`${String(sku)} approved`);
-    }
-    return notes.join(', ');
-  });
+          [200, 201],
+          `approve plan ${String(sku)}`,
+        );
+        notes.push(`${String(sku)} approved`);
+      }
+      return notes.join(', ');
+    },
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

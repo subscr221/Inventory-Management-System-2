@@ -426,7 +426,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
   async function disposition(
     taskId: string,
     kind: 'accept' | 'reject',
-    headers: Record<string, string> = inspectorHeaders,
+    headers: Record<string, string> = approverHeaders,
   ): Promise<HttpResult> {
     return makeRequest(
       port,
@@ -1075,7 +1075,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
           { sequence: 2, quantity: '6.000000' },
         ],
       },
-      inspectorHeaders,
+      qcHeadHeaders,
     );
     assert.strictEqual(split.status, 201, JSON.stringify(split.body));
     const onSplit = await release(parent.taskId);

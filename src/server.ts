@@ -352,6 +352,7 @@ import {
   getSamplingHandler,
   recordQcResultsHandler,
   recordQcObservationsHandler,
+  recordObservationNoteHandler,
   listQcResultsHandler,
   completeInspectionHandler,
   listSamplingStatesHandler,
@@ -1149,6 +1150,8 @@ export function createAppRouter(): Router {
   router.get('/api/v1/qc/tasks/:taskId/sampling', getSamplingHandler);
   router.post('/api/v1/qc/tasks/:taskId/results', recordQcResultsHandler);
   router.post('/api/v1/qc/tasks/:taskId/observations', recordQcObservationsHandler);
+  // Story 8.10 (AC 3): the free-text observation note is a static leaf beside the readings batch.
+  router.post('/api/v1/qc/tasks/:taskId/notes', recordObservationNoteHandler);
   router.get('/api/v1/qc/tasks/:taskId/results', listQcResultsHandler);
   router.post('/api/v1/qc/tasks/:taskId/inspection-completion', completeInspectionHandler);
   // Story 8.3: Lot Disposition - Accept, Reject, Conditional Release (FR-Q-05, FR-Q-06). ROUTE

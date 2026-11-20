@@ -24,7 +24,8 @@ import type { QcInspectionTaskRow } from '../read/projections/qc_inspection_task
  * event; this module only builds the envelope and returns the task the applier created.
  */
 export interface QcCompletionHandoff {
-  source_completion_type: 'synthetic_completion' | 'production_order' | 'job_work_order';
+  source_completion_type:
+    'synthetic_completion' | 'production_order' | 'job_work_order' | 'goods_receipt';
   source_completion_id: string;
   lot_id: string;
   lot_number: string;

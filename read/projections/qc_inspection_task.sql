@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS qc_inspection_task (
   CONSTRAINT uq_qc_inspection_task_lot UNIQUE (lot_id),
   CONSTRAINT uq_qc_inspection_task_source UNIQUE (source_completion_type, source_completion_id),
   CONSTRAINT chk_qc_inspection_task_quantity CHECK (quantity > 0),
-  CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order')),
+  CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order', 'goods_receipt')),
   CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected')),
   CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released', 'accepted', 'rejected', 'split')),
   CONSTRAINT chk_qc_inspection_task_plan_scope CHECK (plan_scope IN ('standard', 'customer_override')),
@@ -125,7 +125,7 @@ BEGIN
       AND conrelid = 'qc_inspection_task'::regclass
   ) THEN
     ALTER TABLE qc_inspection_task
-      ADD CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order'));
+      ADD CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order', 'goods_receipt'));
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -197,6 +197,20 @@ BEGIN
     ALTER TABLE qc_inspection_task DROP CONSTRAINT chk_qc_inspection_task_gate_status;
     ALTER TABLE qc_inspection_task
       ADD CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released', 'accepted', 'rejected', 'split'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_source_type'
+      AND conrelid = 'qc_inspection_task'::regclass
+      AND pg_get_constraintdef(oid) NOT LIKE '%goods_receipt%'
+  ) THEN
+    ALTER TABLE qc_inspection_task DROP CONSTRAINT chk_qc_inspection_task_source_type;
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order', 'goods_receipt'));
   END IF;
 END $$;
 

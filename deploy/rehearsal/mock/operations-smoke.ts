@@ -1807,6 +1807,202 @@ export async function standingApproval(ctx: Ctx): Promise<void> {
   }
 }
 
+export const QC_RECEIPT_STEPS = [
+  'receipt-qc: a receipt lot waits on the QC workbench',
+  'receipt-qc: task view carries the GRN evidence and the held locations',
+  'receipt-qc: observation note with a photo is recorded',
+  'receipt-qc: the note is returned by the results read',
+  'receipt-qc: an inspector cannot disposition (403 APPROVAL_REQUIRED)',
+  'receipt-qc: the QC head accepts and the held putaway is released',
+] as const;
+
+/**
+ * Story 8.10: the receipt-lot QC leg end to end. The rehearsal pack seeds raw-material receipts,
+ * which have no released BOM of their own, so the first run of this flow usually proves the DEGRADE
+ * path (AC 1: the line stays held, the putaway names no_inspection_plan) rather than a live task.
+ * When the pack (or a previous flow) leaves an inspected receipt task on the workbench, the flow
+ * records an observation note with a photo and then drives the accept-release.
+ */
+export async function qcReceiptLot(ctx: Ctx): Promise<void> {
+  let headers: Headers;
+  try {
+    headers = await ctx.as('qc');
+    await ctx.as('qchead');
+  } catch (error) {
+    for (const name of QC_RECEIPT_STEPS) skip(name, `missing actor: ${(error as Error).message}`);
+    return;
+  }
+
+  const listed = await ctx.request(
+    'GET',
+    '/api/v1/qc/tasks?gate_status=qc_hold&limit=200',
+    undefined,
+    headers,
+  );
+  if (listed.status !== 200) {
+    for (const name of QC_RECEIPT_STEPS) skip(name, `task list returned ${listed.status}`);
+    return;
+  }
+  const tasks = listOf(must(listed, 200, 'qc task list'), 'tasks', 'qc_inspection_tasks');
+  const receiptTask = tasks.find((t) => t['source_completion_type'] === 'goods_receipt');
+  if (!receiptTask) {
+    for (const name of QC_RECEIPT_STEPS) skip(name, 'no held receipt lot on the QC workbench');
+    return;
+  }
+  const taskId = receiptTask['task_id'] as string;
+  const photoId = uuid();
+  let noteId: string | null = null;
+  let heldPutawayTaskId: string | null = null;
+
+  const inspected = receiptTask['task_status'] === 'inspected';
+  const steps: [string, () => Promise<string | void>][] = [
+    [
+      QC_RECEIPT_STEPS[0]!,
+      async () => {
+        const held = await ctx.request(
+          'GET',
+          `/api/v1/putaway-tasks?site_id=${ctx.siteId}&status=held&limit=200`,
+          undefined,
+          headers,
+        );
+        const putaways =
+          held.status === 200 ? listOf(must(held, 200, 'putaway list'), 'tasks') : [];
+        const heldReceipts = putaways.filter((p) => p['owner_role'] !== null);
+        return `task ${taskId} on lot ${String(receiptTask['lot_number'])}, ${heldReceipts.length} QC-owned held putaway(s), ${String(receiptTask['task_status'])}`;
+      },
+    ],
+    [
+      QC_RECEIPT_STEPS[1]!,
+      async () => {
+        const detail = must(
+          await ctx.request('GET', `/api/v1/qc/tasks/${taskId}`, undefined, headers),
+          200,
+          'task detail',
+        );
+        const receipt = detail['receipt'] as Json | undefined;
+        if (!receipt) throw new Error('task view carries no receipt block');
+        const putaway = (detail['putaway'] as Json | undefined) ?? {};
+        heldPutawayTaskId = (putaway['putaway_task_id'] as string | undefined) ?? null;
+        const locations = listOf(detail, 'hold_locations');
+        return `GRN ${String(receipt['grn_number'])}, ${String(receipt['received_quantity'])} ${String(receipt['uom'])}, putaway ${String(putaway['status'])}${putaway['hold_reason'] ? ` (${String(putaway['hold_reason'])})` : ''}, ${locations.length} hold location(s)`;
+      },
+    ],
+    [
+      QC_RECEIPT_STEPS[2]!,
+      async () => {
+        const photo = must(
+          await ctx.request('PUT', `/api/v1/attachments/${photoId}`, smokeJpeg(), {
+            ...headers,
+            'Content-Type': 'image/jpeg',
+          }),
+          [200, 201],
+          'note photo',
+        );
+        const noted = must(
+          await ctx.request(
+            'POST',
+            `/api/v1/qc/tasks/${taskId}/notes`,
+            {
+              note: `Rehearsal observation ${ctx.run}: lot held for inspection`,
+              attachment_id: photoId,
+              idempotency_key: uuid(),
+            },
+            headers,
+          ),
+          [200, 201],
+          'record note',
+        );
+        const notes = listOf(noted, 'notes');
+        noteId = (notes[notes.length - 1]?.['note_id'] as string | undefined) ?? null;
+        return `note ${String(noteId)} with photo ${String(photo['sha256']).slice(0, 12)}`;
+      },
+    ],
+    [
+      QC_RECEIPT_STEPS[3]!,
+      async () => {
+        const read = must(
+          await ctx.request('GET', `/api/v1/qc/tasks/${taskId}/results`, undefined, headers),
+          200,
+          'read results',
+        );
+        const notes = listOf(read, 'notes');
+        if (noteId !== null && !notes.some((n) => n['note_id'] === noteId)) {
+          throw new Error(`note ${noteId} not returned with the results`);
+        }
+        return `${listOf(read, 'results').length} result(s), ${notes.length} note(s)`;
+      },
+    ],
+  ];
+
+  if (!inspected) {
+    // No fabricated inspection: the rehearsal only drives the disposition once a real task has
+    // been inspected on the workbench.
+    skip(QC_RECEIPT_STEPS[4]!, 'the held receipt task is not inspected yet');
+    skip(QC_RECEIPT_STEPS[5]!, 'the held receipt task is not inspected yet');
+  } else {
+    steps.push(
+      [
+        QC_RECEIPT_STEPS[4]!,
+        async () => {
+          const refused = await ctx.request(
+            'POST',
+            `/api/v1/qc/tasks/${taskId}/disposition`,
+            {
+              disposition: 'accept',
+              justification: `Rehearsal accept ${ctx.run}`,
+              idempotency_key: uuid(),
+            },
+            headers,
+          );
+          if (refused.status !== 403) throw new Error(`expected 403, got ${refused.status}`);
+          const code = (refused.body['error'] as Json | undefined)?.['code'];
+          if (code !== 'APPROVAL_REQUIRED') {
+            throw new Error(`expected APPROVAL_REQUIRED, got ${String(code)}`);
+          }
+          return '403 APPROVAL_REQUIRED for the inspector';
+        },
+      ],
+      [
+        QC_RECEIPT_STEPS[5]!,
+        async () => {
+          const accepted = must(
+            await ctx.request(
+              'POST',
+              `/api/v1/qc/tasks/${taskId}/disposition`,
+              {
+                disposition: 'accept',
+                justification: `Rehearsal accept ${ctx.run}`,
+                idempotency_key: uuid(),
+              },
+              await ctx.as('qchead'),
+            ),
+            [200, 201],
+            'accept lot',
+          );
+          if (!heldPutawayTaskId) throw new Error('the task view carried no putaway id');
+          const released = must(
+            await ctx.request(
+              'GET',
+              `/api/v1/putaway-tasks/${heldPutawayTaskId}`,
+              undefined,
+              headers,
+            ),
+            200,
+            'released putaway',
+          );
+          const releasedTask = released['task'] as Json;
+          if (releasedTask['status'] !== 'ready') {
+            throw new Error(`putaway ${heldPutawayTaskId} is ${String(releasedTask['status'])}`);
+          }
+          return `accepted ${String((accepted['task'] as Json | undefined)?.['task_id'] ?? taskId)}, putaway ${heldPutawayTaskId} released at ${String(releasedTask['released_at'])}`;
+        },
+      ],
+    );
+  }
+
+  await flow(steps);
+}
+
 export async function maintenance(ctx: Ctx): Promise<void> {
   const asset = (ctx.ops['assets'] as Json[])[0]!;
   let faultId = '';
@@ -1968,6 +2164,7 @@ async function main(): Promise<void> {
     await siteHead(ctx);
     await standingApproval(ctx);
     await damageReport(ctx);
+    await qcReceiptLot(ctx);
     await maintenance(ctx);
   } catch (error) {
     crashed = true;

@@ -1522,6 +1522,15 @@ const EXPECTED = [
     indexBodies: ['ON qc_inspection_task (gate_status, business_date, task_id)'],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 8.10 (AC 3): the append-only free-text observation note with an optional photo.
+  {
+    canonical: 'read/projections/qc_observation_note.sql',
+    table: 'qc_observation_note',
+    constraints: ['chk_qc_observation_note_length'],
+    indexes: ['idx_qc_observation_note_task'],
+    indexBodies: ['ON qc_observation_note (task_id, recorded_at)'],
+    appUserGrant: 'INSERT, SELECT',
+  },
   // Story 8.1 (FR-Q-05, AC 4): immutable deviation evidence with a database-enforced future expiry.
   {
     canonical: 'read/projections/qc_deviation.sql',
@@ -3082,6 +3091,60 @@ describe('Story 2.1 schema drift guard', () => {
     assert.ok(stateSql.includes('GRANT INSERT, SELECT, UPDATE ON qc_sampling_switching_state'));
   });
 
+  it('Story 8.10 registers the putaway release and observation-note migrations and mirrors them', () => {
+    const releaseSql = read('read/projections/putaway_task_qc_release.sql');
+    for (const fragment of [
+      'ADD COLUMN IF NOT EXISTS hold_reason TEXT',
+      'ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ',
+      'chk_putaway_task_hold_reason',
+      "IN ('no_inspection_plan', 'no_lot', 'duplicate_lot')",
+    ]) {
+      assert.ok(releaseSql.includes(fragment), `putaway_task_qc_release.sql missing ${fragment}`);
+    }
+    const bodyAt = releaseSql.indexOf('ALTER TABLE putaway_task ADD COLUMN');
+    assert.ok(
+      bodyAt >= 0,
+      'putaway_task_qc_release.sql has no ALTER TABLE putaway_task ADD COLUMN',
+    );
+    assert.ok(
+      normalizeSql(initDb).includes(normalizeSql(releaseSql.slice(bodyAt))),
+      'init-db.sql does not mirror putaway_task_qc_release.sql verbatim',
+    );
+
+    const taskSql = read('read/projections/qc_inspection_task.sql');
+    assert.ok(
+      taskSql.includes("pg_get_constraintdef(oid) NOT LIKE '%goods_receipt%'"),
+      'the source-type widening must be guarded on pg_get_constraintdef',
+    );
+    assert.strictEqual(
+      extractDoBlock(initDb, "NOT LIKE '%goods_receipt%'"),
+      extractDoBlock(taskSql, "NOT LIKE '%goods_receipt%'"),
+      'the goods_receipt source-type widening must be mirrored identically',
+    );
+    assert.ok(
+      taskSql.includes(
+        "source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order', 'goods_receipt')",
+      ),
+    );
+    assert.ok(
+      initDb.includes(
+        "source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order', 'goods_receipt')",
+      ),
+    );
+
+    for (const file of ['putaway_task_qc_release.sql', 'qc_observation_note.sql']) {
+      assert.ok(migrateSource.includes(file), `src/events/migrate.ts must apply ${file}`);
+    }
+    const damageLink = migrateSource.indexOf("'../../read/projections/indent_damage_link.sql'");
+    const releaseAt = migrateSource.indexOf("'../../read/projections/putaway_task_qc_release.sql'");
+    const noteAt = migrateSource.indexOf("'../../read/projections/qc_observation_note.sql'");
+    assert.ok(releaseAt > damageLink, 'putaway_task_qc_release.sql must be appended after 8.9');
+    assert.ok(
+      noteAt > releaseAt,
+      'qc_observation_note.sql must be appended after the release file',
+    );
+  });
+
   it('Story 7.8 mirrors the additive maintenance_work_order status columns and the widened status CHECK into init-db.sql', () => {
     const workOrderSql = read('read/projections/maintenance_work_order.sql');
     for (const column of ['status_updated_at', 'status_updated_by', 'status_note']) {
@@ -3613,6 +3676,18 @@ describe('Story 8.9 event-type registry', () => {
       assert.ok(initDb.includes(statement), `init-db.sql missing: ${statement}`);
     }
     assert.ok(read('src/events/migrate.ts').includes('indent_damage_link.sql'));
+  });
+});
+
+// Story 8.10 (AC 3): the free-text observation note rides the qc stream and carries no business
+// stream (it is a note on an already-tagged task). It is central-only by construction because the
+// edge allowlist (EDGE_QC_EVENT_TYPES) names only qc.result_recorded.
+describe('Story 8.10 event-type registry', () => {
+  it('registers qc.observation_note_recorded on the qc stream', () => {
+    assert.deepStrictEqual(SUPPORTED_EVENT_TYPES['qc.observation_note_recorded'], {
+      streamType: 'qc',
+      requiresBusinessStream: false,
+    });
   });
 });
 

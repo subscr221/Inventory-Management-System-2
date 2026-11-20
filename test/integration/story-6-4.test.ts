@@ -1314,7 +1314,7 @@ describe('Story 6.4 Lot Genealogy, Closure, and Offline Execution', () => {
           { sequence: 2, quantity: '4.000000' },
         ],
       },
-      inspectorHeaders,
+      qcHeadHeaders,
     );
     assert.strictEqual(split.status, 201, JSON.stringify(split.body));
 

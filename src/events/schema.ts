@@ -486,6 +486,13 @@ export interface GoodsPutawayReleasedPayload {
   putaway_task_id: string;
   grn_line_id: string;
   reason_code: string;
+  /**
+   * Story 8.10 (D8, AC 2): the accepted qc_lot_disposition that releases this held putaway. When
+   * present, reason_code must be 'qc_accept', the disposition must be an accepted disposition for
+   * the task's lot (or a split child of it), the DOA release check is skipped, and the damage-case
+   * gate still runs.
+   */
+  disposition_id?: string | null;
   released_by?: string;
   approver_actor_id?: string;
 }
@@ -3798,7 +3805,8 @@ export interface InspectionPlanApprovedEnvelope extends Omit<EventEnvelope, 'pay
  */
 export interface QcCompletionReceivedPayload {
   task_id: string;
-  source_completion_type: 'synthetic_completion' | 'production_order' | 'job_work_order';
+  source_completion_type:
+    'synthetic_completion' | 'production_order' | 'job_work_order' | 'goods_receipt';
   source_completion_id: string;
   lot_id: string;
   lot_number: string;
@@ -4424,6 +4432,28 @@ export interface QcObservationRecordedPayload {
 export interface QcObservationRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'qc.observation_recorded';
   payload: QcObservationRecordedPayload;
+}
+
+/**
+ * Story 8.10 (D11, AC 3): a free-text observation note with an optional caller-owned photo on an
+ * inspection task. Distinct from qc.observation_recorded, whose grain is one reading per
+ * (characteristic, sample unit). stream_id is the task_id; note_id is minted by the handler and
+ * recorded_by/source_event_id are derived by the applier.
+ */
+export interface QcObservationNoteRecordedPayload {
+  task_id: string;
+  lot_id: string;
+  note_id: string;
+  note: string;
+  attachment_id: string | null;
+  recorded_at: string;
+  /** Derived under lock; persisted write-back only. */
+  recorded_by?: string;
+}
+
+export interface QcObservationNoteRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.observation_note_recorded';
+  payload: QcObservationNoteRecordedPayload;
 }
 
 /**
@@ -6574,6 +6604,11 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'qc.observation_recorded': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  // Story 8.10 (D11): a free-text observation note (with an optional photo) on an inspection task.
+  'qc.observation_note_recorded': {
     streamType: 'qc',
     requiresBusinessStream: false,
   },
