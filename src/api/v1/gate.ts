@@ -129,7 +129,7 @@ function assertSiteAccess(req: IncomingMessage, siteId: string, scope: 'read' | 
   }
 }
 
-function gateEventToJson(
+export function gateEventToJson(
   row: GateEvent,
   poSummary?: Record<string, unknown> | null,
 ): Record<string, unknown> {
@@ -157,6 +157,9 @@ function gateEventToJson(
     business_date: row.business_date,
     status: row.status,
     reversal_reason: row.reversal_reason,
+    resolved_by: row.resolved_by,
+    resolved_at: row.resolved_at,
+    match_note: row.match_note,
     source_event_id: row.source_event_id,
     ...(poSummary !== undefined ? { po_summary: poSummary } : {}),
   };

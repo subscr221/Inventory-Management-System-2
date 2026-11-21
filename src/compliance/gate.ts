@@ -5,12 +5,22 @@ import { getPurchaseOrderByRef } from '../read/projections/erp_purchase_order.js
 import { getLocationByCode } from '../read/projections/location_register.js';
 import {
   getGateEventById,
+  markGateEventMatched,
   markGateEventReversed,
+  markGateEventSent,
   upsertGateEvent,
 } from '../read/projections/gate_event.js';
+import { upsertResolvedException } from '../read/projections/receiving_exception.js';
+import { emitNotificationInTransaction } from '../notify/emit.js';
 
 const GATE_STREAM_TYPES = new Set(['gate']);
-const GATE_EVENT_TYPES = new Set(['gate.entered', 'gate.reversed']);
+const GATE_EVENT_TYPES = new Set([
+  'gate.entered',
+  'gate.reversed',
+  'gate.matched',
+  'gate.sent_to_procurement',
+]);
+const EXCEPTION_NOTE_MAX = 500;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO8601_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
@@ -171,6 +181,51 @@ export function assertGateReversedShape(envelope: EventEnvelope): void {
     throw new AppError(400, 'INVALID_PARAMS', 'reversed_by must be a UUID when supplied');
 }
 
+function optionalNote(p: Record<string, unknown>, key: string): void {
+  const raw = p[key];
+  if (raw === undefined || raw === null) {
+    p[key] = null;
+    return;
+  }
+  const value = trimmed(raw);
+  if (value === null)
+    throw new AppError(400, 'INVALID_PARAMS', `${key} must be a string when supplied`);
+  if (value.length > EXCEPTION_NOTE_MAX)
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `${key} must be at most ${EXCEPTION_NOTE_MAX} characters`,
+    );
+  p[key] = value.length > 0 ? value : null;
+}
+
+/** Story 3.19: match an unmatched gate event to an open PO. */
+export function assertGateMatchedShape(envelope: EventEnvelope): void {
+  if (gateEventType(envelope) !== 'gate.matched') return;
+  const p = envelope.payload;
+  if (!isUuid(p['gate_event_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'gate_event_id is required and must be a UUID');
+  const po = trimmed(p['po_ref_ext']);
+  if (!po) throw new AppError(400, 'INVALID_PARAMS', 'po_ref_ext is required');
+  if (po.length > GATE_FIELD_MAX.po_ref_ext)
+    throw new AppError(400, 'INVALID_PARAMS', 'po_ref_ext must be at most 64 characters');
+  p['po_ref_ext'] = po;
+  optionalNote(p, 'match_note');
+  if (!isUuid(p['matched_by']))
+    throw new AppError(400, 'INVALID_PARAMS', 'matched_by is required and must be a UUID');
+}
+
+/** Story 3.19: park an unmatched gate event with procurement. */
+export function assertGateSentToProcurementShape(envelope: EventEnvelope): void {
+  if (gateEventType(envelope) !== 'gate.sent_to_procurement') return;
+  const p = envelope.payload;
+  if (!isUuid(p['gate_event_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'gate_event_id is required and must be a UUID');
+  optionalNote(p, 'note');
+  if (!isUuid(p['sent_by']))
+    throw new AppError(400, 'INVALID_PARAMS', 'sent_by is required and must be a UUID');
+}
+
 export async function applyGateProjection(
   envelope: EventEnvelope,
   client: PoolClient,
@@ -224,6 +279,81 @@ export async function applyGateProjection(
     throw new AppError(404, 'GATE_EVENT_NOT_FOUND', `No gate event exists for "${gateEventId}"`, {
       gate_event_id: gateEventId,
     });
+  if (type === 'gate.matched' || type === 'gate.sent_to_procurement') {
+    if (existing.binding_status !== 'unmatched' || existing.status !== 'open')
+      throw new AppError(
+        409,
+        'GATE_EVENT_NOT_UNMATCHED',
+        'Only an open unmatched gate event can be resolved',
+        { gate_event_id: gateEventId },
+      );
+    if (type === 'gate.matched') {
+      const poRef = p['po_ref_ext'] as string;
+      const po = await getPurchaseOrderByRef(poRef, client);
+      if (!po || po.status !== 'open')
+        throw new AppError(409, 'PO_NOT_OPEN', `No open PO exists for "${poRef}"`, {
+          po_ref_ext: poRef,
+        });
+      const matchedBy = p['matched_by'] as string;
+      const note = (p['match_note'] as string | null) ?? null;
+      await markGateEventMatched(
+        { gate_event_id: gateEventId, po_ref_ext: poRef, match_note: note, resolved_by: matchedBy },
+        client,
+      );
+      await upsertResolvedException(
+        {
+          kind: 'unmatched_vehicle',
+          source_id: gateEventId,
+          site_id: existing.site_id,
+          status: 'resolved',
+          resolution: 'matched_to_po',
+          note,
+          resolved_by: matchedBy,
+          source_event_id: eventId,
+        },
+        client,
+      );
+      return;
+    }
+    if (existing.resolved_at)
+      throw new AppError(
+        409,
+        'GATE_EVENT_ALREADY_RESOLVED',
+        'This gate event was already sent to procurement',
+        { gate_event_id: gateEventId },
+      );
+    const sentBy = p['sent_by'] as string;
+    const note = (p['note'] as string | null) ?? null;
+    await markGateEventSent({ gate_event_id: gateEventId, resolved_by: sentBy }, client);
+    await upsertResolvedException(
+      {
+        kind: 'unmatched_vehicle',
+        source_id: gateEventId,
+        site_id: existing.site_id,
+        status: 'sent_to_procurement',
+        resolution: 'sent_to_procurement',
+        note,
+        resolved_by: sentBy,
+        source_event_id: eventId,
+      },
+      client,
+    );
+    await emitNotificationInTransaction(
+      {
+        target: { role: 'procurement_officer', location_id: existing.site_id },
+        event_type: 'unmatched_vehicle_sent_to_procurement',
+        status_verb: 'Vehicle with no matching PO',
+        object_type: 'gate_event',
+        object_id: gateEventId,
+        actor_label: 'Unloading',
+        next_step: `Vehicle ${existing.vehicle_reg_ext} is held at the gate; find or raise the PO.`,
+        actor: envelope.metadata.actor,
+        correlation_id: existing.correlation_id,
+      },
+      client,
+    );
+    return;
+  }
   if (existing.status === 'reversed')
     throw new AppError(409, 'GATE_ALREADY_REVERSED', 'Gate event is already reversed', {
       gate_event_id: gateEventId,

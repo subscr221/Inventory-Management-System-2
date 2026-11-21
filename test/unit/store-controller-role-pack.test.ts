@@ -68,7 +68,8 @@ describe('Story 2.10 store controller role in the pilot pack', () => {
   });
 
   it('the pack grows from 79 grants to 80 and from 25 roles to 26', () => {
-    assert.strictEqual(fixture.roles.length, 80);
+    // Story 3.19 adds one procurement_officer notification read grant for indent1@ (81).
+    assert.strictEqual(fixture.roles.length, 81);
     assert.strictEqual(new Set(fixture.roles.map((r) => r.role)).size, 26);
   });
 

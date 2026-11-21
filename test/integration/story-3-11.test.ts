@@ -221,6 +221,7 @@ describe('Story 3.11 GRN Line Condition and Reason Codes', () => {
       '../../read/projections/grn_line.sql',
       '../../read/projections/grn_jobwork_challan.sql',
       '../../read/projections/grn_line_condition.sql',
+      '../../read/projections/receiving_exception.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
@@ -509,12 +510,20 @@ describe('Story 3.11 GRN Line Condition and Reason Codes', () => {
   it('AC3 (code review 2026-09-27): a DAMAGED line that breaches the PO over-tolerance band still quarantines, never the old tolerance-rejection outcome', async () => {
     await seedPo('PO-311-DMGOVER', 'SKU-311', 10);
     const token = await seedToken('PO-311-DMGOVER');
-    const body = grnBody(token, { po_ref_ext: 'PO-311-DMGOVER', received_qty: 20, ...DAMAGED_TRANSIT });
+    const body = grnBody(token, {
+      po_ref_ext: 'PO-311-DMGOVER',
+      received_qty: 20,
+      ...DAMAGED_TRANSIT,
+    });
     const res = await post(body);
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const line = res.body['grn_line'] as Record<string, unknown>;
     assert.strictEqual(line['line_condition'], 'DAMAGED');
-    assert.strictEqual(line['status'], 'quarantined', 'AC3 quarantine wins over tolerance-rejection');
+    assert.strictEqual(
+      line['status'],
+      'quarantined',
+      'AC3 quarantine wins over tolerance-rejection',
+    );
     assert.strictEqual(line['qc_hold'], true);
     assert.strictEqual(line['target_location_id'], qcZoneId);
     const putaway = res.body['putaway_task'] as Record<string, unknown>;
@@ -530,7 +539,9 @@ describe('Story 3.11 GRN Line Condition and Reason Codes', () => {
       1,
       'qc_hold_placed notification fired, not receipt_tolerance_exceeded',
     );
-    assert.ok((notif.rows[0]!['next_step'] as string).includes('DAMAGED / DAMAGED / TRANSIT_DAMAGE'));
+    assert.ok(
+      (notif.rows[0]!['next_step'] as string).includes('DAMAGED / DAMAGED / TRANSIT_DAMAGE'),
+    );
   });
 
   it('AC3 (code review 2026-09-27): a DAMAGED/OTHER report names the condition and note in the QC notification, with no reason_detail', async () => {
@@ -554,7 +565,9 @@ describe('Story 3.11 GRN Line Condition and Reason Codes', () => {
       [body['grn_line_id']],
     );
     assert.strictEqual(notif.rows.length, 1);
-    assert.ok((notif.rows[0]!['next_step'] as string).includes('DAMAGED / OTHER: crushed pallet corner'));
+    assert.ok(
+      (notif.rows[0]!['next_step'] as string).includes('DAMAGED / OTHER: crushed pallet corner'),
+    );
   });
 
   it('AC4: REJECTED never counts against the PO line - band, shortage, over-tolerance and three-way match', async () => {

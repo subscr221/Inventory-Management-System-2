@@ -9,6 +9,12 @@ export const RECEIPT_REASON_CODES: ReadonlySet<string> = new Set([
   'DAMAGED',
   'REJECTED',
   'OTHER',
+  'EXCESS_RETURNED_WITH_VEHICLE',
+]);
+
+/** Story 3.19: written only by the unloading-exception resolution, never accepted on a GRN line. */
+export const RESOLUTION_ONLY_REASON_CODES: ReadonlySet<string> = new Set([
+  'EXCESS_RETURNED_WITH_VEHICLE',
 ]);
 
 /** Sub-reasons per group. OTHER has none: it carries a photo plus a one-line note instead. */

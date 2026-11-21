@@ -15,6 +15,7 @@ import {
 import { kitLineMatchesConsumption } from './custody-ledger.js';
 import { assertActorAtSite } from './actor-site.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
+import { insertOpenOverToleranceException } from '../read/projections/receiving_exception.js';
 import { getItemBySku } from '../read/projections/item_master.js';
 import { getLocationById, getLocationByCode } from '../read/projections/location_register.js';
 import type { LocationRegisterEntry } from '../read/projections/location_register.js';
@@ -57,6 +58,7 @@ import {
   MAX_REASON_NOTE_LENGTH,
   MAX_REASON_PHOTO_REF_LENGTH,
   RECEIPT_REASON_CODES,
+  RESOLUTION_ONLY_REASON_CODES,
   RECEIPT_REASON_DETAILS,
 } from './receiving-reasons.js';
 import { openReceiptDamageCase, assertDamageCaseAllowsRelease } from './damage.js';
@@ -509,6 +511,13 @@ function assertReceiptReasonShape(p: Record<string, unknown>, challanReceipt: bo
       400,
       'RECEIVING_REASON_INVALID',
       "reason_code must be 'SHORT', 'DAMAGED', 'REJECTED' or 'OTHER'",
+      { reason_code: code },
+    );
+  if (RESOLUTION_ONLY_REASON_CODES.has(code))
+    throw new AppError(
+      400,
+      'RECEIVING_REASON_INVALID',
+      `reason_code ${code} is written by the unloading-exception resolution only`,
       { reason_code: code },
     );
   if (!ALLOWED_CONDITION_REASON.get(condition)!.has(code))
@@ -1117,6 +1126,11 @@ export async function applyGoodsReceivedProjection(
         ...reasonColumns,
         source_event_id: eventId,
       },
+      client,
+    );
+    // Story 3.19: the open unloading exception the supervisor resolves.
+    await insertOpenOverToleranceException(
+      { source_id: p['grn_line_id'] as string, site_id: siteId, source_event_id: eventId },
       client,
     );
     await emitNotificationInTransaction(

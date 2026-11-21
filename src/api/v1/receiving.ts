@@ -43,14 +43,14 @@ const RECEIVING_READ_ROLES = [
   'inventory_controller',
 ];
 
-interface ActorContext {
+export interface ActorContext {
   userId: string;
   role: string;
   auditLocationId: string;
   eventLocationId: string;
 }
 
-function actorContext(req: IncomingMessage): ActorContext {
+export function actorContext(req: IncomingMessage): ActorContext {
   const authContext = getAuthContext(req);
   const assignment = getAuthorizedAssignment(req);
   const userId = authContext?.userId ?? NO_LOCATION_UUID;
@@ -86,7 +86,7 @@ async function receivingActor(
   );
 }
 
-function auditCtxFor(
+export function auditCtxFor(
   req: IncomingMessage,
   actor: ActorContext,
   httpStatus: number,
@@ -102,7 +102,7 @@ function auditCtxFor(
   };
 }
 
-function assertRoleAllowed(
+export function assertRoleAllowed(
   req: IncomingMessage,
   allowedRoles: string[],
   functionScope: 'read' | 'write',
@@ -123,7 +123,7 @@ function assertRoleAllowed(
     );
 }
 
-function receivingScope(
+export function receivingScope(
   req: IncomingMessage,
   scope: 'read' | 'write',
 ): { wildcard: boolean; locations: Set<string> } {
@@ -148,7 +148,11 @@ function receivingScope(
       })();
 }
 
-function assertSiteAccess(req: IncomingMessage, siteId: string, scope: 'read' | 'write'): void {
+export function assertSiteAccess(
+  req: IncomingMessage,
+  siteId: string,
+  scope: 'read' | 'write',
+): void {
   const s = receivingScope(req, scope);
   if (!s.wildcard && !s.locations.has(siteId)) {
     throw new AppError(

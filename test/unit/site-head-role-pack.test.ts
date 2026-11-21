@@ -111,7 +111,8 @@ describe('Story 1.16 site head role in the pilot pack', () => {
 
   it('the pack grows from 76 grants to 79 and from 24 roles to 25 (80 and 26 after Story 2.10)', () => {
     // Story 2.10 adds one store_controller grant on the same holder.
-    assert.strictEqual(fixture.roles.length, 80);
+    // Story 3.19 adds one procurement_officer notification read grant for indent1@ (81).
+    assert.strictEqual(fixture.roles.length, 81);
     assert.strictEqual(new Set(fixture.roles.map((r) => r.role)).size, 26);
   });
 

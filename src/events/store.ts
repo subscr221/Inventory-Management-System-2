@@ -48,8 +48,14 @@ import { assertOwnershipShape, applyOwnershipProjection } from '../compliance/ow
 import {
   assertGateEnteredShape,
   assertGateReversedShape,
+  assertGateMatchedShape,
+  assertGateSentToProcurementShape,
   applyGateProjection,
 } from '../compliance/gate.js';
+import {
+  assertGoodsOverToleranceAcceptedShape,
+  applyGoodsOverToleranceAcceptedProjection,
+} from '../compliance/receiving-exceptions.js';
 import {
   assertWeighbridgeRecordedShape,
   applyWeighbridgeProjection,
@@ -685,6 +691,9 @@ export async function persistEvent(
   assertOwnershipShape(envelope);
   assertGateEnteredShape(envelope);
   assertGateReversedShape(envelope);
+  assertGateMatchedShape(envelope);
+  assertGateSentToProcurementShape(envelope);
+  assertGoodsOverToleranceAcceptedShape(envelope);
   // Story 3.3: weighbridge shape validation (tare/gross/binding-token presence, net = gross - tare
   // computed in exact integer milli-kg) is non-DB and runs with the other pre-transaction asserts,
   // so a malformed weighment never consumes an idempotency key.
@@ -1022,6 +1031,7 @@ export async function persistEvent(
     // line, the stock movement, and the domain_events insert commit or roll back together.
     await applyGoodsReceivedProjection(envelope, client, eventId);
     await applyGoodsPutawayReleasedProjection(envelope, client, eventId);
+    await applyGoodsOverToleranceAcceptedProjection(envelope, client, eventId);
     // Story 3.5: putaway completion records the actual location and any override against the directed
     // suggestion, updates the Story 1.6 location asserted/expected facts, and completes the putaway
     // task - all inside this same transaction so the location facts and the domain_events insert

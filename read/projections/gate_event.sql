@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS gate_event (
   business_date     DATE NOT NULL,
   status            TEXT NOT NULL DEFAULT 'open',
   reversal_reason   TEXT,
+  resolved_by UUID,
+  resolved_at TIMESTAMPTZ,
+  match_note TEXT,
   source_event_id   UUID NOT NULL,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -32,6 +35,9 @@ CREATE TABLE IF NOT EXISTS gate_event (
 -- Story 3.13 (AC 3): add the optional supplier columns to a gate_event table created before them.
 -- Story 3.13 (D3): explicit unlisted-supplier flag; supplier_ref_ext stays null when set.
 ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS supplier_unlisted BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS resolved_by UUID;
+ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS match_note TEXT;
 
 DO $$
 BEGIN

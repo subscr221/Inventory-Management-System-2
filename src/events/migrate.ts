@@ -344,6 +344,9 @@ const MIGRATIONS = [
   // tail; putaway_task.sql is NOT edited.
   '../../read/projections/putaway_task_qc_release.sql',
   '../../read/projections/qc_observation_note.sql',
+  // Story 3.19: unloading exception state (receiving_exception) and the grn_line resolver columns
+  // (forward-only ADD COLUMN; grn_line.sql is NOT edited). Appended at the tail.
+  '../../read/projections/receiving_exception.sql',
 ];
 
 async function migrate(): Promise<void> {

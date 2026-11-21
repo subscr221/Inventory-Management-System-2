@@ -378,6 +378,51 @@ export interface GateReversedEnvelope extends Omit<EventEnvelope, 'payload'> {
   payload: GateReversedPayload;
 }
 
+// Story 3.19: unloading exception commands. gate.matched binds an unmatched gate event to an open PO;
+// gate.sent_to_procurement parks it with procurement; goods.over_tolerance_accepted resolves a
+// GOOD GRN line rejected over tolerance (the accepted quantity posts as its own goods.received).
+export interface GateMatchedPayload {
+  gate_event_id: string;
+  po_ref_ext: string;
+  match_note: string | null;
+  matched_by: string;
+}
+
+export interface GateMatchedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'gate.matched';
+  payload: GateMatchedPayload;
+}
+
+export interface GateSentToProcurementPayload {
+  gate_event_id: string;
+  note: string | null;
+  sent_by: string;
+}
+
+export interface GateSentToProcurementEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'gate.sent_to_procurement';
+  payload: GateSentToProcurementPayload;
+}
+
+export interface GoodsOverToleranceAcceptedPayload {
+  grn_line_id: string;
+  accepted_grn_line_id: string;
+  accepted_qty: string;
+  excess_qty: string;
+  counted_qty: string;
+  ordered_qty: string;
+  already_received_qty: string;
+  tolerance_pct: string;
+  cap_qty: string;
+  note: string | null;
+  resolved_by: string;
+}
+
+export interface GoodsOverToleranceAcceptedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'goods.over_tolerance_accepted';
+  payload: GoodsOverToleranceAcceptedPayload;
+}
+
 // Story 3.3: weighbridge event capture (net = gross - tare, tolerance enforced against the
 // Story 2.9 open-PO line). correlation_id is the Story 3.2 binding token. NUMERIC weights are
 // carried as strings or numbers on the wire but never rounded/compared as JS floats downstream.
@@ -5915,6 +5960,19 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'gate.reversed': {
     streamType: 'gate',
+    requiresBusinessStream: false,
+  },
+  // Story 3.19: unloading exception commands
+  'gate.matched': {
+    streamType: 'gate',
+    requiresBusinessStream: false,
+  },
+  'gate.sent_to_procurement': {
+    streamType: 'gate',
+    requiresBusinessStream: false,
+  },
+  'goods.over_tolerance_accepted': {
+    streamType: 'receiving',
     requiresBusinessStream: false,
   },
   // Story 3.3: weighbridge event capture (no valuated inventory movement, so business-stream

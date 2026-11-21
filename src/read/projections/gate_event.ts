@@ -21,6 +21,9 @@ export interface GateEvent {
   business_date: string;
   status: 'open' | 'reversed';
   reversal_reason: string | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  match_note: string | null;
   source_event_id: string;
   created_at: string;
   updated_at: string;
@@ -79,7 +82,8 @@ const GATE_EVENT_COLUMNS = `gate_event_id, site_id, site_code_ext, po_ref_ext, b
        vehicle_reg_ext, driver_name, challan_number_ext, challan_photo_ref, gate_id,
        gate_officer_id, correlation_id, supplier_ref_ext, supplier_name_unlisted, supplier_unlisted,
        entered_at, to_char(business_date, 'YYYY-MM-DD') AS business_date,
-       status, reversal_reason, source_event_id, created_at, updated_at`;
+       status, reversal_reason, resolved_by, resolved_at, match_note, source_event_id,
+       created_at, updated_at`;
 
 function mapRow(row: Record<string, unknown>): GateEvent {
   return {
@@ -102,6 +106,9 @@ function mapRow(row: Record<string, unknown>): GateEvent {
     business_date: row['business_date'] as string,
     status: row['status'] as GateEvent['status'],
     reversal_reason: (row['reversal_reason'] as string | null) ?? null,
+    resolved_by: (row['resolved_by'] as string | null) ?? null,
+    resolved_at: row['resolved_at'] ? ts(row['resolved_at']) : null,
+    match_note: (row['match_note'] as string | null) ?? null,
     source_event_id: row['source_event_id'] as string,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
@@ -148,6 +155,9 @@ export async function listGateEvents(
     add('site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.status) add('status = ?', filters.status);
   if (filters.bindingStatus) add('binding_status = ?', filters.bindingStatus);
+  // Story 3.19: a sent-to-procurement entry stays unmatched but leaves the open unmatched inbox.
+  if (filters.bindingStatus === 'unmatched' && filters.status === 'open')
+    clauses.push('resolved_at IS NULL');
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
   const limit = Math.min(Math.max(Math.trunc(filters.limit ?? 200), 1), 500);
   const offset = Math.max(Math.trunc(filters.offset ?? 0), 0);
@@ -172,8 +182,8 @@ export async function upsertGateEvent(
      ON CONFLICT (gate_event_id) DO UPDATE SET
        site_id = EXCLUDED.site_id,
        site_code_ext = EXCLUDED.site_code_ext,
-       po_ref_ext = EXCLUDED.po_ref_ext,
-       binding_status = EXCLUDED.binding_status,
+       po_ref_ext = CASE WHEN gate_event.binding_status = 'matched' THEN gate_event.po_ref_ext ELSE EXCLUDED.po_ref_ext END,
+       binding_status = CASE WHEN gate_event.binding_status = 'matched' THEN gate_event.binding_status ELSE EXCLUDED.binding_status END,
        vehicle_reg_ext = EXCLUDED.vehicle_reg_ext,
        driver_name = EXCLUDED.driver_name,
        challan_number_ext = EXCLUDED.challan_number_ext,
@@ -224,4 +234,40 @@ export async function markGateEventReversed(
     [gateEventId, reversalReason],
   );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
+}
+
+/** Story 3.19: bind an unmatched gate event to an open PO. Projection-side refusals are the authority. */
+export async function markGateEventMatched(
+  input: {
+    gate_event_id: string;
+    po_ref_ext: string;
+    match_note: string | null;
+    resolved_by: string;
+  },
+  client: PoolClient,
+): Promise<GateEvent> {
+  const result = await client.query(
+    `UPDATE gate_event
+        SET binding_status = 'matched', po_ref_ext = $2, match_note = $3, resolved_by = $4,
+            resolved_at = now(), updated_at = now()
+      WHERE gate_event_id = $1
+      RETURNING ${GATE_EVENT_COLUMNS}`,
+    [input.gate_event_id, input.po_ref_ext, input.match_note, input.resolved_by],
+  );
+  return mapRow(result.rows[0]!);
+}
+
+/** Story 3.19: park an unmatched gate event with procurement; it stays unmatched. */
+export async function markGateEventSent(
+  input: { gate_event_id: string; resolved_by: string },
+  client: PoolClient,
+): Promise<GateEvent> {
+  const result = await client.query(
+    `UPDATE gate_event
+        SET resolved_by = $2, resolved_at = now(), updated_at = now()
+      WHERE gate_event_id = $1
+      RETURNING ${GATE_EVENT_COLUMNS}`,
+    [input.gate_event_id, input.resolved_by],
+  );
+  return mapRow(result.rows[0]!);
 }

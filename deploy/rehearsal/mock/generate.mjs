@@ -427,7 +427,7 @@ const people = [
   ['planner1', 'Vikas Gupta', false, [['production_planner', 'production', W, 'site'], ['production_planner', 'inventory', R, 'site'], ['production_planner', 'engineering', R, 'site'], ['production_planner', 'qc', R, 'site']]],
   ['maint1', 'Arif Ansari', false, [['maintenance_technician', 'maintenance', W, 'site']]],
   ['maintsup1', 'Deepak Chauhan', false, [['maintenance_supervisor', 'maintenance', W, '*']]],
-  ['indent1', 'Kavita Singh', false, [['procurement_officer', 'procurement', W, 'site'], ['procurement_officer', 'inventory', R, 'site']]],
+  ['indent1', 'Kavita Singh', false, [['procurement_officer', 'procurement', W, 'site'], ['procurement_officer', 'inventory', R, 'site'], ['procurement_officer', 'notification', R, 'site']]],
   ['audit1', 'Rohit Mathur', false, [['internal_auditor', 'audit', R, '*'], ['internal_auditor', 'inventory', R, 'site']]],
   // fictitious: duties that had no holder in the first transaction test
   ['qchead1', 'Sunita Rawat', true, [['qc_head', 'qc', W, 'site'], ['qc_head', 'quality', W, 'site'], ['qc_head', 'inventory', R, 'site']]],

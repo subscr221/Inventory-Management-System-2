@@ -223,6 +223,8 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
       '../../read/projections/weighbridge_event.sql',
       '../../read/projections/grn.sql',
       '../../read/projections/grn_line.sql',
+      '../../read/projections/grn_line_condition.sql',
+      '../../read/projections/receiving_exception.sql',
       '../../read/projections/putaway_task.sql',
       '../../read/projections/asn.sql',
       '../../read/projections/asn_line.sql',

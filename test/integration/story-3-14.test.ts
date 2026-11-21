@@ -130,6 +130,7 @@ describe('Story 3.14 Stores Inbox and Acceptance', () => {
       '../../read/projections/grn_line.sql',
       '../../read/projections/grn_line_condition.sql',
       '../../read/projections/grn_line_inspect.sql',
+      '../../read/projections/receiving_exception.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }

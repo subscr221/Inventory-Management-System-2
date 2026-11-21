@@ -134,6 +134,12 @@ import {
   releasePutawayTaskHandler,
 } from './api/v1/receiving.js';
 import {
+  matchGateEventToPoHandler,
+  sendGateEventToProcurementHandler,
+  acceptWithinBandHandler,
+  listReceivingExceptionsHandler,
+} from './api/v1/unloading-exceptions.js';
+import {
   handleListPutawayTasks,
   handleGetPutawayTask,
   handleGetPutawaySuggestion,
@@ -791,6 +797,12 @@ export function createAppRouter(): Router {
   // Story 3.2: Gate Event Capture and Vehicle-to-PO Binding
   router.post('/api/v1/gate-events', createGateEventHandler);
   router.post('/api/v1/gate-events/:gateEventId/reverse', reverseGateEventHandler);
+  // Story 3.19: unloading exception commands.
+  router.post('/api/v1/gate-events/:gateEventId/match-po', matchGateEventToPoHandler);
+  router.post(
+    '/api/v1/gate-events/:gateEventId/send-to-procurement',
+    sendGateEventToProcurementHandler,
+  );
   router.get('/api/v1/gate-events/:gateEventId', getGateEventHandler);
   router.get('/api/v1/gate-events', listGateEventsHandler);
 
@@ -808,6 +820,9 @@ export function createAppRouter(): Router {
   router.get('/api/v1/grns/:grnId', getGrnHandler);
   router.get('/api/v1/grns', listGrnsHandler);
   router.get('/api/v1/receiving/discrepancies', listDiscrepanciesHandler);
+  // Story 3.19: unloading exceptions (static path registered before any parameter route).
+  router.get('/api/v1/receiving/exceptions', listReceivingExceptionsHandler);
+  router.post('/api/v1/grn-lines/:grnLineId/accept-within-band', acceptWithinBandHandler);
   // Story 3.14: the stores inbox arrivals read.
   router.get('/api/v1/receiving/arrivals', listArrivalsHandler);
   router.post('/api/v1/putaway-tasks/:putawayTaskId/release', releasePutawayTaskHandler);

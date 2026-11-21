@@ -411,7 +411,8 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
     | 'damage-cases'
     | 'gate'
     | 'approvals'
-    | 'pack-dispatch';
+    | 'pack-dispatch'
+    | 'unloading-exceptions';
   functionScope: 'read' | 'write';
 }> = [
   { name: 'Dashboard', modules: '*', functionScope: 'read' },
@@ -443,6 +444,9 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   { name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
   // Story 8.11 (AC 1): the QC inspector's inbox, for a qc module assignment covering the site.
   { name: 'QC inbox', modules: ['qc'], functionScope: 'read' },
+  // Story 3.19 (AC 4): the unloading exceptions inbox (the screen is Story 3.20), role-evaluated so a
+  // store_assistant holding receiving write is never sent it.
+  { name: 'Unloading exceptions', modules: 'unloading-exceptions', functionScope: 'read' },
 ];
 
 /**
@@ -494,6 +498,20 @@ function hasPackDispatchScope(authContext: AuthContext, siteId: string): boolean
 }
 
 /**
+ * Story 3.19 (AC 4): the unloading exceptions inbox is for the unloading supervisor and the warehouse
+ * manager (escalation approver) holding a receiving or inventory assignment covering the site.
+ */
+function hasUnloadingExceptionScope(authContext: AuthContext, siteId: string): boolean {
+  const resolverRoles = new Set(['unloading_supervisor', 'warehouse_manager']);
+  return authContext.roles.some(
+    (r) =>
+      (r.module === 'receiving' || r.module === 'inventory' || r.module === '*') &&
+      resolverRoles.has(r.role) &&
+      assignmentCoversLocation(r, siteId),
+  );
+}
+
+/**
  * Story 4.12 (AC 1): the Approvals inbox shows to the active holder, at the site, of the role of
  * any `indent_approval` DOA entry, or to today's active delegate of such a holder. A holder with
  * nothing pending still gets the entry and its empty state.
@@ -524,6 +542,8 @@ async function navigationFor(authContext: AuthContext, siteId: string): Promise<
       shown = hasGateScope(authContext, siteId);
     } else if (modules === 'pack-dispatch') {
       shown = hasPackDispatchScope(authContext, siteId);
+    } else if (modules === 'unloading-exceptions') {
+      shown = hasUnloadingExceptionScope(authContext, siteId);
     } else if (modules === 'approvals') {
       shown = await hasIndentApprovalScope(authContext, siteId);
     } else {

@@ -952,7 +952,7 @@ development_status:
   3-16-floor-task-inbox-and-pick-execution-screen: done   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G08 picker; L) # dev-auto 2026-10-23: implemented, review pass applied 12 patches, follow-up review recommended
   3-17-short-pick-exception-seam-and-tiles: ready-for-dev   # PILOT (sprint-change 2026-10-21; G08 short pick; M)  # story file created 2026-11-22 via create-story
   3-18-pack-station-and-dispatch-screen: done   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G08 pack and dispatch; L)
-  3-19-unloading-exception-commands-server: backlog   # PILOT (sprint-change 2026-10-21; G08 unloading server; L)
+  3-19-unloading-exception-commands-server: done   # PILOT (sprint-change 2026-10-21; G08 unloading server; L)
   3-20-unloading-exceptions-screen: backlog   # PILOT (sprint-change 2026-10-21; G08 unloading edge; M)
   epic-3-retrospective: optional
   # story 3-2 code review 2026-07-23: 2 decisions resolved + 7 patches applied (server-generated gate_event_id, IST-based localYmd, removed redundant binding_token alias, UNIQUE correlation_id, pagination limit, negative-path tests); 1 patch reverted (alreadyPersisted null-key throw broke HTTP path); moved to done

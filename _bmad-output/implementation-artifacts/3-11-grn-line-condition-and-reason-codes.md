@@ -89,7 +89,7 @@ so that shortages, damage, and wrong deliveries are captured at the dock with ev
 
 ### Reason Catalogue
 
-Table 1 is the fixed catalogue. Group codes come from EXPERIENCE.md L151; the details come from the memlog L43 ruling and the stores mock `mockups/key-stores.html` (the SHORT tiles "Supplier short-shipped", "Part delivery - balance to follow", "Count mismatch with challan", "Other"; the mock's "Other" tile is `reason_code` `OTHER`).
+Table 1 is the fixed catalogue (the last row is resolution-only and never lands on a GRN line). Group codes come from EXPERIENCE.md L151; the details come from the memlog L43 ruling and the stores mock `mockups/key-stores.html` (the SHORT tiles "Supplier short-shipped", "Part delivery - balance to follow", "Count mismatch with challan", "Other"; the mock's "Other" tile is `reason_code` `OTHER`).
 
 Table 1: Receiving reason catalogue
 
@@ -99,6 +99,7 @@ Table 1: Receiving reason catalogue
 | `DAMAGED` | `TRANSIT_DAMAGE`, `PACKING_DAMAGE`, `RUST_OR_CORROSION` | detail required |
 | `REJECTED` | `WRONG_ITEM`, `WRONG_SPEC` | detail required |
 | `OTHER` | none (detail forbidden) | `reason_photo_ref` and one-line `reason_note` required |
+| `EXCESS_RETURNED_WITH_VEHICLE` | none | resolution-only (Story 3.19): written on the `receiving_exception` row when an over-tolerance line is accepted at the band cap; `createGrnLine` refuses it |
 
 Table 2 lists the only allowed pairs of `line_condition` and `reason_code`; any other pair is `RECEIVING_REASON_INVALID`.
 

@@ -568,6 +568,20 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
       { event_type: body.event_type },
     );
   }
+  // Story 3.19 (review): the unloading exception facts carry the resolver-role gate, the live band
+  // cap and the paired goods.received posting in their routes; this door never accepts them.
+  if (
+    body.event_type === 'gate.matched' ||
+    body.event_type === 'gate.sent_to_procurement' ||
+    body.event_type === 'goods.over_tolerance_accepted'
+  ) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `Event "${body.event_type}" is accepted only through the unloading exception routes`,
+      { event_type: body.event_type },
+    );
+  }
   if (body.stream_type === 'procurement' && body.event_type === 'indent.raised') {
     const lines = body.payload['lines'];
     if (Array.isArray(lines)) {

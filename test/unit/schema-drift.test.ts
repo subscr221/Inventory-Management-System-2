@@ -1144,7 +1144,7 @@ const EXPECTED = [
     // Story 7.10 (BSD 6): the certificate-number index is partial on status = 'active' so a
     // correction-supersede may carry the same physical certificate number as the row it supersedes.
     indexBodies: [
-      'ON instrument_calibration_certificate (instrument_record_id, lower(certificate_number)) WHERE status = \'active\'',
+      "ON instrument_calibration_certificate (instrument_record_id, lower(certificate_number)) WHERE status = 'active'",
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
@@ -1535,6 +1535,22 @@ const EXPECTED = [
     indexes: ['idx_qc_observation_note_task'],
     indexBodies: ['ON qc_observation_note (task_id, recorded_at)'],
     appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 3.19: the unloading exception state (over-tolerance lines and unmatched vehicles).
+  {
+    canonical: 'read/projections/receiving_exception.sql',
+    table: 'receiving_exception',
+    constraints: [
+      'chk_receiving_exception_kind',
+      'chk_receiving_exception_status',
+      'chk_receiving_exception_resolution',
+      'chk_receiving_exception_reason',
+      'chk_receiving_exception_resolved_at',
+      'uq_receiving_exception_source',
+    ],
+    indexes: ['idx_receiving_exception_site_status'],
+    indexBodies: ['ON receiving_exception (site_id, status)'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
   },
   // Story 8.1 (FR-Q-05, AC 4): immutable deviation evidence with a database-enforced future expiry.
   {
@@ -3147,6 +3163,35 @@ describe('Story 2.1 schema drift guard', () => {
     assert.ok(
       noteAt > releaseAt,
       'qc_observation_note.sql must be appended after the release file',
+    );
+  });
+
+  it('Story 3.19 registers receiving_exception and mirrors the grn_line and gate_event upgrades', () => {
+    const sql = read('read/projections/receiving_exception.sql');
+    for (const fragment of [
+      'ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS resolved_by UUID',
+      'ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ',
+      'ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS resolution TEXT',
+      'chk_grn_line_resolution',
+      "IN ('accepted_within_band', 'sent_to_procurement')",
+    ]) {
+      assert.ok(sql.includes(fragment), `receiving_exception.sql missing ${fragment}`);
+    }
+    assert.ok(
+      normalizeSql(initDb).includes(normalizeSql(sql)),
+      'init-db.sql does not mirror receiving_exception.sql verbatim',
+    );
+    const gateSql = read('read/projections/gate_event.sql');
+    for (const column of ['resolved_by UUID', 'resolved_at TIMESTAMPTZ', 'match_note TEXT']) {
+      const alter = `ALTER TABLE gate_event ADD COLUMN IF NOT EXISTS ${column};`;
+      assert.ok(gateSql.includes(alter), `gate_event.sql missing ${alter}`);
+      assert.ok(initDb.includes(alter), `init-db.sql missing ${alter}`);
+    }
+    const exceptionAt = migrateSource.indexOf("'../../read/projections/receiving_exception.sql'");
+    const noteAt = migrateSource.indexOf("'../../read/projections/qc_observation_note.sql'");
+    assert.ok(
+      exceptionAt > noteAt,
+      'receiving_exception.sql must be appended at the migrate.ts tail',
     );
   });
 

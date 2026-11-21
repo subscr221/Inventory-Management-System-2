@@ -518,6 +518,13 @@
       "holder": "indent1@ancorlabs.org"
     },
     {
+      "role": "procurement_officer",
+      "module": "notification",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "indent1@ancorlabs.org"
+    },
+    {
       "role": "employee",
       "module": "employee",
       "function_scope": "write",
