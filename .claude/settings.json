@@ -27,6 +27,66 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/Users/SCHOOL-PC/AppData/Roaming/uv/tools/bmad-loop/Scripts/bmad-loop.exe relay SessionStart"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/Users/SCHOOL-PC/AppData/Roaming/uv/tools/bmad-loop/Scripts/bmad-loop.exe relay Stop"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/Users/SCHOOL-PC/AppData/Roaming/uv/tools/bmad-loop/Scripts/bmad-loop.exe relay SessionEnd"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/Users/SCHOOL-PC/AppData/Roaming/uv/tools/bmad-loop/Scripts/bmad-loop.exe relay PreCompact"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/Users/SCHOOL-PC/AppData/Roaming/uv/tools/bmad-loop/Scripts/bmad-loop.exe relay Notification"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/Users/SCHOOL-PC/AppData/Roaming/uv/tools/bmad-loop/Scripts/bmad-loop.exe relay StopFailure"
+          }
+        ]
+      }
     ]
   }
 }

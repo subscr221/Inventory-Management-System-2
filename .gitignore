@@ -22,3 +22,8 @@ edge/test/staging/.auth/
 
 # tokenade — legacy per-project embedding model cache (now global)
 .fastembed_cache/
+.bmad-loop/runs/
+.bmad-loop/cache/
+.bmad-loop/policy.toml
+_bmad/render/
+_bmad/config.user.yaml
