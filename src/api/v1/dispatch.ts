@@ -26,6 +26,8 @@ import {
 } from '../../read/projections/dispatch_document.js';
 import { getDispatchIrn } from '../../read/projections/dispatch_irn.js';
 import { getSalesOrderLineById } from '../../read/projections/erp_sales_order.js';
+import { listDispatchOrders, DISPATCH_LIST_STAGES } from '../../read/projections/dispatch_list.js';
+import { listPickLinesByDispatchOrderLine } from '../../read/projections/pick_line.js';
 import {
   IRN_EXT_REGEX,
   isValidIrpAcknowledgedAt,
@@ -762,4 +764,57 @@ export const getIrnCoverage: RouteHandler = async (req, res, params) => {
   }
 
   sendJson(res, 200, { dispatchOrderId, coverage });
+};
+
+// ---------------------------------------------------------------------------
+// Story 3.18 (AC 2, AC 4): the pack station's two read routes. The list is the ONLY new server
+// work alongside the picked-lines read; the pack / generate-documents / dispatch / irn routes above
+// already exist and are reused unmodified.
+// ---------------------------------------------------------------------------
+
+export const listDispatchOrdersHandler: RouteHandler = async (req, res) => {
+  assertRoleAllowed(req, DISPATCH_READ_ROLES, 'read');
+
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  const siteParam = url.searchParams.get('site');
+  if (!siteParam || !UUID_REGEX.test(siteParam)) {
+    throw new AppError(400, 'INVALID_PARAMS', 'site is required and must be a valid UUID');
+  }
+  const siteId = siteParam.toLowerCase();
+  assertSiteAccess(req, siteId, 'read');
+
+  const stageParam = url.searchParams.get('stage');
+  let stage: (typeof DISPATCH_LIST_STAGES)[number] | null = null;
+  if (stageParam !== null) {
+    if (!DISPATCH_LIST_STAGES.includes(stageParam as (typeof DISPATCH_LIST_STAGES)[number])) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `stage filter must be one of: ${DISPATCH_LIST_STAGES.join(', ')}`,
+      );
+    }
+    stage = stageParam as (typeof DISPATCH_LIST_STAGES)[number];
+  }
+
+  const dispatchOrders = await listDispatchOrders(siteId, stage);
+  sendJson(res, 200, { dispatchOrders });
+};
+
+export const getPickedLines: RouteHandler = async (req, res, params) => {
+  assertRoleAllowed(req, DISPATCH_READ_ROLES, 'read');
+
+  const dispatchOrderId = params['dispatchOrderId']?.toLowerCase();
+  if (!dispatchOrderId || !UUID_REGEX.test(dispatchOrderId)) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'dispatchOrderId parameter is required and must be a valid UUID',
+    );
+  }
+
+  const siteId = await resolveDispatchOrderSite(dispatchOrderId);
+  assertSiteAccess(req, siteId, 'read');
+
+  const pickedLines = await listPickLinesByDispatchOrderLine(dispatchOrderId);
+  sendJson(res, 200, { dispatchOrderId, pickedLines });
 };

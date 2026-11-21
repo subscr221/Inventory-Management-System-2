@@ -404,7 +404,14 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
  */
 const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   name: string;
-  modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases' | 'gate' | 'approvals';
+  modules:
+    | readonly string[]
+    | '*'
+    | 'refused-captures'
+    | 'damage-cases'
+    | 'gate'
+    | 'approvals'
+    | 'pack-dispatch';
   functionScope: 'read' | 'write';
 }> = [
   { name: 'Dashboard', modules: '*', functionScope: 'read' },
@@ -429,6 +436,9 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   // Story 3.16 (AC 1): the floor task inbox and pick execution screen, for people holding
   // warehouse write at the site (warehouse_operator picker, store_assistant, supervisors).
   { name: 'Floor tasks', modules: ['warehouse'], functionScope: 'write' },
+  // Story 3.18 (AC 1): the pack station and dispatch screen, for the dispatch clerk and warehouse
+  // manager who hold warehouse write covering the site (role-evaluated, not a bare module match).
+  { name: 'Pack and dispatch', modules: 'pack-dispatch', functionScope: 'write' },
   // Story 4.8: every signed-in person can see the grants they hold; assigning is the server's call.
   { name: 'Standing grants', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
   // Story 8.11 (AC 1): the QC inspector's inbox, for a qc module assignment covering the site.
@@ -467,6 +477,23 @@ function hasGateScope(authContext: AuthContext, siteId: string): boolean {
 }
 
 /**
+ * Story 3.18 (AC 1): the pack station and dispatch screen is for the dispatch clerk and warehouse
+ * manager who hold a warehouse write assignment covering the operating site. Role-evaluated (not a
+ * bare module match) so a dispatch_clerk holding only inventory read, or a store_assistant holding
+ * warehouse write, is never sent it.
+ */
+function hasPackDispatchScope(authContext: AuthContext, siteId: string): boolean {
+  const packDispatchRoles = new Set(['dispatch_clerk', 'warehouse_manager']);
+  return authContext.roles.some(
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      packDispatchRoles.has(r.role) &&
+      r.functionScope === 'write' &&
+      assignmentCoversLocation(r, siteId),
+  );
+}
+
+/**
  * Story 4.12 (AC 1): the Approvals inbox shows to the active holder, at the site, of the role of
  * any `indent_approval` DOA entry, or to today's active delegate of such a holder. A holder with
  * nothing pending still gets the entry and its empty state.
@@ -495,6 +522,8 @@ async function navigationFor(authContext: AuthContext, siteId: string): Promise<
       shown = await hasDamageCaseScope(authContext, siteId);
     } else if (modules === 'gate') {
       shown = hasGateScope(authContext, siteId);
+    } else if (modules === 'pack-dispatch') {
+      shown = hasPackDispatchScope(authContext, siteId);
     } else if (modules === 'approvals') {
       shown = await hasIndentApprovalScope(authContext, siteId);
     } else {

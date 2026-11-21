@@ -508,6 +508,8 @@ import {
   getDispatchDocument,
   postIrnRecorded,
   getIrnCoverage,
+  listDispatchOrdersHandler,
+  getPickedLines,
 } from './api/v1/dispatch.js';
 import {
   createTransferRequestHandler,
@@ -1429,6 +1431,9 @@ export function createAppRouter(): Router {
   router.get('/api/v1/pick-tasks/:pickTaskId/print', printPickTaskHandler);
 
   // Story 3.7: Packing, Shipping, and Dispatch Documents
+  // Story 3.18: the pack station list read. Static, before the per-id routes so `GET /dispatch`
+  // is not captured by `/:dispatchOrderId`.
+  router.get('/api/v1/dispatch', listDispatchOrdersHandler);
   router.post('/api/v1/dispatch/:dispatchOrderId/pack', postPacked);
   router.post(
     '/api/v1/dispatch/:dispatchOrderId/generate-documents',
@@ -1437,6 +1442,8 @@ export function createAppRouter(): Router {
   router.post('/api/v1/dispatch/:dispatchOrderId/dispatch', postDispatched);
   router.get('/api/v1/dispatch/:dispatchOrderId/packing-records', getPackingRecords);
   router.get('/api/v1/dispatch/:dispatchOrderId/documents', getDispatchDocuments);
+  // Story 3.18 (AC 4): the picked-lot checklist for the pack station detail.
+  router.get('/api/v1/dispatch/:dispatchOrderId/picked-lines', getPickedLines);
   // Story 11.2: outbound IRN coverage registry - record the ERP-issued IRN (POST) and read the
   // recorded coverage back (GET) to see whether the IRN-before-dispatch block has lifted.
   router.post('/api/v1/dispatch/:dispatchOrderId/irn', postIrnRecorded);

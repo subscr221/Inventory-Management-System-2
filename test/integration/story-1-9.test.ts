@@ -337,11 +337,14 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/pick-tasks/:pickTaskId/complete',
       'GET /api/v1/pick-tasks/:pickTaskId/print',
       // Story 3.7: dispatch routes
+      'GET /api/v1/dispatch',
       'POST /api/v1/dispatch/:dispatchOrderId/pack',
       'POST /api/v1/dispatch/:dispatchOrderId/generate-documents',
       'POST /api/v1/dispatch/:dispatchOrderId/dispatch',
       'GET /api/v1/dispatch/:dispatchOrderId/packing-records',
       'GET /api/v1/dispatch/:dispatchOrderId/documents',
+      // Story 3.18: the pack station picked-lot checklist.
+      'GET /api/v1/dispatch/:dispatchOrderId/picked-lines',
       // Story 11.2: outbound IRN coverage registry
       'POST /api/v1/dispatch/:dispatchOrderId/irn',
       'GET /api/v1/dispatch/:dispatchOrderId/irn',

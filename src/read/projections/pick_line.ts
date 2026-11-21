@@ -233,3 +233,49 @@ export async function listPickLinesByTask(
   );
   return result.rows.map(mapRow);
 }
+
+/** Story 3.18 (AC 4): the lot-level picked batch a pick line contributed to its dispatch order. */
+export interface DispatchPickLine {
+  pick_line_id: string;
+  sku: string;
+  confirmed_lot_id: string | null;
+  /** The confirmed lot's `lot_number`, bridged from `confirmed_lot_id` for the pack-station scan. */
+  confirmed_lot_number: string | null;
+  confirmed_quantity: string | null;
+  uom: string | null;
+}
+
+/**
+ * Story 3.18 (AC 4): the pack-station checklist. Every confirmed or substituted pick line under a
+ * dispatch order line (an erp_sales_order surrogate id), with the confirmed lot's human lot_number
+ * bridged from lot_master so the scan match is on the label the packer actually reads.
+ */
+export async function listPickLinesByDispatchOrderLine(
+  dispatchOrderLineId: string,
+  client?: PoolClient,
+): Promise<DispatchPickLine[]> {
+  const result = await runner(client).query(
+    `SELECT pl.pick_line_id, pl.sku, pl.confirmed_lot_id,
+            pl.confirmed_quantity::text AS confirmed_quantity,
+            lmc.lot_number AS confirmed_lot_number,
+            im.uom AS uom
+       FROM pick_line pl
+       LEFT JOIN lot_master lmc ON lmc.lot_id = pl.confirmed_lot_id
+       LEFT JOIN item_master im ON im.sku = pl.sku
+      WHERE pl.dispatch_order_line_id = $1
+        AND pl.status IN ('confirmed', 'substituted')
+      ORDER BY pl.pick_sequence ASC, pl.pick_line_id ASC`,
+    [dispatchOrderLineId],
+  );
+  return result.rows.map((row) => ({
+    pick_line_id: row['pick_line_id'] as string,
+    sku: row['sku'] as string,
+    confirmed_lot_id: (row['confirmed_lot_id'] as string | null) ?? null,
+    confirmed_lot_number: (row['confirmed_lot_number'] as string | null) ?? null,
+    confirmed_quantity:
+      row['confirmed_quantity'] === null || row['confirmed_quantity'] === undefined
+        ? null
+        : String(row['confirmed_quantity']),
+    uom: (row['uom'] as string | null) ?? null,
+  }));
+}

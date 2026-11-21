@@ -37,6 +37,9 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^grn\./,
   // Story 3.16: the floor task inbox and pick execution screen.
   /^floor\./,
+  // Story 3.18: the pack station list and dispatch screen.
+  /^packStation\./,
+  /^pack-station-/,
   // Story 4.8: the standing grants page.
   /^standingGrants\./,
   /^standing-grants-/,

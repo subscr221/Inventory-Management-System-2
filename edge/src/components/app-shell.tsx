@@ -40,6 +40,7 @@ import { StoresIssue } from './stores-issue';
 import { PutawayTask } from './putaway-task';
 import { GrnRead } from './grn-read';
 import { FloorTasks, type FloorTasksProps } from './floor-tasks';
+import { PackDispatch, type PackDispatchProps } from './pack-dispatch';
 import { Approvals } from './approvals';
 import { QcInbox, type QcInboxProps } from './qc-inbox';
 import { QcHolds, type QcHoldsProps } from './qc-holds';
@@ -101,6 +102,8 @@ export interface AppShellProps {
   storesAccept?: StoresAcceptProps;
   /** Story 3.16: the floor task inbox and pick execution screen, injected by the edge client. */
   floorTasks?: FloorTasksProps;
+  /** Story 3.18: the pack station list and dispatch screen, injected by the edge client. */
+  packDispatch?: PackDispatchProps;
   /** Story 8.11: the QC inbox and holds page, injected by the edge client. */
   qcInbox?: QcInboxProps;
   qcHolds?: QcHoldsProps;
@@ -162,6 +165,7 @@ type BaseView =
   | 'putaway-task'
   | 'grn-read'
   | 'floor-tasks'
+  | 'pack-dispatch'
   | 'qc-tasks'
   | 'qc-holds'
   | 'approvals';
@@ -187,6 +191,8 @@ const BASE_VIEW_ENTRY: Record<BaseView, string> = {
   'grn-read': 'Stores',
   // Story 3.16 (AC 1): the floor task inbox and pick execution screen.
   'floor-tasks': 'Floor tasks',
+  // Story 3.18 (AC 1): the pack station and dispatch screen.
+  'pack-dispatch': 'Pack and dispatch',
   // Story 8.11 (AC 1): the QC inbox and holds page.
   'qc-tasks': 'QC inbox',
   'qc-holds': 'QC inbox',
@@ -247,6 +253,7 @@ export function AppShell({
   storesInbox,
   storesAccept,
   floorTasks,
+  packDispatch,
   qcInbox,
   qcHolds,
   userId = '',
@@ -453,6 +460,14 @@ export function AppShell({
                   ready: navigationConfirmed,
                   siteId: '',
                   userId,
+                })}
+              />
+            ) : view === 'pack-dispatch' ? (
+              <PackDispatch
+                {...(packDispatch ?? {
+                  online,
+                  ready: navigationConfirmed,
+                  siteId: '',
                 })}
               />
             ) : view === 'qc-tasks' ? (

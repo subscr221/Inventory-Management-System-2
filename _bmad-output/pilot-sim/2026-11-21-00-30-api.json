@@ -1,0 +1,286 @@
+{
+  "started": "2026-11-21T00:30:17.295Z",
+  "finished": "2026-11-21T00:30:41.607Z",
+  "site": "CMF-ALIGARH",
+  "purchase_order": "MK-PO-D2611210030",
+  "sales_order": "MK-SO-D2611210030",
+  "crashed": false,
+  "steps": [
+    {
+      "name": "ERP feed: purchase order MK-PO-D2611210030",
+      "result": "PASS",
+      "seconds": 2.127349,
+      "note": "1 applied, 4 lines"
+    },
+    {
+      "name": "ERP feed: sales order MK-SO-D2611210030",
+      "result": "PASS",
+      "seconds": 2.7185965,
+      "note": "2 applied, 2 dispatch-order ids read on the box"
+    },
+    {
+      "name": "inbound: gate entry",
+      "result": "FAIL",
+      "seconds": 0.4176195000000007,
+      "note": "gate event: expected 201, got 500 {\"error_code\":\"INTERNAL_ERROR\",\"message\":\"Internal server error\",\"details\":{},\"trace_id\":\"b07092a9-464f-41f5-9582-d44ff994992d\"}"
+    },
+    {
+      "name": "inbound: weighbridge (net within the PO line band)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: GRN plain item",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: GRN lot item",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: GRN consignment item (ownership agreement)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "inbound: putaway into a storage bin",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "job-work: receive customer material against the challan (no PO, no ticket)",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "job-work: the same challan and lot again is refused",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "count: cycle count with a variance",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "count: counter cannot approve, another person approves",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "needs \"inbound: gate entry\""
+    },
+    {
+      "name": "outbound: generate picks for a seeded sales order",
+      "result": "PASS",
+      "seconds": 0.6012286999999996,
+      "note": "MK-SO-D2611210030: 2.000 BRG-6204 + 10.000 RM-COIL-2MM, 2 task(s)"
+    },
+    {
+      "name": "outbound: confirm pick lines (lot item FEFO, plain item)",
+      "result": "PASS",
+      "seconds": 1.2739403000000002,
+      "note": "2 BRG-6204 from BIN-A03, 10 RM-COIL-2MM (lot) from BIN-R01"
+    },
+    {
+      "name": "outbound: pack refuses a lot that was not picked",
+      "result": "PASS",
+      "seconds": 0.6825520999999999,
+      "note": "PACKED_LINE_NOT_PICKED for RM-COIL-2MM with a lot that was not picked, no packing record"
+    },
+    {
+      "name": "outbound: pack",
+      "result": "PASS",
+      "seconds": 0.3825037999999995,
+      "note": "2 dispatch order lines packed"
+    },
+    {
+      "name": "outbound: IRN, shipping documents",
+      "result": "PASS",
+      "seconds": 0.5826440000000003,
+      "note": "one IRN covers 2 lines, 8 documents"
+    },
+    {
+      "name": "outbound: dispatch",
+      "result": "PASS",
+      "seconds": 0.3897317000000003,
+      "note": "2 lines dispatched"
+    },
+    {
+      "name": "production: planner reads stock, creates the order",
+      "result": "PASS",
+      "seconds": 1.2856597999999995,
+      "note": "2 x FG-PUMP-12"
+    },
+    {
+      "name": "production: release",
+      "result": "PASS",
+      "seconds": 0.4231777999999995,
+      "note": "status released"
+    },
+    {
+      "name": "production: stage components from storage bins",
+      "result": "PASS",
+      "seconds": 0.8734115999999994,
+      "note": "3 lines staged"
+    },
+    {
+      "name": "production: issue components",
+      "result": "PASS",
+      "seconds": 0.7710137000000014,
+      "note": "3 components issued, order in process"
+    },
+    {
+      "name": "production: complete (inspection plan resolved)",
+      "result": "PASS",
+      "seconds": 0.22375970000000053,
+      "note": "lot ?, QC task raised"
+    },
+    {
+      "name": "indent: raise",
+      "result": "PASS",
+      "seconds": 0.4357489000000005,
+      "note": "approval required from 4eec160d-f8f0-472c-94da-06fbc2d4181e"
+    },
+    {
+      "name": "indent: raiser cannot approve, department head approves",
+      "result": "PASS",
+      "seconds": 0.5923678999999993,
+      "note": "self-approval refused (INDENT_RAISER_CANNOT_APPROVE), approved"
+    },
+    {
+      "name": "indent: storekeeper issues at the counter, closes the remainder",
+      "result": "FAIL",
+      "seconds": 0.4032224999999999,
+      "note": "read indent for issue: expected 200, got 403 {\"error_code\":\"MODULE_ACCESS_DENIED\",\"message\":\"No role assignment grants access to module \\\"employee\\\"\",\"details\":{},\"trace_id\":\"62b81620-425f-4358-8fd6-6e04f9b93bd7\"}"
+    },
+    {
+      "name": "maintenance: technician reports a fault",
+      "result": "PASS",
+      "seconds": 0.42852529999999933,
+      "note": "on AST-PRESS-01"
+    },
+    {
+      "name": "maintenance: supervisor accepts, work order with SLA",
+      "result": "PASS",
+      "seconds": 0.4236306999999997,
+      "note": "priority p2, resolution due 2026-11-22T00:36:03.983Z"
+    },
+    {
+      "name": "maintenance: technician works and completes",
+      "result": "PASS",
+      "seconds": 0.5273737999999993,
+      "note": "status completed"
+    },
+    {
+      "name": "qc: sample and inspect an open task",
+      "result": "PASS",
+      "seconds": 0.9103298000000013,
+      "note": "lot MO-2026-0058-L1 (2.000000 FG-PUMP-12), sample of 2, 2 characteristics conform"
+    },
+    {
+      "name": "qc: the inspector cannot disposition, the QC head accepts",
+      "result": "PASS",
+      "seconds": 0.7337834000000003,
+      "note": "the inspector who recorded the results refused (SOD_VIOLATION), accepted by the QC head"
+    },
+    {
+      "name": "qc: retention sample logged in the quarantine bin",
+      "result": "PASS",
+      "seconds": 0.7394254000000001,
+      "note": "1 EA kept in QCH-BIN-01, sample 99c504d6-c5a2-4dad-858f-97ab5a1c7b3f"
+    },
+    {
+      "name": "qc: release the lot",
+      "result": "PASS",
+      "seconds": 0.36390949999999794,
+      "note": "released ({\"release_id\":\"94bb7a31-5c4b-4315-8faf-c57a290c5c61\",\"lot_id\":\"765cd681-f64f-493d-b901-042528c10d1d\",\"task_id\":\"c32472fa)"
+    },
+    {
+      "name": "bin move: storekeeper moves stock to another storage bin (Ruling C)",
+      "result": "PASS",
+      "seconds": 1.1441483999999982,
+      "note": "2 BRG-6306 BIN-A02 (699 to 697) to BIN-J02 (586 to 588), valuation unchanged at 606541.5, move 1feb50f1-ed9a-4962-8e75-0fe2518d087c"
+    },
+    {
+      "name": "bin move: more than the bin holds is refused",
+      "result": "PASS",
+      "seconds": 0.4846740000000027,
+      "note": "698 of 697: BIN_MOVE_INSUFFICIENT_AVAILABLE, bin unchanged"
+    },
+    {
+      "name": "transfer: storekeeper requests a lot between two storage bins",
+      "result": "PASS",
+      "seconds": 0.8325565999999999,
+      "note": "2 RM-SHEET-1MM lot LOT-0144 BIN-J02 to BIN-J01, pending_approval"
+    },
+    {
+      "name": "transfer: no shipment before approval, the warehouse manager approves",
+      "result": "PASS",
+      "seconds": 0.32791660000000045,
+      "note": "early ship refused (APPROVAL_REQUIRED), approved by the warehouse manager"
+    },
+    {
+      "name": "transfer: ship and receive",
+      "result": "PASS",
+      "seconds": 0.6860621000000028,
+      "note": "status received, BIN-J01 0 to 2"
+    },
+    {
+      "name": "replenishment: check the site and read the task board",
+      "result": "PASS",
+      "seconds": 0.31376170000000275,
+      "note": "0 created by the check, 0 open of 0 on the board"
+    },
+    {
+      "name": "replenishment: operator confirms one task",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "no open replenishment task: the site has no forward-pick min/max configured (PUT /api/v1/replenishment/config is a planning decision, not a daily action)"
+    },
+    {
+      "name": "refused captures: department head reads the open queue",
+      "result": "PASS",
+      "seconds": 0.3406075000000019,
+      "note": "0 open at the site, 0 captured by somebody else"
+    },
+    {
+      "name": "refused captures: resolve one captured by somebody else",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "no open refused capture of another person at the site"
+    },
+    {
+      "name": "offcut: read the job-work order holdings",
+      "result": "PASS",
+      "seconds": 0.6407669999999999,
+      "note": "3 orders, holdings JW-MK-0002: 0, JW-MK-0003: 0, JW-MK-0001: 0"
+    },
+    {
+      "name": "offcut: CFO signs a job-work offcut acquisition",
+      "result": "SKIP",
+      "seconds": 0,
+      "note": "no retained offcut holding: capturing one needs consumption, output, QC release, dispatch and an ERP-acknowledged billing feed on the job-work order, none of which the pilot day does"
+    },
+    {
+      "name": "meter: technician records a reading",
+      "result": "PASS",
+      "seconds": 0.6501421000000009,
+      "note": "MTR-FORKLIFT-01 on AST-FORKLIFT-01: 90 to 95 km"
+    },
+    {
+      "name": "meter: a reading below the current one is refused",
+      "result": "PASS",
+      "seconds": 0.16347579999999653,
+      "note": "94 after 95: METER_READING_REGRESSION"
+    }
+  ]
+}

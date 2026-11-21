@@ -268,6 +268,7 @@ export function EdgeClient({
     | 'putaway-task'
     | 'grn-read'
     | 'floor-tasks'
+    | 'pack-dispatch'
     | 'qc-tasks'
     | 'qc-holds'
     | 'approvals';
@@ -1340,6 +1341,11 @@ export function EdgeClient({
         onConfirmPickLine: confirmPickLine,
         settlementOf: pickSettlement,
         refusalCodeOf: pickRefusalCode,
+      }}
+      packDispatch={{
+        online: state.online,
+        ready: state.navigationConfirmed,
+        siteId: state.siteId,
       }}
       qcInbox={{
         online: state.online,

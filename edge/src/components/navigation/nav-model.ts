@@ -28,6 +28,9 @@ export const NAV_ENTRIES: NavEntry[] = [
   { name: 'Stores issue', href: '/stores/issue', label: 'nav.storesIssue' },
   // Story 3.16 (AC 1): the floor task inbox and pick execution screen, for warehouse write holders.
   { name: 'Floor tasks', href: '/floor/tasks', label: 'nav.floorTasks' },
+  // Story 3.18 (AC 1): the pack station and dispatch screen, for the dispatch clerk and warehouse
+  // manager.
+  { name: 'Pack and dispatch', href: '/floor/pack', label: 'nav.packDispatch' },
   // Story 4.8: standing approvals and self-approval limits, for everyone (the held-by-me view).
   { name: 'Standing grants', href: '/standing-grants', label: 'nav.standingGrants' },
   // Story 4.12 (AC 1): the approvals inbox, for indent_approval band holders and delegates.

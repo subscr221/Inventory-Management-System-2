@@ -96,11 +96,11 @@ Table 4: State patterns
 
 | State | Treatment |
 |---|---|
-| Offline or pending sync | `{components.sync-badge}` shows state; captures save locally as "Captured - pending sync". Gate, stores, QC observations, requisitions, damage reports and picking and packing captures all work offline; the dispatch IRN check does not. |
+| Offline or pending sync | `{components.sync-badge}` shows state; captures save locally as "Captured - pending sync". Gate, stores, QC observations, requisitions, damage reports and picking captures all work offline. The pack and dispatch screen is online-only for the pilot: its list renders read-only from the last fetch and Generate shipping documents, Check IRN again, Record IRN and Confirm dispatch are disabled stating needs a connection. |
 | Approval without connection | Approve and Reject are disabled with the reason shown. Approvals need a live connection on every device. Granting and revoking a standing approval also need a live connection. Maintenance triage changes are also disabled offline. |
 | On hold | Stock under a damage report or quality hold is not issuable and never goes to the shelf. A lot-wide hold blocks Accept on the good part of the same lot until cleared. |
 | Printer not ready | Acceptance still completes; the label waits in the print queue. |
-| IRN block | Missing IRN blocks dispatch; billing is notified; the clerk can park the package and check again. The check needs the network. |
+| IRN block | Missing IRN blocks dispatch. The clerk records the IRN against the ERP invoice or checks again once the network is back. Park at dispatch bay is not built for the pilot. |
 | Empty inbox | Plain statement of what is empty; the scan bar stays armed. |
 | Over cap | Standing approval usage over the monthly cap falls back to normal approval. Received qty over tolerance is capped and the excess returned with the vehicle. |
 | Stamp overdue | An overdue legal-metrology stamp on the weighbridge blocks weighing; the operator sees why and gate entry continues without a weight. |
