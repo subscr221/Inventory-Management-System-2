@@ -2093,3 +2093,20 @@ textarea:focus-visible {
     min-height: var(--control-compact);
   }
 }
+
+/* ===== Story 3.20: unloading exceptions ===== */
+.unloading-footer {
+ display: grid;
+ gap: 0.75rem;
+ margin-top: 1rem;
+}
+.unloading-footer .primary-action {
+ width: 100%;
+}
+/* Touch classes: the primary sits full width at the bottom of the page, in thumb reach. */
+.floor-screen[data-device-class="handheld"] .unloading-footer {
+ position: sticky;
+ bottom: 0;
+ padding: 0.75rem 0;
+ background: var(--surface, #fff);
+}

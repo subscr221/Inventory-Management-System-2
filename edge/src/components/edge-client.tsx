@@ -269,6 +269,7 @@ export function EdgeClient({
     | 'grn-read'
     | 'floor-tasks'
     | 'pack-dispatch'
+    | 'unloading-exceptions'
     | 'qc-tasks'
     | 'qc-holds'
     | 'approvals';
@@ -1346,6 +1347,11 @@ export function EdgeClient({
         online: state.online,
         ready: state.navigationConfirmed,
         siteId: state.siteId,
+      }}
+      unloadingExceptions={{
+        online: state.online,
+        ready: state.navigationConfirmed,
+        siteCodeExt: state.siteCodeExt ?? '',
       }}
       qcInbox={{
         online: state.online,

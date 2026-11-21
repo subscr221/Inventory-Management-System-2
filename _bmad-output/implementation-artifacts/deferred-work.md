@@ -1358,7 +1358,8 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 ## Deferred from: code review of story-3.16 (2026-10-23)
 
 - Integration coverage for AC 6 exercises the direct confirm route (POST /api/v1/pick-tasks/:id/lines/:lineId/confirm) rather than the edge outbox replay path the PWA actually uses (pick_line.confirmed through src/api/v1/edge.ts ingest and inline finalize). The outbox ingest plus finalize-after-last-line path is unit-tested for payload shape only; an end-to-end outbox replay test would close the gap.
-- Offline inbox refresh after completion relies on the next sync pass: eload() cannot fetch while offline, so the two-pane list reconciles only after connectivity returns.
+- Offline inbox refresh after completion relies on the next sync pass: 
+eload() cannot fetch while offline, so the two-pane list reconciles only after connectivity returns.
 
 
 ## Deferred from: code review of story-3.14 (2026-11-19)
@@ -1414,3 +1415,11 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-19-unloading-exception-commands-server.md`
   summary: PO binding never checks that the PO belongs to the gate event's site (both `gate.entered` auto-binding and the new 3.19 `match-po` call `getPurchaseOrderByRef` with no site or supplier comparison).
   evidence: `src/compliance/gate.ts:248` and `src/compliance/gate.ts:292` look the PO up by reference only; the 3.19 match inherits the pre-existing global-PO assumption.
+
+## Deferred from: story-3.20 (2026-11-22)
+- Online-only unloading exceptions (story 3.20, owner question Q22): the screen resolves online only, a deliberate departure from the mock (key-floor.html L467 and L788) that shows offline resolve. Match to PO, Accept within band and Ask procurement are not queued to the outbox. Trigger: an offline resolve requirement for unloading exceptions.
+- Typed PO picker (story 3.20): the mock's open-PO radio list is replaced by a typed PO number lookup against `GET /api/v1/erp/purchase-orders/:poNumber`, because no open-PO-by-supplier list route exists. Trigger: an open-PO-by-supplier read route lands.
+- Unlisted supplier flow (story 3.20): the match-to-vendor flow for a gate event with an unlisted supplier is not built. Trigger: the vendor master match requirement is scheduled.
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-20-unloading-exceptions-screen.md`
+  summary: `GET /api/v1/receiving/exceptions` returns at most 500 rows oldest first with no date filter, so once a site holds more than 500 resolved (or sent) rows the 3.20 `Resolved today` group loses today's rows.
+  evidence: `src/read/projections/receiving_exception.ts:255` caps the list at 500 ordered ascending, and the route accepts only `site` and `status` (`src/api/v1/unloading-exceptions.ts:290-332`).

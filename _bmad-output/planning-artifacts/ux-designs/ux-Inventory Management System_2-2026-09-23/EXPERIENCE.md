@@ -96,7 +96,7 @@ Table 4: State patterns
 
 | State | Treatment |
 |---|---|
-| Offline or pending sync | `{components.sync-badge}` shows state; captures save locally as "Captured - pending sync". Gate, stores, QC observations, requisitions, damage reports and picking captures all work offline. The pack and dispatch screen is online-only for the pilot: its list renders read-only from the last fetch and Generate shipping documents, Check IRN again, Record IRN and Confirm dispatch are disabled stating needs a connection. |
+| Offline or pending sync | `{components.sync-badge}` shows state; captures save locally as "Captured - pending sync". Gate, stores, QC observations, requisitions, damage reports and picking captures all work offline. The pack and dispatch screen is online-only for the pilot: its list renders read-only from the last fetch and Generate shipping documents, Check IRN again, Record IRN and Confirm dispatch are disabled stating needs a connection. The unloading exceptions screen is also online-only (owner question Q22): Match to PO, Accept within band and Ask procurement are disabled stating the reason, and the scan field stays armed. |
 | Approval without connection | Approve and Reject are disabled with the reason shown. Approvals need a live connection on every device. Granting and revoking a standing approval also need a live connection. Maintenance triage changes are also disabled offline. |
 | On hold | Stock under a damage report or quality hold is not issuable and never goes to the shelf. A lot-wide hold blocks Accept on the good part of the same lot until cleared. |
 | Printer not ready | Acceptance still completes; the label waits in the print queue. |

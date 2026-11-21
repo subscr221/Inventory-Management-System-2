@@ -47,6 +47,16 @@ describe('Story 1.15 nav model', () => {
     assert.equal(typeof message('nav.qcInbox'), 'string', 'nav.qcInbox missing from en.json');
   });
 
+  it('Story 3.20: registers Unloading exceptions with a real path and catalog label', () => {
+    const entry = NAV_ENTRIES.find((e) => e.name === 'Unloading exceptions');
+    assert.deepEqual(entry, {
+      name: 'Unloading exceptions',
+      href: '/unloading/exceptions',
+      label: 'nav.unloadingExceptions',
+    });
+    assert.equal(typeof message('nav.unloadingExceptions'), 'string');
+  });
+
   it('renders only what the server advertised, in server order', () => {
     const names = entriesFor([
       'Dashboard',

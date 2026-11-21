@@ -31,6 +31,8 @@ export const NAV_ENTRIES: NavEntry[] = [
   // Story 3.18 (AC 1): the pack station and dispatch screen, for the dispatch clerk and warehouse
   // manager.
   { name: 'Pack and dispatch', href: '/floor/pack', label: 'nav.packDispatch' },
+  // Story 3.20: the unloading supervisor's exception inbox.
+  { name: 'Unloading exceptions', href: '/unloading/exceptions', label: 'nav.unloadingExceptions' },
   // Story 4.8: standing approvals and self-approval limits, for everyone (the held-by-me view).
   { name: 'Standing grants', href: '/standing-grants', label: 'nav.standingGrants' },
   // Story 4.12 (AC 1): the approvals inbox, for indent_approval band holders and delegates.

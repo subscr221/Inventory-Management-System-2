@@ -41,6 +41,7 @@ import { PutawayTask } from './putaway-task';
 import { GrnRead } from './grn-read';
 import { FloorTasks, type FloorTasksProps } from './floor-tasks';
 import { PackDispatch, type PackDispatchProps } from './pack-dispatch';
+import { UnloadingExceptions, type UnloadingExceptionsProps } from './unloading-exceptions';
 import { Approvals } from './approvals';
 import { QcInbox, type QcInboxProps } from './qc-inbox';
 import { QcHolds, type QcHoldsProps } from './qc-holds';
@@ -104,6 +105,8 @@ export interface AppShellProps {
   floorTasks?: FloorTasksProps;
   /** Story 3.18: the pack station list and dispatch screen, injected by the edge client. */
   packDispatch?: PackDispatchProps;
+  /** Story 3.20: the unloading exceptions inbox, injected by the edge client. */
+  unloadingExceptions?: UnloadingExceptionsProps;
   /** Story 8.11: the QC inbox and holds page, injected by the edge client. */
   qcInbox?: QcInboxProps;
   qcHolds?: QcHoldsProps;
@@ -166,6 +169,7 @@ type BaseView =
   | 'grn-read'
   | 'floor-tasks'
   | 'pack-dispatch'
+  | 'unloading-exceptions'
   | 'qc-tasks'
   | 'qc-holds'
   | 'approvals';
@@ -193,6 +197,8 @@ const BASE_VIEW_ENTRY: Record<BaseView, string> = {
   'floor-tasks': 'Floor tasks',
   // Story 3.18 (AC 1): the pack station and dispatch screen.
   'pack-dispatch': 'Pack and dispatch',
+  // Story 3.20 (AC 1): the unloading exceptions inbox.
+  'unloading-exceptions': 'Unloading exceptions',
   // Story 8.11 (AC 1): the QC inbox and holds page.
   'qc-tasks': 'QC inbox',
   'qc-holds': 'QC inbox',
@@ -254,6 +260,7 @@ export function AppShell({
   storesAccept,
   floorTasks,
   packDispatch,
+  unloadingExceptions,
   qcInbox,
   qcHolds,
   userId = '',
@@ -468,6 +475,14 @@ export function AppShell({
                   online,
                   ready: navigationConfirmed,
                   siteId: '',
+                })}
+              />
+            ) : view === 'unloading-exceptions' ? (
+              <UnloadingExceptions
+                {...(unloadingExceptions ?? {
+                  online,
+                  ready: navigationConfirmed,
+                  siteCodeExt: '',
                 })}
               />
             ) : view === 'qc-tasks' ? (
