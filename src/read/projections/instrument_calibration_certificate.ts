@@ -12,7 +12,7 @@ import { isValidCalendarDate } from '../../lib/business-days.js';
  * in this repo.
  */
 export type CalibrationType = 'in_house' | 'iso_17025';
-export type CertificateStatus = 'active' | 'superseded' | 'expired';
+export type CertificateStatus = 'active' | 'superseded' | 'expired' | 'voided';
 
 export interface CalibrationCertificateRow {
   certificate_id: string;
@@ -28,6 +28,10 @@ export interface CalibrationCertificateRow {
   recorded_at: string;
   superseded_at: string | null;
   expired_at: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  voided_by: string | null;
+  superseded_as_correction: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -57,13 +61,15 @@ const CERT_COLUMNS = `certificate_id, instrument_record_id, instrument_id, calib
     certificate_number, issuing_lab,
     to_char(calibrated_on, 'YYYY-MM-DD') AS calibrated_on,
     to_char(valid_until, 'YYYY-MM-DD') AS valid_until,
-    status, recorded_by, recorded_at, superseded_at, expired_at, created_at, updated_at`;
+    status, recorded_by, recorded_at, superseded_at, expired_at,
+    voided_at, void_reason, voided_by, superseded_as_correction, created_at, updated_at`;
 
 const CERT_COLUMNS_PREFIXED = `c.certificate_id, c.instrument_record_id, c.instrument_id, c.calibration_type,
     c.certificate_number, c.issuing_lab,
     to_char(c.calibrated_on, 'YYYY-MM-DD') AS calibrated_on,
     to_char(c.valid_until, 'YYYY-MM-DD') AS valid_until,
-    c.status, c.recorded_by, c.recorded_at, c.superseded_at, c.expired_at, c.created_at, c.updated_at`;
+    c.status, c.recorded_by, c.recorded_at, c.superseded_at, c.expired_at,
+    c.voided_at, c.void_reason, c.voided_by, c.superseded_as_correction, c.created_at, c.updated_at`;
 
 export async function getCertificateById(
   certificateId: string,
@@ -99,6 +105,11 @@ export async function getActiveCertificate(
   return (result.rows[0] as CalibrationCertificateRow) ?? null;
 }
 
+/**
+ * Story 7.10 (BSD 6): the number index is partial on status = 'active', so this lookup is
+ * active-preferring - the ACTIVE certificate carrying the number wins over any superseded,
+ * expired or voided history row with the same physical number.
+ */
 export async function getCertificateByNumber(
   instrumentRecordId: string,
   certificateNumber: string,
@@ -110,7 +121,9 @@ export async function getCertificateByNumber(
   const lockClause = forUpdate ? ' FOR UPDATE' : '';
   const result = await runner(client).query(
     `SELECT ${CERT_COLUMNS} FROM instrument_calibration_certificate
-      WHERE instrument_record_id = $1 AND lower(certificate_number) = lower($2)${lockClause}`,
+      WHERE instrument_record_id = $1 AND lower(certificate_number) = lower($2)
+      ORDER BY (status = 'active') DESC, recorded_at DESC
+      LIMIT 1${lockClause}`,
     [instrumentRecordId, certificateNumber],
   );
   return (result.rows[0] as CalibrationCertificateRow) ?? null;
@@ -156,22 +169,91 @@ export async function insertCertificate(
 /**
  * Moves the instrument's current active certificate to 'superseded'. History is retained: the row
  * keeps every field and changes status, so the register can still answer what the instrument was
- * calibrated under on any past date. Returns the superseded certificate_id, or null when there was
- * no active certificate.
+ * calibrated under on any past date. Story 7.10 (BSD 5): asCorrection marks the row as a
+ * correction-supersede, which permanently removes it from the reactivation candidate pool - a
+ * corrected-away certificate must never come back to life. Returns the superseded certificate_id,
+ * or null when there was no active certificate.
  */
 export async function supersedeActiveCertificate(
   instrumentRecordId: string,
   supersededAt: string,
   client: PoolClient,
+  asCorrection: boolean = false,
 ): Promise<string | null> {
   const result = await client.query(
     `UPDATE instrument_calibration_certificate
-        SET status = 'superseded', superseded_at = $2, updated_at = now()
+        SET status = 'superseded', superseded_at = $2, superseded_as_correction = $3, updated_at = now()
       WHERE instrument_record_id = $1 AND status = 'active'
       RETURNING certificate_id`,
-    [instrumentRecordId, supersededAt],
+    [instrumentRecordId, supersededAt, asCorrection],
   );
   return (result.rows[0]?.['certificate_id'] as string | undefined) ?? null;
+}
+
+/**
+ * Story 7.10 (AC 1): voids one certificate in place, keeping the row readable with its reason and
+ * actor. Only an 'active' or 'superseded' certificate is voidable; a rowCount of 0 is a defensive
+ * reject, never a silent no-op (the Story 7.9 rule). voided_at is stamped from the DATABASE
+ * transaction clock (7.10 review: never the app wall clock), and the caller reads the stamped
+ * value back from the returned row.
+ */
+export async function voidCertificate(
+  certificateId: string,
+  params: { voidReason: string; voidedBy: string },
+  client: PoolClient,
+): Promise<CalibrationCertificateRow | null> {
+  const result = await client.query(
+    `UPDATE instrument_calibration_certificate
+        SET status = 'voided', voided_at = now(), void_reason = $2, voided_by = $3, updated_at = now()
+      WHERE certificate_id = $1 AND status IN ('active','superseded')
+      RETURNING ${CERT_COLUMNS}`,
+    [certificateId, params.voidReason, params.voidedBy],
+  );
+  return (result.rows[0] as CalibrationCertificateRow) ?? null;
+}
+
+/**
+ * Story 7.10 (AC 1, BSD 4/5): the reactivation candidate after a void - the instrument's latest
+ * RENEWAL-superseded (superseded_as_correction = false), still date-valid certificate. A
+ * correction-superseded row is never a candidate: reactivating it would resurrect the wrong data
+ * the correction existed to kill. FOR UPDATE under the caller's transaction.
+ */
+export async function findReactivationCandidate(
+  instrumentRecordId: string,
+  businessDate: string,
+  client: PoolClient,
+): Promise<CalibrationCertificateRow | null> {
+  if (!isValidCalendarDate(businessDate)) return null;
+  const result = await client.query(
+    `SELECT ${CERT_COLUMNS} FROM instrument_calibration_certificate
+      WHERE instrument_record_id = $1
+        AND status = 'superseded'
+        AND superseded_as_correction = false
+        AND valid_until >= $2::date
+      ORDER BY valid_until DESC, recorded_at DESC
+      LIMIT 1
+      FOR UPDATE`,
+    [instrumentRecordId, businessDate],
+  );
+  return (result.rows[0] as CalibrationCertificateRow) ?? null;
+}
+
+/**
+ * Story 7.10 (AC 1): returns one superseded certificate to 'active'. The guarded WHERE clause is
+ * the backstop behind the caller's own status check; a rowCount of 0 rejects, never no-ops.
+ */
+export async function reactivateCertificate(
+  certificateId: string,
+  client: PoolClient,
+): Promise<CalibrationCertificateRow | null> {
+  const result = await client.query(
+    `UPDATE instrument_calibration_certificate
+        SET status = 'active', superseded_at = NULL, updated_at = now()
+      WHERE certificate_id = $1 AND status = 'superseded'
+      RETURNING ${CERT_COLUMNS}`,
+    [certificateId],
+  );
+  return (result.rows[0] as CalibrationCertificateRow) ?? null;
 }
 
 /** Moves one active certificate to 'expired'. Returns false when it was no longer active. */

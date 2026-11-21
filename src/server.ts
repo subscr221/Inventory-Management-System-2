@@ -307,6 +307,8 @@ import {
   getInstrumentHandler,
   recordCertificateHandler,
   listCertificatesHandler,
+  voidCertificateHandler,
+  supersedeCertificateHandler,
   raiseCalibrationEscalationHandler,
   scanCalibrationHandler,
   listCalibrationAlertsHandler,
@@ -1054,6 +1056,18 @@ export function createAppRouter(): Router {
   router.get(
     '/api/v1/maintenance/instruments/:instrumentRecordId/certificates',
     listCertificatesHandler,
+  );
+  // Story 7.10: certificate void and correction-supersede. ROUTE ORDER MATTERS: the static
+  // '/void' and '/supersede' segments are registered before any deeper parameter route would
+  // shadow them; both gate on maintenance:write like every sibling (BSD 1 puts the real authority
+  // on the DOA band the seam re-derives).
+  router.post(
+    '/api/v1/maintenance/instruments/:instrumentRecordId/certificates/:certificateId/void',
+    voidCertificateHandler,
+  );
+  router.post(
+    '/api/v1/maintenance/instruments/:instrumentRecordId/certificates/:certificateId/supersede',
+    supersedeCertificateHandler,
   );
   router.post(
     '/api/v1/maintenance/instruments/:instrumentRecordId/escalations',

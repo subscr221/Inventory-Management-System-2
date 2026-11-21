@@ -37,27 +37,43 @@ CREATE TABLE IF NOT EXISTS instrument_calibration_certificate (
   recorded_at          TIMESTAMPTZ NOT NULL,
   superseded_at        TIMESTAMPTZ,
   expired_at           TIMESTAMPTZ,
+  voided_at            TIMESTAMPTZ,
+  void_reason          TEXT,
+  voided_by            UUID,
+  superseded_as_correction BOOLEAN NOT NULL DEFAULT false,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_instrument_calibration_certificate_type CHECK (calibration_type IN ('in_house', 'iso_17025')),
-  CONSTRAINT chk_instrument_calibration_certificate_status CHECK (status IN ('active', 'superseded', 'expired')),
+  CONSTRAINT chk_instrument_calibration_certificate_status CHECK (status IN ('active', 'superseded', 'expired', 'voided')),
   CONSTRAINT chk_instrument_calibration_certificate_validity CHECK (valid_until >= calibrated_on),
   CONSTRAINT chk_instrument_calibration_certificate_iso_lab CHECK (calibration_type <> 'iso_17025' OR issuing_lab IS NOT NULL)
 );
+
+-- Story 7.10 (void and correction-supersede): voided_at/void_reason/voided_by keep a voided
+-- certificate readable with its reason and actor (AC 1); superseded_as_correction distinguishes a
+-- correction-supersede from a renewal-supersede so only the latter can ever reactivate (BSD 5).
+ALTER TABLE instrument_calibration_certificate ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ;
+ALTER TABLE instrument_calibration_certificate ADD COLUMN IF NOT EXISTS void_reason TEXT;
+ALTER TABLE instrument_calibration_certificate ADD COLUMN IF NOT EXISTS voided_by UUID;
+ALTER TABLE instrument_calibration_certificate ADD COLUMN IF NOT EXISTS superseded_as_correction BOOLEAN NOT NULL DEFAULT false;
 
 DO $$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM pg_indexes
     WHERE indexname = 'uq_instrument_calibration_certificate_number'
-      AND indexdef NOT LIKE '%lower(certificate_number)%'
+      AND (indexdef NOT LIKE '%lower(certificate_number)%' OR indexdef NOT LIKE '%WHERE%active%')
   ) THEN
     DROP INDEX uq_instrument_calibration_certificate_number;
   END IF;
 END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_instrument_calibration_certificate_active ON instrument_calibration_certificate (instrument_record_id) WHERE status = 'active';
-CREATE UNIQUE INDEX IF NOT EXISTS uq_instrument_calibration_certificate_number ON instrument_calibration_certificate (instrument_record_id, lower(certificate_number));
+-- Story 7.10 (BSD 6): the certificate-number uniqueness narrows to ACTIVE certificates only, so a
+-- correction-supersede may carry the SAME physical certificate number as the row it supersedes in
+-- the same transaction (supersede-then-insert keeps the index satisfied at every instant). The
+-- pre-7.10 full-table index is dropped by the guarded block above and re-created partial.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_instrument_calibration_certificate_number ON instrument_calibration_certificate (instrument_record_id, lower(certificate_number)) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_instrument_calibration_certificate_valid_until ON instrument_calibration_certificate (valid_until) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_instrument_calibration_certificate_instrument ON instrument_calibration_certificate (instrument_record_id);
 
@@ -73,16 +89,14 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 7.10: the status vocabulary widens with 'voided'. The DROP + ADD pair is kept atomic in a
+-- DO block, mirroring the chk_bom_line_supply_method swap pattern in bom_line.sql, so a pre-7.10
+-- database is widened in place.
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_instrument_calibration_certificate_status'
-      AND conrelid = 'instrument_calibration_certificate'::regclass
-  ) THEN
-    ALTER TABLE instrument_calibration_certificate
-      ADD CONSTRAINT chk_instrument_calibration_certificate_status CHECK (status IN ('active', 'superseded', 'expired'));
-  END IF;
+  ALTER TABLE instrument_calibration_certificate DROP CONSTRAINT IF EXISTS chk_instrument_calibration_certificate_status;
+  ALTER TABLE instrument_calibration_certificate
+    ADD CONSTRAINT chk_instrument_calibration_certificate_status CHECK (status IN ('active', 'superseded', 'expired', 'voided'));
 END $$;
 
 DO $$

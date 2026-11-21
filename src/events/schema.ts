@@ -2838,6 +2838,17 @@ export interface CalibrationCertificateRecordedPayload {
   valid_until: string;
   business_date: string;
   recorded_at: string;
+  /**
+   * Story 7.10 (BSD 5, the Story 9.6 one-event-branched precedent): when present, this recording
+   * is a CORRECTION-supersede - the applier marks the named certificate superseded with
+   * superseded_as_correction = true in the SAME transaction, applies the DOA authority and the
+   * per-certificate SOD leg, and permits certificate_number to repeat the superseded number (the
+   * partial number index). The target must be the instrument's CURRENT active certificate;
+   * correcting non-current history is out of scope. When absent, the Story 7.5 behavior is
+   * byte-for-byte unchanged.
+   */
+  supersedes_certificate_id?: string;
+  supersede_reason?: string;
 }
 
 export interface CalibrationCertificateRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -2928,6 +2939,45 @@ export interface CalibrationEscalationResolvedPayload {
 export interface CalibrationEscalationResolvedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'maintenance.calibration_escalation_resolved';
   payload: CalibrationEscalationResolvedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 7.10: calibration certificate void and correction-supersede (FR-M-12, FR-M-13; closes
+// deferred-work row 343)
+// ---------------------------------------------------------------------------
+
+/**
+ * Story 7.10 (AC 1, AC 3): voids a wrongly recorded certificate. stream_id is certificate_id. A
+ * void is an EVENT, never an edit: the certificate row stays readable with its reason and actor
+ * ('voided' status, void_reason, voided_by), and the applier re-derives every derivable field
+ * under the register-then-certificate lock. When the voided certificate was the instrument's
+ * ACTIVE certificate, the applier reactivates the latest renewal-superseded, still date-valid
+ * certificate (never a correction-superseded one) or flips the instrument out_of_calibration -
+ * the lockout then bars every role, which is AC 3.
+ */
+export interface CalibrationCertificateVoidedPayload {
+  certificate_id: string;
+  instrument_record_id: string;
+  /** DECLARED: checked against the locked register row, divergence rejects 409. */
+  instrument_id: string;
+  void_reason: string;
+  /**
+   * SERVER-CAPTURED (the Story 8.7 approved_by idiom): taken from envelope.metadata.actor.user_id
+   * by the route, re-derived and compared by the applier; a declared value that disagrees rejects.
+   */
+  voided_by: string;
+  /** SERVER-DERIVED: the reactivated renewal-superseded certificate, or null. Caller copies refused. */
+  reactivated_certificate_id?: never;
+  /** SERVER-DERIVED: the calibration status after the void. Caller copies refused. */
+  resulting_calibration_status?: never;
+  business_date: string;
+  /** SERVER-DERIVED: stamped from the transaction clock, never a caller-declared timestamp. */
+  voided_at?: never;
+}
+
+export interface CalibrationCertificateVoidedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.calibration_certificate_voided';
+  payload: CalibrationCertificateVoidedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -6452,6 +6502,13 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'maintenance.calibration_escalation_resolved': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 7.10: certificate void rides the same 'maintenance' stream with requiresBusinessStream
+  // false (it moves no stock). Correction-supersede reuses maintenance.calibration_certificate_recorded
+  // above with the optional supersedes_certificate_id branch (BSD 5) - no second event type.
+  'maintenance.calibration_certificate_voided': {
     streamType: 'maintenance',
     requiresBusinessStream: false,
   },

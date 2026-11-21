@@ -3,9 +3,14 @@ import type { PoolClient } from 'pg';
 import { persistEvent } from '../events/store.js';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
+import { toIstCalendarDate } from '../lib/business-days.js';
 import { getAssetById } from '../read/projections/asset.js';
 import { getLocationById } from '../read/projections/location_register.js';
-import { findFirstActiveDoaEntry, findRoleHolder } from '../read/projections/doa_registry.js';
+import {
+  findFirstActiveDoaEntry,
+  findRoleHolder,
+  isActiveRoleHolderForEntry,
+} from '../read/projections/doa_registry.js';
 import {
   getInstrumentRecordByAssetId,
   getInstrumentRecordById,
@@ -13,12 +18,15 @@ import {
   insertInstrumentRecord,
 } from '../read/projections/instrument_register.js';
 import {
+  findReactivationCandidate,
   getActiveCertificate,
   getCertificateById,
   getCertificateByNumber,
   insertCertificate,
   markCertificateExpired,
+  reactivateCertificate,
   supersedeActiveCertificate,
+  voidCertificate,
   type CalibrationType,
 } from '../read/projections/instrument_calibration_certificate.js';
 import {
@@ -65,11 +73,22 @@ const MAINTENANCE_STREAM_TYPES = new Set(['maintenance']);
 const CALIBRATION_REGISTER_EVENT_TYPES = new Set([
   'maintenance.instrument_registered',
   'maintenance.calibration_certificate_recorded',
+  'maintenance.calibration_certificate_voided',
   'maintenance.calibration_expiry_flagged',
   'maintenance.calibration_expired',
   'maintenance.calibration_escalation_raised',
   'maintenance.calibration_escalation_resolved',
 ]);
+
+/**
+ * Story 7.10 (BSD 1): the DOA transaction types governing certificate void and
+ * correction-supersede (the AC 4 "QC manager role" exists nowhere in code). Value-0 bands seeded
+ * per site to qc_head before go-live, mirroring maintenance.return_to_service (7.6) and
+ * maintenance.warranty_override (7.7).
+ */
+export const CALIBRATION_CERTIFICATE_VOID_DOA_TYPE = 'maintenance.calibration_certificate_void';
+export const CALIBRATION_CERTIFICATE_SUPERSEDE_DOA_TYPE =
+  'maintenance.calibration_certificate_supersede';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -178,6 +197,9 @@ export function assertCalibrationRegisterShape(envelope: EventEnvelope): void {
     case 'maintenance.calibration_certificate_recorded':
       assertCertificateRecordedShape(p);
       break;
+    case 'maintenance.calibration_certificate_voided':
+      assertCertificateVoidedShape(p);
+      break;
     case 'maintenance.calibration_expiry_flagged':
       assertExpiryFlaggedShape(p);
       break;
@@ -198,6 +220,7 @@ export function assertCalibrationRegisterShape(envelope: EventEnvelope): void {
   const STREAM_ID_FIELD: Record<string, string> = {
     'maintenance.instrument_registered': 'instrument_record_id',
     'maintenance.calibration_certificate_recorded': 'certificate_id',
+    'maintenance.calibration_certificate_voided': 'certificate_id',
     'maintenance.calibration_expiry_flagged': 'alert_id',
     'maintenance.calibration_expired': 'instrument_record_id',
     'maintenance.calibration_escalation_raised': 'escalation_id',
@@ -304,6 +327,70 @@ function assertCertificateRecordedShape(p: Record<string, unknown>): void {
   if (!isIsoTimestamp(p['recorded_at'])) {
     reject('INVALID_PAYLOAD', 'recorded_at must be an ISO 8601 timestamp with an explicit offset');
   }
+
+  // Story 7.10 correction branch (BSD 5): optional, and a caller never owns the derived facts -
+  // the applier writes superseded_certificate_id/superseded_as_correction back onto the payload
+  // before the domain_events insert, so a caller copy is refused here rather than silently
+  // overwritten.
+  const supersedesCertificateId = p['supersedes_certificate_id'];
+  if (supersedesCertificateId !== undefined) {
+    if (!isUuid(supersedesCertificateId)) {
+      reject('INVALID_PAYLOAD', 'supersedes_certificate_id must be a UUID');
+    }
+    // 7.10 review: a certificate cannot supersede itself - without this pure check the request
+    // passes every seam gate and dies on the primary key as a raw 500.
+    if (supersedesCertificateId === p['certificate_id']) {
+      reject('INVALID_PAYLOAD', 'supersedes_certificate_id must differ from certificate_id');
+    }
+    if (!isNonEmptyString(p['supersede_reason']) || (p['supersede_reason'] as string).length > MAX_TEXT_LENGTH) {
+      reject(
+        'INVALID_PAYLOAD',
+        `supersede_reason is required and must be at most ${MAX_TEXT_LENGTH} characters when supersedes_certificate_id is present`,
+      );
+    }
+  } else if (p['supersede_reason'] !== undefined) {
+    reject('INVALID_PAYLOAD', 'supersede_reason requires supersedes_certificate_id');
+  }
+  if (p['superseded_certificate_id'] !== undefined || p['superseded_as_correction'] !== undefined) {
+    reject(
+      'INVALID_PAYLOAD',
+      'superseded_certificate_id and superseded_as_correction are server-derived and must not be declared',
+    );
+  }
+}
+
+/**
+ * Story 7.10 (AC 1): the void event shape. voided_by is SERVER-CAPTURED from the envelope actor
+ * and required so a replay rebuilds deterministically; reactivated_certificate_id,
+ * resulting_calibration_status and voided_at are SERVER-DERIVED write-backs a caller must never
+ * supply.
+ */
+function assertCertificateVoidedShape(p: Record<string, unknown>): void {
+  if (!isUuid(p['certificate_id'])) reject('INVALID_PAYLOAD', 'certificate_id must be a UUID');
+  if (!isUuid(p['instrument_record_id'])) {
+    reject('INVALID_PAYLOAD', 'instrument_record_id must be a UUID');
+  }
+  assertInstrumentIdShape(p['instrument_id']);
+  if (!isNonEmptyString(p['void_reason']) || (p['void_reason'] as string).length > MAX_TEXT_LENGTH) {
+    reject(
+      'INVALID_PAYLOAD',
+      `void_reason is required and must be at most ${MAX_TEXT_LENGTH} characters`,
+    );
+  }
+  if (!isUuid(p['voided_by'])) reject('INVALID_PAYLOAD', 'voided_by must be a UUID');
+  if (!isIsoDate(p['business_date'])) {
+    reject('INVALID_PAYLOAD', 'business_date must be a YYYY-MM-DD calendar date');
+  }
+  if (
+    p['reactivated_certificate_id'] !== undefined ||
+    p['resulting_calibration_status'] !== undefined ||
+    p['voided_at'] !== undefined
+  ) {
+    reject(
+      'INVALID_PAYLOAD',
+      'reactivated_certificate_id, resulting_calibration_status and voided_at are server-derived and must not be declared',
+    );
+  }
 }
 
 function assertExpiryFlaggedShape(p: Record<string, unknown>): void {
@@ -393,6 +480,50 @@ async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Pr
 }
 
 /**
+ * Story 7.10 (Task 5.1, AC 4, BSD 1): the DOA authority for a certificate correction (void or
+ * supersede), resolved the maintenance.return_to_service / maintenance.warranty_override way -
+ * the first active DOA entry for the transaction type, then the envelope actor proven to be an
+ * ACTIVE holder of the resolved entry's role (isActiveRoleHolderForEntry). No `qc_manager` role
+ * exists in code, so the DOA band IS the authority; both refusals fail closed, and the check runs
+ * INSIDE the transaction against the registry as it is now (AD-12). No SEGREGATED_ROLE_PAIRS
+ * entry: the SOD leg is per-certificate actor identity (recorded_by on the locked row), not a
+ * role pairing, so recorder and corrector may legitimately share a role (BSD 2).
+ */
+async function resolveCalibrationCorrectionAuthority(
+  transactionType: string,
+  actorUserId: string,
+  client: PoolClient,
+): Promise<{ entry_id: string; role: string }> {
+  const entry = await findFirstActiveDoaEntry(transactionType, client);
+  if (!entry) {
+    reject(
+      'APPROVAL_UNRESOLVED',
+      `No DOA entry governs ${transactionType}`,
+      { transaction_type: transactionType },
+      404,
+    );
+  }
+  const holder = await findRoleHolder(entry.role, client);
+  if (!holder) {
+    reject(
+      'APPROVAL_UNRESOLVED',
+      `No active user holds role "${entry.role}" for ${transactionType}`,
+      { transaction_type: transactionType, role: entry.role },
+      404,
+    );
+  }
+  if (!(await isActiveRoleHolderForEntry(entry.entry_id, actorUserId, client))) {
+    reject(
+      'APPROVAL_REQUIRED',
+      'The actor does not hold the calibration-correction approval authority',
+      { transaction_type: transactionType, role: entry.role },
+      403,
+    );
+  }
+  return { entry_id: entry.entry_id, role: entry.role };
+}
+
+/**
  * Whole-day difference between two calendar dates, evaluated in SQL DATE arithmetic rather than in
  * JS. The Staged Alert Contract requires it: JS date maths on a calendar field is where this repo's
  * documented clock-window defect family comes from, and here the arithmetic decides whether an
@@ -424,6 +555,9 @@ export async function applyCalibrationRegisterProjection(
       break;
     case 'maintenance.calibration_certificate_recorded':
       await applyCertificateRecorded(envelope, client, eventId);
+      break;
+    case 'maintenance.calibration_certificate_voided':
+      await applyCertificateVoided(envelope, client, eventId);
       break;
     case 'maintenance.calibration_expiry_flagged':
       await applyExpiryFlagged(envelope, client);
@@ -535,6 +669,13 @@ async function applyCertificateRecorded(
   const validUntil = p['valid_until'] as string;
   const businessDate = p['business_date'] as string;
   const recordedAt = p['recorded_at'] as string;
+  // Story 7.10 (BSD 5): when supersedes_certificate_id is present this recording is a
+  // CORRECTION-supersede; when absent the Story 7.5 flow below is byte-for-byte unchanged.
+  const supersedesCertificateId =
+    typeof p['supersedes_certificate_id'] === 'string'
+      ? (p['supersedes_certificate_id'] as string)
+      : null;
+  const isCorrection = supersedesCertificateId !== null;
 
   // Lock order step 2: the instrument register row.
   const record = await getInstrumentRecordById(instrumentRecordId, client, true);
@@ -577,13 +718,19 @@ async function applyCertificateRecorded(
   // This honors the Locking Contract's stated order ("active first, then the incoming one") and
   // matches the order applyEscalationResolved now takes (certificate rows before the escalation row).
   const active = await getActiveCertificate(instrumentRecordId, client, true);
+
   const duplicate = await getCertificateByNumber(
     instrumentRecordId,
     certificateNumber,
     client,
     true,
   );
-  if (duplicate) {
+  // Story 7.10 (BSD 6): a correction may carry the SAME physical certificate number - the number
+  // index is partial on 'active', and the target it would collide with is the certificate being
+  // superseded in THIS transaction (supersede FIRST, then insert, so the index is never
+  // transiently violated). Any OTHER collision still rejects - including the loser of a concurrent
+  // same-number correction race, whose target is already superseded by the winner.
+  if (duplicate && duplicate.certificate_id !== supersedesCertificateId) {
     reject(
       'CERTIFICATE_ALREADY_RECORDED',
       'A certificate with this number is already recorded for this instrument',
@@ -596,11 +743,66 @@ async function applyCertificateRecorded(
     );
   }
 
+  if (isCorrection) {
+    // Story 7.10 (AC 2, AC 4): the correction target must be the instrument's CURRENT active
+    // certificate - correcting non-current history is out of scope - and the corrector must clear
+    // BOTH the DOA authority band and the per-certificate SOD leg (the recorder cannot correct
+    // their own certificate, the 13.3 two-people rule).
+    if (!active || active.certificate_id !== supersedesCertificateId) {
+      reject(
+        'CERTIFICATE_NOT_SUPERSEDABLE',
+        'Only the instrument’s current active certificate can be superseded by correction',
+        {
+          instrument_record_id: instrumentRecordId,
+          supersedes_certificate_id: supersedesCertificateId,
+          active_certificate_id: active?.certificate_id ?? null,
+        },
+        409,
+      );
+    }
+    const supersedeReason =
+      typeof p['supersede_reason'] === 'string' ? p['supersede_reason'].trim() : '';
+    if (supersedeReason === '') {
+      reject('INVALID_PARAMS', 'supersede_reason is required and must be a non-empty string', {
+        reason: 'supersede_reason is required and must be a non-empty string',
+      });
+    }
+    p['supersede_reason'] = supersedeReason;
+    await resolveCalibrationCorrectionAuthority(
+      CALIBRATION_CERTIFICATE_SUPERSEDE_DOA_TYPE,
+      envelope.metadata.actor.user_id,
+      client,
+    );
+    if (active.recorded_by === envelope.metadata.actor.user_id) {
+      reject(
+        'CERTIFICATE_RECORDER_CANNOT_CORRECT',
+        'The inspector who recorded a certificate cannot correct it; another authority must sign',
+        {
+          certificate_id: active.certificate_id,
+          recorded_by: active.recorded_by,
+        },
+        403,
+      );
+    }
+  }
+
   if (active) {
     // Supersession happens in the SAME transaction as the insert, so the partial unique index
     // uq_instrument_calibration_certificate_active is never transiently violated and the
-    // instrument is never momentarily without an active certificate.
-    await supersedeActiveCertificate(instrumentRecordId, recordedAt, client);
+    // instrument is never momentarily without an active certificate. A correction stamps
+    // superseded_as_correction, which permanently removes the row from the reactivation pool.
+    const supersededId = await supersedeActiveCertificate(
+      instrumentRecordId,
+      recordedAt,
+      client,
+      isCorrection,
+    );
+    // Write the derived superseded-certificate-side facts back onto the payload BEFORE the
+    // domain_events insert (the 7.9 write-back idiom), so the event log IS the history.
+    if (isCorrection) {
+      p['superseded_certificate_id'] = supersededId;
+      p['superseded_as_correction'] = true;
+    }
   }
 
   await insertCertificate(
@@ -661,6 +863,212 @@ async function applyCertificateRecorded(
     },
     client,
   );
+}
+
+/**
+ * Story 7.10 (AC 1, AC 3, AC 4): voids a wrongly recorded certificate. The row stays readable
+ * with its reason and actor ('voided' status); when it was the instrument's ACTIVE certificate,
+ * the latest renewal-superseded, still date-valid certificate reactivates - never a
+ * correction-superseded one (BSD 5) - or the instrument flips out_of_calibration, which is AC 3's
+ * immediate, non-overridable lockout by construction. Lock order: register row, then the
+ * certificate row, then (only when status changes) instrument_calibration_statuses LAST.
+ */
+async function applyCertificateVoided(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  // alreadyPersisted FIRST: a replay returns the stored event before any state check, so a
+  // same-key retry never trips the CERTIFICATE_NOT_VOIDABLE state guard (the 7.5 resolve-route
+  // lesson).
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as Record<string, unknown>;
+  const certificateId = p['certificate_id'] as string;
+  const instrumentRecordId = p['instrument_record_id'] as string;
+  const declaredInstrumentId = canonicalInstrumentId(p['instrument_id'] as string);
+
+  // Lock order step 2: the instrument register row, FOR UPDATE.
+  const record = await getInstrumentRecordById(instrumentRecordId, client, true);
+  if (!record) {
+    reject(
+      'INSTRUMENT_NOT_FOUND',
+      'The instrument record does not resolve',
+      { instrument_record_id: instrumentRecordId },
+      404,
+    );
+  }
+  // instrument_record_id and instrument_id are DECLARED and CHECKED against the locked register
+  // row, never trusted: a void writes the LOCKOUT status when it empties the register.
+  if (record.instrument_id !== declaredInstrumentId) {
+    reject(
+      'CALIBRATION_DERIVATION_MISMATCH',
+      'Declared instrument_id does not match the registered instrument',
+      {
+        instrument_record_id: instrumentRecordId,
+        declared_instrument_id: declaredInstrumentId,
+        derived_instrument_id: record.instrument_id,
+      },
+      409,
+    );
+  }
+
+  // Lock order step 3: the certificate row, FOR UPDATE.
+  const certificate = await getCertificateById(certificateId, client, true);
+  if (!certificate) {
+    reject(
+      'CERTIFICATE_NOT_FOUND',
+      'The certificate does not resolve',
+      { certificate_id: certificateId },
+      404,
+    );
+  }
+  if (certificate.instrument_record_id !== instrumentRecordId) {
+    reject(
+      'CALIBRATION_DERIVATION_MISMATCH',
+      'Declared instrument_record_id does not match the certificate',
+      {
+        certificate_id: certificateId,
+        declared_instrument_record_id: instrumentRecordId,
+        derived_instrument_record_id: certificate.instrument_record_id,
+      },
+      409,
+    );
+  }
+  if (certificate.status === 'expired' || certificate.status === 'voided') {
+    reject(
+      'CERTIFICATE_NOT_VOIDABLE',
+      `A certificate with status '${certificate.status}' cannot be voided`,
+      { certificate_id: certificateId, status: certificate.status },
+      409,
+    );
+  }
+
+  const voidReason = typeof p['void_reason'] === 'string' ? p['void_reason'].trim() : '';
+  if (voidReason === '') {
+    reject('INVALID_PARAMS', 'void_reason is required and must be a non-empty string', {
+      reason: 'void_reason is required and must be a non-empty string',
+    });
+  }
+  p['void_reason'] = voidReason;
+
+  // The DOA authority and the SOD leg are re-derived under the lock, from the ENVELOPE actor -
+  // never a payload-declared actor (the 13.2/13.3 twin pattern).
+  await resolveCalibrationCorrectionAuthority(
+    CALIBRATION_CERTIFICATE_VOID_DOA_TYPE,
+    envelope.metadata.actor.user_id,
+    client,
+  );
+  if (certificate.recorded_by === envelope.metadata.actor.user_id) {
+    reject(
+      'CERTIFICATE_RECORDER_CANNOT_CORRECT',
+      'The inspector who recorded a certificate cannot void it; another authority must sign',
+      {
+        certificate_id: certificateId,
+        recorded_by: certificate.recorded_by,
+      },
+      403,
+    );
+  }
+
+  // voided_by is SERVER-CAPTURED from the envelope actor; a declared value that disagrees rejects
+  // (the 8.7 approved_by idiom). voided_at is stamped from the transaction clock, never a
+  // caller-declared timestamp (7.5 review lesson 5).
+  const voidedBy = envelope.metadata.actor.user_id;
+  if (p['voided_by'] !== voidedBy) {
+    reject(
+      'CALIBRATION_DERIVATION_MISMATCH',
+      'Declared voided_by does not match the acting user',
+      {
+        declared_voided_by: p['voided_by'],
+        derived_voided_by: voidedBy,
+      },
+      409,
+    );
+  }
+
+  // 7.10 review: business_date drives the reactivation validity window, so it is a derivable
+  // input - re-derived from the transaction clock and compared, exactly like voided_by. A
+  // backdated declaration (a direct write voiding "as of" a past date) rejects instead of
+  // reactivating a certificate that has already lapsed.
+  const businessDate = toIstCalendarDate(new Date());
+  if (p['business_date'] !== businessDate) {
+    reject(
+      'CALIBRATION_DERIVATION_MISMATCH',
+      'Declared business_date does not match the transaction date',
+      {
+        declared_business_date: p['business_date'],
+        derived_business_date: businessDate,
+      },
+      409,
+    );
+  }
+
+  const wasActive = certificate.status === 'active';
+  // 7.10 review: voided_at is stamped by the DATABASE transaction clock inside the UPDATE and
+  // read back from the returned row - never the app wall clock.
+  const voided = await voidCertificate(certificateId, { voidReason, voidedBy }, client);
+  if (!voided) {
+    // Defensive only: the status was verified under the lock above. A rowCount of 0 rejects,
+    // never silently no-ops (the 7.9 rule).
+    reject(
+      'CERTIFICATE_NOT_VOIDABLE',
+      'The certificate is no longer voidable',
+      { certificate_id: certificateId },
+      409,
+    );
+  }
+  // Write the DB-stamped voided_at back onto the payload BEFORE the domain_events insert (the
+  // 7.9 write-back idiom), so the event log carries the transaction-clock timestamp.
+  p['voided_at'] = voided.voided_at;
+
+  // Status re-evaluation. Only a voided ACTIVE certificate changes calibration status; a voided
+  // superseded certificate is history cleanup and writes nothing.
+  let reactivatedCertificateId: string | null = null;
+  let resultingCalibrationStatus: 'calibrated' | 'out_of_calibration';
+  if (wasActive) {
+    const candidate = await findReactivationCandidate(instrumentRecordId, businessDate, client);
+    if (candidate) {
+      const reactivated = await reactivateCertificate(candidate.certificate_id, client);
+      if (!reactivated) {
+        reject(
+          'CERTIFICATE_NOT_VOIDABLE',
+          'The reactivation candidate is no longer superseded',
+          { certificate_id: candidate.certificate_id },
+          409,
+        );
+      }
+      reactivatedCertificateId = candidate.certificate_id;
+      resultingCalibrationStatus = 'calibrated';
+    } else {
+      resultingCalibrationStatus = 'out_of_calibration';
+    }
+    // Write the reactivation outcome back onto the payload BEFORE the domain_events insert (the
+    // 7.9 write-back idiom), so the append-only event log carries what the register did.
+    p['reactivated_certificate_id'] = reactivatedCertificateId;
+    p['resulting_calibration_status'] = resultingCalibrationStatus;
+    // FINAL database call per the Locking Contract: the status row the Story 1.7 gate reads.
+    await setCalibrationStatusFromRegister(
+      {
+        instrument_id: record.instrument_id,
+        calibration_status: resultingCalibrationStatus,
+        status_event_id: eventId,
+        status_event_version: null,
+        status_changed_by: voidedBy,
+        reason: reactivatedCertificateId
+          ? `Calibration certificate ${certificate.certificate_number} voided; previous certificate reactivated`
+          : `Calibration certificate ${certificate.certificate_number} voided; no valid certificate remains`,
+      },
+      client,
+    );
+  } else {
+    p['reactivated_certificate_id'] = null;
+    const status = await getInstrumentCalibrationStatus(record.instrument_id, client);
+    resultingCalibrationStatus =
+      (status?.calibration_status as 'calibrated' | 'out_of_calibration' | undefined) ??
+      'out_of_calibration';
+    p['resulting_calibration_status'] = resultingCalibrationStatus;
+  }
 }
 
 async function applyExpiryFlagged(envelope: EventEnvelope, client: PoolClient): Promise<void> {

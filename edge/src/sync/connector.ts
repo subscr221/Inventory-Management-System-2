@@ -216,6 +216,18 @@ const PERMANENT_ERROR_CODES = new Set([
   'INDENT_ISSUE_BIN_OUTSIDE_SITE',
   'INDENT_ISSUE_LINE_REQUIRED',
   'INDENT_LINE_CLOSE_REASON_REQUIRED',
+  // Story 7.10: certificate void and correction-supersede rejections. These events are
+  // central-only (CENTRAL_ONLY_OPERATION at the edge door), so a retrying device can never see
+  // them from a NEW write; they are twinned here so the parity invariant holds when they surface
+  // on a replayed or mis-tagged upload. The twin set in src/sync/upload.ts carries the identical
+  // block.
+  'CERTIFICATE_NOT_FOUND',
+  'CERTIFICATE_NOT_VOIDABLE',
+  'CERTIFICATE_NOT_SUPERSEDABLE',
+  'CERTIFICATE_RECORDER_CANNOT_CORRECT',
+  'CERTIFICATE_ALREADY_RECORDED',
+  'CERTIFICATE_EXPIRED',
+  'CALIBRATION_DERIVATION_MISMATCH',
   // Story 7.8: maintenance technician-flow permanent business rejections (FR-M-17). Every code a
   // seam behind the five edge flows can raise settles the single event as needs_attention; the
   // twin set in src/sync/upload.ts carries the identical block (the Story 4.3 rule).

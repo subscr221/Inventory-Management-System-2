@@ -1141,6 +1141,11 @@ const EXPECTED = [
       'idx_instrument_calibration_certificate_valid_until',
       'idx_instrument_calibration_certificate_instrument',
     ],
+    // Story 7.10 (BSD 6): the certificate-number index is partial on status = 'active' so a
+    // correction-supersede may carry the same physical certificate number as the row it supersedes.
+    indexBodies: [
+      'ON instrument_calibration_certificate (instrument_record_id, lower(certificate_number)) WHERE status = \'active\'',
+    ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
   {

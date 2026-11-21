@@ -12,6 +12,7 @@ import { requireRole, permittedLocationsForModuleScope } from '../../middleware/
 import { persistEvent } from '../../events/store.js';
 import type { PersistedEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
+import { auditRejectedAttempt } from './quality.js';
 import { emitNotification } from '../../notify/emit.js';
 import { getPool } from '../../config/db.js';
 import { isValidCalendarDate, toIstCalendarDate } from '../../lib/business-days.js';
@@ -258,9 +259,14 @@ function replayIdOrReject(
   persisted: PersistedEvent,
   expectedEventType: string,
   idField: string,
+  expectedStreamId?: string,
 ): string {
   const value = (persisted.payload as Record<string, unknown> | undefined)?.[idField];
-  if (persisted.event_type !== expectedEventType || !isUuid(value)) {
+  if (
+    persisted.event_type !== expectedEventType ||
+    (expectedStreamId !== undefined && persisted.stream_id !== expectedStreamId) ||
+    !isUuid(value)
+  ) {
     throw new AppError(
       409,
       'DUPLICATE_EVENT',
@@ -268,6 +274,12 @@ function replayIdOrReject(
       {
         existing_event_id: persisted.event_id,
         existing_event_type: persisted.event_type,
+        ...(expectedStreamId !== undefined
+          ? {
+              existing_stream_id: persisted.stream_id,
+              requested_stream_id: expectedStreamId,
+            }
+          : {}),
       },
     );
   }
@@ -2788,6 +2800,23 @@ async function deriveNextDueDate(examinedOn: string, intervalMonths: number): Pr
 // stays there, on the Story 1.7 endpoint it closes.
 
 const CALIBRATION_TYPES = new Set(['in_house', 'iso_17025']);
+
+/**
+ * Story 7.10 (AC 4, the quality.ts AUDITED_REJECTIONS pattern): a refused void/supersede is a
+ * statutory record of a refused calibration correction, so these codes are written to the audit
+ * log with actor, instrument, certificate, endpoint, trace id and code before the 4xx is sent.
+ */
+const AUDITED_REJECTIONS = new Set([
+  'CERTIFICATE_NOT_FOUND',
+  'CERTIFICATE_NOT_VOIDABLE',
+  'CERTIFICATE_NOT_SUPERSEDABLE',
+  'CERTIFICATE_RECORDER_CANNOT_CORRECT',
+  'CERTIFICATE_ALREADY_RECORDED',
+  'CERTIFICATE_EXPIRED',
+  'CALIBRATION_DERIVATION_MISMATCH',
+  'APPROVAL_REQUIRED',
+  'APPROVAL_UNRESOLVED',
+]);
 const CALIBRATION_STAGE_SET = new Set<number>(CALIBRATION_STAGES);
 const ESCALATION_STATUSES = new Set(['open', 'resolved']);
 const CALIBRATION_STATUSES = new Set(['calibrated', 'out_of_calibration']);
@@ -3111,11 +3140,11 @@ const listCertificatesBase: RouteHandler = async (req, res, params) => {
   try {
     const instrumentRecordId = requireUuidParam(params, 'instrumentRecordId');
     const status = url.searchParams.get('status');
-    if (status !== null && !['active', 'superseded', 'expired'].includes(status)) {
+    if (status !== null && !['active', 'superseded', 'expired', 'voided'].includes(status)) {
       throw new AppError(
         400,
         'INVALID_PARAMS',
-        'status must be one of: active, superseded, expired',
+        'status must be one of: active, superseded, expired, voided',
       );
     }
     const certificates = await listCertificatesByInstrument({
@@ -3126,6 +3155,253 @@ const listCertificatesBase: RouteHandler = async (req, res, params) => {
     });
     sendJson(res, 200, { certificates });
   } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+/**
+ * Story 7.10 (AC 1, AC 3, AC 4): voids a wrongly recorded certificate through
+ * maintenance.calibration_certificate_voided. Mutate-in-place route convention (7.9): stream_id is
+ * the certificate's own id and the route answers 200 with the read-back row plus the reactivation
+ * outcome. Every row-dependent check (existence, voidability, DOA authority, SOD, derivation)
+ * stays in the seam under the lock; the handler pre-checks are UX fast-fails ONLY (7.9 BSD-4),
+ * and none of them can trip a legitimate replay into a 409 (7.5 review lesson 12).
+ */
+const voidCertificateBase: RouteHandler = async (req, res, params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const instrumentRecordId = requireUuidParam(params, 'instrumentRecordId');
+    const certificateId = requireUuidParam(params, 'certificateId');
+    const voidReason = typeof body['void_reason'] === 'string' ? body['void_reason'].trim() : '';
+    if (voidReason === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'void_reason is required and must be a non-empty string', {
+        reason: 'void_reason is required and must be a non-empty string',
+      });
+    }
+
+    // UX fast-fail only; the seam re-reads the register row under FOR UPDATE and re-derives
+    // instrument_id from it. An instrument that does not resolve can never be replayable, so this
+    // 404 is safe on a same-key retry.
+    const instrument = await getInstrumentRecordById(instrumentRecordId);
+    if (!instrument) {
+      throw new AppError(404, 'INSTRUMENT_NOT_FOUND', 'Instrument not found', {
+        instrument_record_id: instrumentRecordId,
+      });
+    }
+
+    const businessDate = toIstCalendarDate(new Date());
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: certificateId,
+        event_type: 'maintenance.calibration_certificate_voided',
+        payload: {
+          certificate_id: certificateId,
+          instrument_record_id: instrumentRecordId,
+          instrument_id: instrument.instrument_id,
+          void_reason: voidReason,
+          // SERVER-CAPTURED (the 8.7 approved_by idiom): the route stamps the envelope actor; the
+          // seam re-derives and compares, so a caller cannot sign in someone else's name.
+          voided_by: actor.userId,
+          business_date: businessDate,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    const persistedId = replayIdOrReject(
+      persisted,
+      'maintenance.calibration_certificate_voided',
+      'certificate_id',
+      // Story 7.10 review (High): the void's stream_id IS the URL certificateId - a key retried
+      // against a different certificate's URL must surface 409 DUPLICATE_EVENT, not echo the
+      // original event's data as a phantom 200 (the production-material.ts:131-141 idiom).
+      certificateId,
+    );
+    const certificate = await getCertificateById(persistedId);
+    const status = await getInstrumentCalibrationStatus(instrument.instrument_id);
+    sendJson(res, 200, {
+      event_id: persisted.event_id,
+      certificate: certificate ?? null,
+      calibration_status: status?.calibration_status ?? null,
+      reactivated_certificate_id:
+        (persisted.payload as Record<string, unknown> | undefined)?.[
+          'reactivated_certificate_id'
+        ] ?? null,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, {
+        instrument_record_id: params?.['instrumentRecordId'],
+        certificate_id: params?.['certificateId'],
+      });
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+/**
+ * Story 7.10 (AC 2, AC 4): supersedes a wrongly recorded certificate with a corrected one, in ONE
+ * maintenance.calibration_certificate_recorded event carrying supersedes_certificate_id. Create
+ * semantics: 201 with the read-back corrected certificate. The DOA authority, the SOD leg, the
+ * current-active check and the number-collision exemption all live in the seam under the lock.
+ */
+const supersedeCertificateBase: RouteHandler = async (req, res, params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const certificateId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const instrumentRecordId = requireUuidParam(params, 'instrumentRecordId');
+    const supersedeCertificateId = requireUuidParam(params, 'certificateId');
+    const businessDate = requireBusinessDate(body);
+
+    const calibrationType = body['calibration_type'];
+    if (typeof calibrationType !== 'string' || !CALIBRATION_TYPES.has(calibrationType)) {
+      throw new AppError(
+        400,
+        'INVALID_CALIBRATION_TYPE',
+        'calibration_type must be in_house or iso_17025',
+      );
+    }
+    const issuingLabRaw = body['issuing_lab'];
+    let issuingLab: string | null = null;
+    if (issuingLabRaw !== undefined && issuingLabRaw !== null) {
+      if (typeof issuingLabRaw !== 'string' || issuingLabRaw.trim() === '') {
+        throw new AppError(
+          400,
+          'INVALID_CALIBRATION_TYPE',
+          'issuing_lab must be a non-blank string or null',
+        );
+      }
+      issuingLab = issuingLabRaw.trim();
+    }
+    if (calibrationType === 'iso_17025' && issuingLab === null) {
+      throw new AppError(
+        400,
+        'INVALID_CALIBRATION_TYPE',
+        'an iso_17025 certificate requires an issuing_lab',
+      );
+    }
+    if (
+      typeof body['certificate_number'] !== 'string' ||
+      body['certificate_number'].trim() === '' ||
+      body['certificate_number'].trim().length > MAX_CERTIFICATE_NUMBER_LENGTH
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `certificate_number is required and must be at most ${MAX_CERTIFICATE_NUMBER_LENGTH} characters`,
+      );
+    }
+    const certificateNumber = canonicalCertificateNumber(body['certificate_number']);
+    const calibratedOn = requireCalendarDate(body, 'calibrated_on', 'INVALID_CERTIFICATE_VALIDITY');
+    const validUntil = requireCalendarDate(body, 'valid_until', 'INVALID_CERTIFICATE_VALIDITY');
+    if (validUntil < calibratedOn) {
+      throw new AppError(
+        400,
+        'INVALID_CERTIFICATE_VALIDITY',
+        'valid_until must not precede calibrated_on',
+        { calibrated_on: calibratedOn, valid_until: validUntil },
+      );
+    }
+    const supersedeReason =
+      typeof body['supersede_reason'] === 'string' ? body['supersede_reason'].trim() : '';
+    if (supersedeReason === '') {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'supersede_reason is required and must be a non-empty string',
+        { reason: 'supersede_reason is required and must be a non-empty string' },
+      );
+    }
+
+    // UX fast-fail only; the seam re-reads the register row under FOR UPDATE.
+    const instrument = await getInstrumentRecordById(instrumentRecordId);
+    if (!instrument) {
+      throw new AppError(404, 'INSTRUMENT_NOT_FOUND', 'Instrument not found', {
+        instrument_record_id: instrumentRecordId,
+      });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: certificateId,
+        event_type: 'maintenance.calibration_certificate_recorded',
+        payload: {
+          certificate_id: certificateId,
+          instrument_record_id: instrumentRecordId,
+          instrument_id: instrument.instrument_id,
+          calibration_type: calibrationType,
+          certificate_number: certificateNumber,
+          issuing_lab: issuingLab,
+          calibrated_on: calibratedOn,
+          valid_until: validUntil,
+          business_date: businessDate,
+          recorded_at: now,
+          supersedes_certificate_id: supersedeCertificateId,
+          supersede_reason: supersedeReason,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedId = replayIdOrReject(
+      persisted,
+      'maintenance.calibration_certificate_recorded',
+      'certificate_id',
+    );
+    // Story 7.10 review (High): the supersede route's stream_id is minted fresh per request, so it
+    // cannot anchor a replay. The URL :certificateId lives in the payload as
+    // supersedes_certificate_id - a key retried against a different target's URL must surface 409
+    // DUPLICATE_EVENT, not echo the original correction as a phantom 201.
+    if (
+      (persisted.payload as Record<string, unknown> | undefined)?.['supersedes_certificate_id'] !==
+      supersedeCertificateId
+    ) {
+      throw new AppError(
+        409,
+        'DUPLICATE_EVENT',
+        'This idempotency key is already in use by a different event',
+        {
+          existing_event_id: persisted.event_id,
+          existing_event_type: persisted.event_type,
+        },
+      );
+    }
+    const certificate = await getCertificateById(persistedId);
+    const status = await getInstrumentCalibrationStatus(instrument.instrument_id);
+    sendJson(res, 201, {
+      event_id: persisted.event_id,
+      certificate: certificate ?? null,
+      calibration_status: status?.calibration_status ?? null,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, {
+        instrument_record_id: params?.['instrumentRecordId'],
+        certificate_id: params?.['certificateId'],
+      });
+    }
     sendAppError(req, res, err);
   }
 };
@@ -3437,6 +3713,19 @@ export const listCertificatesHandler = requireRole({
   module: 'maintenance',
   functionScope: 'read',
 })(listCertificatesBase);
+
+// Story 7.10 (Task 6.1): the void/supersede routes. Module gate is maintenance:write like every
+// sibling (NEVER a role literal - test/unit/no-hardcoded-role-in-workflow.test.ts enforces); the
+// real authority is the DOA band the seam re-derives under the lock (BSD 1).
+export const voidCertificateHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(voidCertificateBase);
+
+export const supersedeCertificateHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(supersedeCertificateBase);
 
 export const raiseCalibrationEscalationHandler = requireRole({
   module: 'maintenance',

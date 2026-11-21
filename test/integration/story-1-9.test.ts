@@ -517,6 +517,9 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/maintenance/instruments/:instrumentRecordId',
       'POST /api/v1/maintenance/instruments/:instrumentRecordId/certificates',
       'GET /api/v1/maintenance/instruments/:instrumentRecordId/certificates',
+      // Story 7.10: certificate void and correction-supersede.
+      'POST /api/v1/maintenance/instruments/:instrumentRecordId/certificates/:certificateId/void',
+      'POST /api/v1/maintenance/instruments/:instrumentRecordId/certificates/:certificateId/supersede',
       'POST /api/v1/maintenance/instruments/:instrumentRecordId/escalations',
       // Story 7.6: Statutory Examinations, Cost Accumulation, and Machine Status Broadcast
       'POST /api/v1/maintenance/statutory-examinations',
