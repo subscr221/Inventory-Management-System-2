@@ -2971,6 +2971,7 @@ location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor
 source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 reason: Story 7.11 scope: no such route or desk control.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-307: `reapplied_centrally` sync-conflict resolution records the resolution only; nothing is reapplied.
 origin: story-7.11 (2026-11-22)
