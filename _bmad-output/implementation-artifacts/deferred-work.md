@@ -1052,7 +1052,9 @@ decision: 2026-11-22 Keep open with DW-41
 origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-11, round 2)"), 2026-11-22
 location: n/a
 reason: `POST /api/v1/migration/domains/:domain/platform-exclusions` accepts `platform_ref` with no existence check against the domain's real platform table - a typo'd or wrong-domain reference is silently accepted and downgrades nothing. Consistent with the route's existing trust-the-authenticated-actor design elsewhere in this story, not a regression; would need a per-domain platform-ref lookup to fix.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted: authenticated actor is trusted; typo is harmless.
+decision: 2026-11-22 Accept — Accepted: authenticated actor is trusted; typo is harmless.
 
 ### DW-48: `document_ref_prefix` has no upper-bound length check, unlike waiver narratives (`MAX_WAIVER_NARRATIVE_CHARS`) [src/api/v1/migration.ts:1506-1513]. Low risk: role-gated internal route.
 origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-11, round 2)"), 2026-11-22
