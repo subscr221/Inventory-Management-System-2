@@ -503,6 +503,15 @@
     "label": "Keep open",
     "resolution": ""
   },
+  "DW-81": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "2",
+    "label": "Keep open",
+    "resolution": ""
+  },
   "DW-82": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
