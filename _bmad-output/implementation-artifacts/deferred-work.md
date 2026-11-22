@@ -2588,6 +2588,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (
 location: n/a
 reason: Server-side enforcement of material_photo_ref on goods.received (owner ruling 3b): a server rule affects ERP inbound and every other caller.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-261: Counted stepper, Damaged and Rejected reason tiles, and a Match supplier action on the unmatched arrival card (owner ruling 6b): UX pass.
 origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
