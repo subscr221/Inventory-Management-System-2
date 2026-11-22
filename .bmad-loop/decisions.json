@@ -1,4 +1,13 @@
 {
+  "DW-13": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Write an audit_log row for DISPATCH_IRN_CONFLICT and DISPATCH_ORDER_SITE_MISMATCH refusals in the dispatch IRN door, with tests.",
+    "key": "1",
+    "label": "Add refusal audit",
+    "resolution": ""
+  },
   "DW-2": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
