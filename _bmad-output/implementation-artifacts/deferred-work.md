@@ -2955,6 +2955,7 @@ location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor
 source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 reason: Story 7.11 scope: assignment is out of scope; the Assigned / accepted group lists work orders unassigned.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-305: Maintenance desk cannot override triage priority; accept shows the SLA policy priority read-only.
 origin: story-7.11 (2026-11-22)
