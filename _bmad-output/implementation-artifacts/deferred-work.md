@@ -1833,6 +1833,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-r
 location: n/a
 reason: An employee-only person cannot see the refusal of their own offline requisition: refused captures are scoped by the stream module (`procurement`), which the base hat does not grant. The refusal is visible to a procurement or site supervisor.
 status: open
+decision: 2026-11-22 Keep open
 
 
 ## Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)
