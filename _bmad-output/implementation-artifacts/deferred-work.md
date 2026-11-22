@@ -1337,6 +1337,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused
 location: n/a
 reason: `edge_outbox_retained` grows without bound and has no dismiss path; each row is a full outbox copy including payload and metadata. Story 1.14 or later needs an acknowledge-and-drop or an age cap. Story 1.14 (2026-09-17) adds the dismiss path; growth other than by dismiss (no age cap, no drop on central resolution) stays open.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-80: A crud entry whose `edge_outbox` row has vanished retains nothing and still completes the queue entry (`retainOutboxRow` is `INSERT ... SELECT` from a row that is gone). Unreachable today; harden by retaining from `op.opData` or throwing.
 origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
