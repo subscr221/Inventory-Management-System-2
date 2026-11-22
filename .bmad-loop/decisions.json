@@ -71,6 +71,15 @@
     "label": "Keep open until a mapping table exists",
     "resolution": ""
   },
+  "DW-41": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "2",
+    "label": "Keep open",
+    "resolution": ""
+  },
   "DW-5": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
