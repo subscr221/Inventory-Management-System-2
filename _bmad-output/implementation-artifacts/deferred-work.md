@@ -2349,7 +2349,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
 location: n/a
 reason: Slip number sequence never resets per year and a rolled-back issue burns a number; document gaps as expected or use a per-year counter.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Slip numbers are monotonic and may have gaps and do not reset yearly; documented as expected.
+decision: 2026-11-22 Document gaps and non-reset as expected — Slip numbers are monotonic and may have gaps and do not reset yearly; documented as expected.
 
 ### DW-222: Per-line `getLocationByCode` lookups in the issue route loop (N+1); bounded once the lines[] cap lands.
 origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
