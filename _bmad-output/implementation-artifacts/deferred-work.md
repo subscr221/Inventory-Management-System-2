@@ -2766,7 +2766,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-3.18 (2026-11-21)"), 2026-11-22
 location: n/a
 reason: Staging validation-walk (story 3.18 pack and dispatch): the Dev Notes precondition (EXPERIENCE.md:262, key-floor.html L463) requires walking the pack-and-dispatch layout with dispatch1@ on the staging preview and recording the outcome, or recording the owner's waiver. Reason deferred: a manual owner action independent of the code fixes (same handling as Story 3.16). Trigger: the staging pack-and-dispatch walk with dispatch1@ before go-live.- Park at dispatch bay (story 3.18, AC 5): no dispatch bay record exists for the pilot, so the control renders disabled stating the reason. Trigger: a dispatch-bay bay/state model lands.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 ### DW-285: E-way bill row (story 3.18, AC 6): the mock's E-way bill document row (key-floor.html L770) is not rendered; E-way bill generation is out of pilot scope. Trigger: an E-way bill integration requirement.
 origin: migrated from legacy ledger ("Deferred from: code review of story-3.18 (2026-11-21)"), 2026-11-22
