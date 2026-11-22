@@ -611,6 +611,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-9-10 (
 location: src/compliance/cycle-count.ts
 reason: 9.10R-2 `logRejectionAudit` takes its own pool connection deliberately outside the caller's transaction, and Story 9.10 calls it from inside `applyCycleCountProjection` (`src/compliance/cycle-count.ts:1070`), which runs inside `persistEvent`. Two consequences, both latent while no rebuild harness exists: every retry of the same idempotency key writes another `audit_log` row before the refusal, and any `stock.adjusted` event with `stock_class = 'offcut'` already in `domain_events` can never be re-applied. The connection acquisition also has no timeout, so a refusal storm against a saturated pool waits while holding advisory and row locks. This is the pattern the offcut-domain appliers already use; changing it is a platform decision, not a story-9-10 decision.
 status: open
+decision: 2026-11-22 Fix now — Route the refusal audit through the caller's client or dedupe by idempotency key, and add an acquisition timeout; add a test for retry producing one audit row.
 
 ### DW-3: 9.10R-3 Lower-casing `requireUuidParam` changes retry semantics for any event committed through
 origin: migrated from legacy ledger ("Deferred from: code review of story-9-10 (2026-09-08)"), 2026-11-22
