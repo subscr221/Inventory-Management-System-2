@@ -1031,6 +1031,8 @@ export interface IndentLineInput {
   doa_entry_id?: string;
   /** Story 4.8 (D6): the standing approval a standing_approval line rides on; set by the server. */
   standing_grant_id?: string;
+  /** Story 4.9: set by the server when the line fell back to the department_head holder. */
+  fallback_reason?: 'no_band_match';
 }
 
 export interface IndentRaisedPayload {

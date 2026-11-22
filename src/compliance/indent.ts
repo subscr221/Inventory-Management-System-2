@@ -622,15 +622,18 @@ async function applyIndentRaised(
           : isUuid(line['approver_actor_id'])
             ? (line['approver_actor_id'] as string)
             : headerApprover,
-        doa_entry_id: preApproved
-          ? null
-          : isUuid(line['doa_entry_id'])
-            ? (line['doa_entry_id'] as string)
-            : headerEntry,
+        doa_entry_id:
+          preApproved || line['fallback_reason'] === 'no_band_match'
+            ? null
+            : isUuid(line['doa_entry_id'])
+              ? (line['doa_entry_id'] as string)
+              : headerEntry,
         line_status: preApproved ? 'approved' : 'pending',
         decided_at: preApproved ? occurredAt : null,
         decided_by: preApproved ? 'system' : null,
         standing_grant_id: grant?.grant_id ?? null,
+        fallback_reason:
+          !preApproved && line['fallback_reason'] === 'no_band_match' ? 'no_band_match' : null,
       },
       client,
     );

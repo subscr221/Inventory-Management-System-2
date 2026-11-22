@@ -144,6 +144,9 @@ ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS standing_grant_id UUID;
 ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS self_approved BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS self_approval_grant_id UUID;
 
+-- Story 4.9: why a line was routed off its DOA band (no_band_match = head-of-department fallback).
+ALTER TABLE indent_line ADD COLUMN IF NOT EXISTS fallback_reason TEXT;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN

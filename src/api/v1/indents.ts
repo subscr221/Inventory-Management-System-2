@@ -336,6 +336,7 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
     approver_actor_id: routes[i]!.approver_actor_id ?? undefined,
     doa_entry_id: routes[i]!.doa_entry_id ?? undefined,
     standing_grant_id: routes[i]!.standing_grant_id ?? undefined,
+    fallback_reason: routes[i]!.fallback_reason ?? undefined,
   }));
 
   // Story 8.9 (AC 5, D15): a damage replacement names its case, and its indent id was minted with

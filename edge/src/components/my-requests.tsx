@@ -16,6 +16,8 @@ export interface MyIndentRow {
   /** Story 4.10 (AC 7): server-side line counts; absent from a pre-4.10 server. */
   line_count?: number;
   approved_line_count?: number;
+  /** Story 4.9: set while a line waits on the head-of-department fallback. */
+  waiting_on_label?: string | null;
   /** Story 4.10: per-line state when the API returns lines (detail reads only). */
   lines?: Array<{ line_no: number; line_status: string }>;
 }
@@ -152,7 +154,11 @@ function RequisitionCard({ row }: { row: MyIndentRow }) {
         <Fact
           label="myRequests.approval"
           value={
-            row.approver_actor_id ? t('myRequests.awaitingApproval') : t('myRequests.noApproval')
+            row.waiting_on_label
+              ? t('myRequests.waitingOnFallback')
+              : row.approver_actor_id
+                ? t('myRequests.awaitingApproval')
+                : t('myRequests.noApproval')
           }
         />
       </dl>

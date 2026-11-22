@@ -59,6 +59,8 @@ export interface IndentLineRow {
   standing_grant_id: string | null;
   self_approved: boolean;
   self_approval_grant_id: string | null;
+  /** Story 4.9: why the line was routed off its DOA band; null for a banded line. */
+  fallback_reason: string | null;
   /** Story 4.11: fulfilment state, separate from the approval fact above. */
   issued_qty: string;
   issue_state: 'open' | 'issued' | 'closed';
@@ -77,16 +79,21 @@ export interface IndentRowWithCounts extends IndentRow {
   line_count: number;
   approved_line_count: number;
   issued_line_count: number;
+  /** Story 4.9: set while a pending line waits on the department_head fallback. */
+  waiting_on_label: string | null;
 }
 
 const LINE_COUNT_SELECT = `i.*,
   COALESCE(c.line_count, 0)::int AS line_count,
   COALESCE(c.approved_line_count, 0)::int AS approved_line_count,
-  COALESCE(c.issued_line_count, 0)::int AS issued_line_count`;
+  COALESCE(c.issued_line_count, 0)::int AS issued_line_count,
+  CASE WHEN COALESCE(c.fallback_pending_count, 0) > 0
+    THEN 'Head of department, fallback: no DOA band matches value' END AS waiting_on_label`;
 const LINE_COUNT_JOIN = `LEFT JOIN (
   SELECT indent_id, COUNT(*) AS line_count,
          COUNT(*) FILTER (WHERE line_status = 'approved') AS approved_line_count,
-         COUNT(*) FILTER (WHERE issue_state IN ('issued', 'closed')) AS issued_line_count
+         COUNT(*) FILTER (WHERE issue_state IN ('issued', 'closed')) AS issued_line_count,
+         COUNT(*) FILTER (WHERE fallback_reason IS NOT NULL AND line_status = 'pending') AS fallback_pending_count
   FROM indent_line GROUP BY indent_id
 ) c ON c.indent_id = i.indent_id`;
 
@@ -200,16 +207,20 @@ export async function updateIndentLineDecision(
 export async function rerouteLineToDoa(
   client: PoolClient,
   lineId: string,
-  route: { approver_actor_id: string; doa_entry_id: string },
+  route: {
+    approver_actor_id: string;
+    doa_entry_id: string | null;
+    fallback_reason?: string | null;
+  },
 ): Promise<IndentLineRow | null> {
   const result = await client.query(
     `UPDATE indent_line
      SET approval_route = 'doa', line_status = 'pending', approver_actor_id = $2,
-         doa_entry_id = $3::uuid, decided_at = NULL, decided_by = NULL
+         doa_entry_id = $3::uuid, fallback_reason = $4, decided_at = NULL, decided_by = NULL
      WHERE indent_line_id = $1 AND approval_route = 'standing_approval'
        AND line_status = 'approved' AND issue_state = 'open'
      RETURNING *`,
-    [lineId, route.approver_actor_id, route.doa_entry_id],
+    [lineId, route.approver_actor_id, route.doa_entry_id, route.fallback_reason ?? null],
   );
   return (result.rows[0] as IndentLineRow) ?? null;
 }
@@ -453,6 +464,8 @@ export interface InsertIndentLineInput {
   decided_by?: string | null;
   /** Story 4.8 (D6): the grant a standing_approval line rides on; validated by the seam. */
   standing_grant_id?: string | null;
+  /** Story 4.9: 'no_band_match' when routed to the department_head fallback. */
+  fallback_reason?: string | null;
 }
 
 /**
@@ -469,10 +482,10 @@ export async function insertIndentLine(
       indent_line_id, indent_id, line_no, sku, item_category, requested_qty, uom,
       unit_price_estimate, line_value,
       approval_route, approver_actor_id, doa_entry_id, line_status, decided_at, decided_by,
-      standing_grant_id
+      standing_grant_id, fallback_reason
     ) VALUES ($1,$2,$3,$4,$5,$6::numeric,$7,$8::numeric,
       $6::numeric * COALESCE($8::numeric, 0),
-      $9, $10, $11::uuid, $12, $13::timestamptz, $14, $15::uuid)`,
+      $9, $10, $11::uuid, $12, $13::timestamptz, $14, $15::uuid, $16)`,
     [
       row.indent_line_id,
       row.indent_id,
@@ -489,6 +502,7 @@ export async function insertIndentLine(
       row.decided_at ?? null,
       row.decided_by ?? null,
       row.standing_grant_id ?? null,
+      row.fallback_reason ?? null,
     ],
   );
 }

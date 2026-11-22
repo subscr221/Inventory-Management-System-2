@@ -21,6 +21,9 @@ import {
  * module names none.
  */
 export const INDENT_DOA_TYPE = 'indent_approval';
+/** Story 4.9 (UX ruling Q6): the registry role an unmatched line falls back to. */
+export const DEPARTMENT_HEAD_ROLE = 'department_head';
+export const NO_BAND_MATCH = 'no_band_match';
 
 export interface RoutableLine {
   sku?: unknown;
@@ -36,6 +39,8 @@ export interface LineRoute {
   line_value: number;
   /** Story 4.8 (D6): set when the line rides a standing approval; never taken from a client. */
   standing_grant_id: string | null;
+  /** Story 4.9: 'no_band_match' when the line fell back to the department_head holder. */
+  fallback_reason: string | null;
 }
 
 /**
@@ -105,17 +110,9 @@ export async function resolveLineApprover(
   value: number | string,
   lineNo: number,
   client?: PoolClient,
-): Promise<{ approverActorId: string; doaEntryId: string }> {
+  requesterUserId?: string,
+): Promise<{ approverActorId: string; doaEntryId: string | null; fallbackReason: string | null }> {
   const doaEntry = await findMatchingDoaEntry(transactionType, value, client);
-  if (!doaEntry) {
-    // AC 6: no band, no store - the raise is refused before anything is persisted.
-    throw new AppError(
-      409,
-      'INDENT_APPROVAL_BAND_MISSING',
-      `Line ${lineNo} (value ${value}) matches no active approval band`,
-      { line_no: lineNo, line_value: value, transaction_type: transactionType },
-    );
-  }
   const today = new Date().toISOString().slice(0, 10);
   const tryHolder = async (role: string): Promise<string | null> => {
     const holder = await findRoleHolder(role, client);
@@ -123,6 +120,46 @@ export async function resolveLineApprover(
     const delegation = await findActiveDelegation(holder.user_id, today, client);
     return delegation?.delegate_user_id ?? holder.user_id;
   };
+  if (!doaEntry) {
+    // Story 4.9: no band falls back to the department_head holder (or delegate), company-wide.
+    // The only refusal left is no holder at all - nothing persists without an approver path.
+    let hod = await tryHolder(DEPARTMENT_HEAD_ROLE);
+    if (hod && hod === requesterUserId) {
+      // A requester never approves their own line: try the holder's delegate, else refuse.
+      const holder = await findRoleHolder(DEPARTMENT_HEAD_ROLE, client);
+      const delegation = holder ? await findActiveDelegation(holder.user_id, today, client) : null;
+      const alt = delegation?.delegate_user_id ?? null;
+      const other = holder && holder.user_id !== requesterUserId ? holder.user_id : null;
+      hod = alt && alt !== requesterUserId ? alt : other;
+      if (!hod) {
+        throw new AppError(
+          409,
+          'INDENT_APPROVAL_BAND_MISSING',
+          `Line ${lineNo} (value ${value}) matches no active approval band and no eligible ${DEPARTMENT_HEAD_ROLE} other than the requester is configured`,
+          {
+            line_no: lineNo,
+            line_value: value,
+            transaction_type: transactionType,
+            missing_role: DEPARTMENT_HEAD_ROLE,
+          },
+        );
+      }
+    }
+    if (!hod) {
+      throw new AppError(
+        409,
+        'INDENT_APPROVAL_BAND_MISSING',
+        `Line ${lineNo} (value ${value}) matches no active approval band and no ${DEPARTMENT_HEAD_ROLE} role holder is configured`,
+        {
+          line_no: lineNo,
+          line_value: value,
+          transaction_type: transactionType,
+          missing_role: DEPARTMENT_HEAD_ROLE,
+        },
+      );
+    }
+    return { approverActorId: hod, doaEntryId: null, fallbackReason: NO_BAND_MATCH };
+  }
   let approver = await tryHolder(doaEntry.role);
   if (!approver) {
     for (const e of await listActiveDoaEntries(transactionType, client)) {
@@ -139,7 +176,7 @@ export async function resolveLineApprover(
       { transaction_type: transactionType, line_no: lineNo },
     );
   }
-  return { approverActorId: approver, doaEntryId: doaEntry.entry_id };
+  return { approverActorId: approver, doaEntryId: doaEntry.entry_id, fallbackReason: null };
 }
 
 export async function routeIndentLines(
@@ -164,6 +201,7 @@ export async function routeIndentLines(
         requires_approval: false,
         line_value: value,
         standing_grant_id: pre.standing_grant_id ?? null,
+        fallback_reason: null,
       });
       continue;
     }
@@ -178,10 +216,17 @@ export async function routeIndentLines(
         requires_approval: false,
         line_value: value,
         standing_grant_id: grantId,
+        fallback_reason: null,
       });
       continue;
     }
-    const r = await resolveLineApprover(INDENT_DOA_TYPE, value, i + 1, client);
+    const r = await resolveLineApprover(
+      INDENT_DOA_TYPE,
+      value,
+      i + 1,
+      client,
+      grants?.requesterUserId,
+    );
     routes.push({
       approval_route: 'doa',
       approver_actor_id: r.approverActorId,
@@ -189,6 +234,7 @@ export async function routeIndentLines(
       requires_approval: true,
       line_value: value,
       standing_grant_id: null,
+      fallback_reason: r.fallbackReason,
     });
   }
   return routes;

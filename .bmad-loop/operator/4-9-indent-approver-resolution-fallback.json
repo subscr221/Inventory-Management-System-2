@@ -1,0 +1,12 @@
+{
+  "actions": [
+    "Deploy the 4.9 build to staging, then run the stuck-indent re-resolution CLI in report mode and review the exception list.",
+    "On staging and the pilot database, run the stuck-indent re-resolution CLI with --apply once the exception list is reviewed, then confirm zero NOT_RESOLVED_APPROVER-stuck lines remain.",
+    "Confirm a department_head role holder is assigned in the pilot DOA registry, so the fallback resolves on the pilot sites."
+  ],
+  "followup_review_recommended": true,
+  "parked_at": "2026-11-22",
+  "run_id": "20261122-051730-80e9",
+  "spec_file": "_bmad-output/implementation-artifacts/spec-4-9-indent-approver-resolution-fallback.md",
+  "story_key": "4-9-indent-approver-resolution-fallback"
+}

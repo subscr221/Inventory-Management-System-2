@@ -285,7 +285,7 @@ describe('Story 4.10 line-level approval and mixed routing', () => {
     assert.strictEqual(lineValueOf({ requested_qty: 3, unit_price_estimate: 0.1 }), 0.3);
   });
 
-  it('AC6: no band, no store - HTTP and edge sync both refuse INDENT_APPROVAL_BAND_MISSING', async () => {
+  it('AC6 (Story 4.9): no band and no department_head holder - HTTP and edge sync both refuse INDENT_APPROVAL_BAND_MISSING; with a holder the line falls back', async () => {
     const adminPool = getAdminPool();
     // Open a gap: the finance band becomes 200000+ so a 1,50,000 line matches nothing.
     await adminPool.query(
@@ -307,6 +307,7 @@ describe('Story 4.10 line-level approval and mixed routing', () => {
         line_no: 2,
         line_value: 150000,
         transaction_type: 'indent_approval',
+        missing_role: 'department_head',
       });
 
       const indentId = randomUUID();
@@ -341,6 +342,22 @@ describe('Story 4.10 line-level approval and mixed routing', () => {
       assert.strictEqual(edge.body['error_code'], 'INDENT_APPROVAL_BAND_MISSING');
       const after = (await getPool().query(`SELECT count(*)::int AS n FROM indent`)).rows[0]!['n'];
       assert.strictEqual(after, before, 'nothing persisted');
+      // Story 4.9: once a department_head holder is on record the same raise falls back to them.
+      const hodId = await provisionUser(port, `hod-410-${run}@example.com`, [
+        { role: 'department_head', module: 'procurement', functionScope: 'write', locationId: '*' },
+      ]);
+      const ok = await makeRequest(
+        port,
+        'POST',
+        '/api/v1/indents',
+        raiseBody([line(`SKU-410-GAP-OK-${run}`, 1, 150000)]),
+        requesterHeaders,
+      );
+      assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
+      const okLine = (ok.body['lines'] as Row[])[0]!;
+      assert.strictEqual(okLine['approver_actor_id'], hodId);
+      assert.strictEqual(okLine['fallback_reason'], 'no_band_match');
+      assert.strictEqual(okLine['doa_entry_id'], null);
     } finally {
       await adminPool.query(
         `UPDATE doa_registry_entries SET value_min = 100000 WHERE entry_id = $1`,

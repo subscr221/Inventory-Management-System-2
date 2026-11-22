@@ -955,6 +955,7 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
         approver_actor_id: routes[i]!.approver_actor_id ?? undefined,
         doa_entry_id: routes[i]!.doa_entry_id ?? undefined,
         standing_grant_id: routes[i]!.standing_grant_id ?? undefined,
+        fallback_reason: routes[i]!.fallback_reason ?? undefined,
       }));
       const approval = headerApproverOf(routes);
       if (approval.approver_actor_id)

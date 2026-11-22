@@ -593,6 +593,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
           'approver_actor_id',
           'doa_entry_id',
           'standing_grant_id',
+          'fallback_reason',
           'self_approved',
           'self_approval_grant_id',
         ])

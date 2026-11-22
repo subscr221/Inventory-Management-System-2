@@ -61,10 +61,12 @@ export async function rerouteLapsedLinesToDoa(
           line.line_value,
           line.line_no,
           client,
+          indent.requester_user_id,
         );
         const updated = await rerouteLineToDoa(client, line.indent_line_id, {
           approver_actor_id: route.approverActorId,
           doa_entry_id: route.doaEntryId,
+          fallback_reason: route.fallbackReason,
         });
         if (!updated) {
           await client.query('RELEASE SAVEPOINT standing_reroute');
