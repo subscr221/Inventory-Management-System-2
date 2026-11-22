@@ -386,6 +386,15 @@
     "label": "Keep open for later",
     "resolution": ""
   },
+  "DW-293": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Render indent_info_requested in an edge in-app notifications surface.",
+    "key": "1",
+    "label": "Build it now",
+    "resolution": ""
+  },
   "DW-33": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
