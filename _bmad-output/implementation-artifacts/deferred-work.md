@@ -773,6 +773,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 c
 location: transfer-request.ts
 reason: 11.5R-7 An out-of-order `transfer_request.gst_document_recorded` or `transfer_request.valuation_overridden` arriving before its `transfer_request.created` gets a 404 from `lockBranchTransfer` (`transfer-request.ts:1289`), which `PERMANENT_ERROR_CODES` treats as terminal, so a legitimately early event is dead-lettered rather than retried. Pre-existing store contract shared by every parent-child applier.
 status: open
+decision: 2026-11-22 Keep open
 
 
 ## Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)
