@@ -2037,6 +2037,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-d
 location: n/a
 reason: `classifyUploadResponse` treats `ATTACHMENT_CONFLICT` as unconditionally "stored" on an unverified assumption about why the conflict occurred.
 status: open
+decision: 2026-11-22 Keep open, revisit post-pilot
 
 ### DW-178: `DamageCases`'s per-slot idempotency key (`edge/src/components/damage-cases.tsx`) is reused across a retry even if the form body changed between attempts.
 origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
