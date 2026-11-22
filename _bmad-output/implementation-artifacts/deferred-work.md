@@ -764,7 +764,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
 location: src/read/projections/branch_transfer_gst.ts
 reason: 11.5R-6 The valuation override overwrites `branch_transfer_valuation` in place (`src/read/projections/branch_transfer_gst.ts:179`) including `source_event_id`, with no history table, so a filed statutory figure is mutated and the prior value survives only in the event log. Consistent with every other projection in the codebase; raised because the retention requirement on this record is eight years.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted for pilot by owner ruling
+decision: 2026-11-22 Close as accepted risk — Accepted for pilot by owner ruling
 
 ### DW-23: 11.5R-7 An out-of-order `transfer_request.gst_document_recorded` or
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
