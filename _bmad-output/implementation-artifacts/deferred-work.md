@@ -2987,6 +2987,7 @@ location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor
 source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 reason: Story 7.11: lists carry no site filter; revisit when multi-site maintenance lands.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-309: Maintenance desk reject route is not in the UX mock; the desk calls the existing server route.
 origin: story-7.11 (2026-11-22)
