@@ -1391,6 +1391,7 @@ origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-
 location: n/a
 reason: A refusal from `requireRole` before authorization stores the device-declared `metadata.actor.location_id` unverified (`location_source: declared`) and scopes visibility by it; with no UUID there, only a wildcard-location holder can see or resolve the row.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-88: A maintenance STREAM_CONFLICT lands in two queues: `maintenance_sync_conflict` (Story 7.8) and `edge_refused_capture` (1.13), with no link between them and two DOA decisions to close.
 origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
