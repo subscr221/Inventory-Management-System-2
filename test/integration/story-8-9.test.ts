@@ -336,6 +336,7 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
       '../../read/projections/lot_master.sql',
       '../../read/projections/indent.sql',
       '../../read/projections/indent_line.sql',
+      '../../read/projections/indent_info_request.sql',
       '../../read/projections/grn.sql',
       '../../read/projections/grn_line.sql',
       '../../read/projections/grn_jobwork_challan.sql',

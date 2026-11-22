@@ -163,6 +163,7 @@ describe('Story 4.10 line-level approval and mixed routing', () => {
       '../../read/projections/notification.sql',
       '../../read/projections/indent.sql',
       '../../read/projections/indent_line.sql',
+      '../../read/projections/indent_info_request.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }

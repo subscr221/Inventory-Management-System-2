@@ -499,6 +499,7 @@ describe('Story 4.5 Goods Receipt and Three-Way Match Integration Tests', () => 
       '../../read/projections/supplier.sql',
       '../../read/projections/indent.sql',
       '../../read/projections/indent_line.sql',
+      '../../read/projections/indent_info_request.sql',
       '../../read/projections/purchase_order.sql',
       '../../read/projections/purchase_order_line.sql',
       '../../read/projections/po_outbound_message.sql',

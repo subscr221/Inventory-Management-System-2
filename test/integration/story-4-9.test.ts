@@ -162,6 +162,7 @@ describe('Story 4.9 indent approver resolution fallback', () => {
       '../../read/projections/notification.sql',
       '../../read/projections/indent.sql',
       '../../read/projections/indent_line.sql',
+      '../../read/projections/indent_info_request.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }

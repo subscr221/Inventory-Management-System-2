@@ -51,6 +51,7 @@ export async function provisionApprovals(page: Page, options: ApprovalsStubOptio
     const state = {
       decided: null as null | 'approved' | 'rejected',
       reason: '',
+      asked: null as null | { question: string; at: string },
       posts: [] as unknown[],
     };
     (window as unknown as { __approvalPosts: unknown[] }).__approvalPosts = state.posts;
@@ -67,12 +68,26 @@ export async function provisionApprovals(page: Page, options: ApprovalsStubOptio
       line_skus: ['CON-GLOVES', 'CON-WELD-ROD'],
       approved_line_count: state.decided === 'approved' ? 2 : 1,
       line_count: 2,
+      info_requested: state.asked
+        ? { info_request_id: 'r-1', question: state.asked.question, asked_at: state.asked.at }
+        : null,
     });
     const detail = () => ({
       indent: { ...row(), line_count: 2 },
       requester_display_name: 'Maint One',
       pending_for_me_line_ids: state.decided ? [] : [cfg.ids.pending],
       approver_bands: bands,
+      info_requests: state.asked
+        ? [
+            {
+              info_request_id: 'r-1',
+              line_ids: [cfg.ids.pending],
+              question: state.asked.question,
+              asked_by: 'Dee Head',
+              asked_at: state.asked.at,
+            },
+          ]
+        : [],
       lines: [
         {
           indent_line_id: cfg.ids.pending,
@@ -170,6 +185,15 @@ export async function provisionApprovals(page: Page, options: ApprovalsStubOptio
       }
       if (path.pathname === `/api/v1/indents/${cfg.ids.indent}`) return json(detail());
       if (path.pathname === `/api/v1/indents/${cfg.ids.second}`) return json(secondDetail());
+      if (
+        /^\/api\/v1\/indents\/[^/]+\/request-info$/.test(path.pathname) &&
+        init?.method === 'POST'
+      ) {
+        const body = JSON.parse(String(init.body)) as { question: string };
+        state.posts.push({ action: 'request-info', body });
+        state.asked = { question: body.question, at: new Date().toISOString() };
+        return json({ event_id: 'e-ask' });
+      }
       const decision = /^\/api\/v1\/indents\/[^/]+\/(approve|reject)$/.exec(path.pathname);
       if (decision && init?.method === 'POST') {
         state.posts.push({ action: decision[1], body: JSON.parse(String(init.body)) });

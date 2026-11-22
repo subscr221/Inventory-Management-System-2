@@ -81,6 +81,8 @@ export interface IndentRowWithCounts extends IndentRow {
   issued_line_count: number;
   /** Story 4.9: set while a pending line waits on the department_head fallback. */
   waiting_on_label: string | null;
+  /** Story 4.13: the newest approver question on the requisition, if any. */
+  info_requested: { info_request_id: string; question: string; asked_at: string } | null;
 }
 
 const LINE_COUNT_SELECT = `i.*,
@@ -88,14 +90,20 @@ const LINE_COUNT_SELECT = `i.*,
   COALESCE(c.approved_line_count, 0)::int AS approved_line_count,
   COALESCE(c.issued_line_count, 0)::int AS issued_line_count,
   CASE WHEN COALESCE(c.fallback_pending_count, 0) > 0
-    THEN 'Head of department, fallback: no DOA band matches value' END AS waiting_on_label`;
+    THEN 'Head of department, fallback: no DOA band matches value' END AS waiting_on_label,
+  CASE WHEN q.info_request_id IS NOT NULL THEN json_build_object(
+    'info_request_id', q.info_request_id, 'question', q.question, 'asked_at', q.asked_at) END AS info_requested`;
 const LINE_COUNT_JOIN = `LEFT JOIN (
   SELECT indent_id, COUNT(*) AS line_count,
          COUNT(*) FILTER (WHERE line_status = 'approved') AS approved_line_count,
          COUNT(*) FILTER (WHERE issue_state IN ('issued', 'closed')) AS issued_line_count,
          COUNT(*) FILTER (WHERE fallback_reason IS NOT NULL AND line_status = 'pending') AS fallback_pending_count
   FROM indent_line GROUP BY indent_id
-) c ON c.indent_id = i.indent_id`;
+) c ON c.indent_id = i.indent_id
+LEFT JOIN (
+  SELECT DISTINCT ON (indent_id) indent_id, info_request_id, question, asked_at
+  FROM indent_info_request ORDER BY indent_id, asked_at DESC, created_at DESC
+) q ON q.indent_id = i.indent_id`;
 
 /**
  * Story 4.11: open quantity in PostgreSQL NUMERIC text, never a JS float. `requested_qty` is the
@@ -571,6 +579,50 @@ export async function updateIndentStatus(
   }
 
   await client.query(`UPDATE indent SET ${sets.join(', ')} WHERE indent_id = $1`, values);
+}
+
+export interface IndentInfoRequestRow {
+  info_request_id: string;
+  indent_id: string;
+  line_ids: string[];
+  question: string;
+  asked_by_user_id: string;
+  asked_at: string;
+  source_event_id: string;
+}
+
+/** Story 4.13: one row per event; the unique source_event_id makes a replay a no-op. */
+export async function insertIndentInfoRequest(
+  client: PoolClient,
+  row: IndentInfoRequestRow,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO indent_info_request
+       (info_request_id, indent_id, line_ids, question, asked_by_user_id, asked_at, source_event_id)
+     VALUES ($1, $2, $3::uuid[], $4, $5, $6, $7)
+     ON CONFLICT (source_event_id) DO NOTHING`,
+    [
+      row.info_request_id,
+      row.indent_id,
+      row.line_ids,
+      row.question,
+      row.asked_by_user_id,
+      row.asked_at,
+      row.source_event_id,
+    ],
+  );
+}
+
+/** Story 4.13: every question on a requisition, newest first. */
+export async function listInfoRequestsByIndent(
+  indentId: string,
+  client?: PoolClient,
+): Promise<IndentInfoRequestRow[]> {
+  const result = await runner(client).query(
+    `SELECT * FROM indent_info_request WHERE indent_id = $1 ORDER BY asked_at DESC, created_at DESC`,
+    [indentId],
+  );
+  return result.rows as IndentInfoRequestRow[];
 }
 
 /**

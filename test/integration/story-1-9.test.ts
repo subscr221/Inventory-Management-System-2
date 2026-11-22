@@ -389,6 +389,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/indents/:indentId/withdraw',
       'POST /api/v1/indents/:indentId/approve',
       'POST /api/v1/indents/:indentId/reject',
+      // Story 4.13: an approver asks the requester a question
+      'POST /api/v1/indents/:indentId/request-info',
       'POST /api/v1/indents/:indentId/cancel',
       // Story 4.11: stores counter issue against a requisition
       'GET /api/v1/indents/issues/:issueId',

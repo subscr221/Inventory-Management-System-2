@@ -228,6 +228,7 @@ describe('Story 4.11 stores counter issue against a requisition', () => {
       '../../read/projections/inventory_valuation.sql',
       '../../read/projections/indent.sql',
       '../../read/projections/indent_line.sql',
+      '../../read/projections/indent_info_request.sql',
       '../../read/projections/indent_issue.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
@@ -237,7 +238,7 @@ describe('Story 4.11 stores counter issue against a requisition', () => {
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE indent_issue_line, indent_issue, indent_line, indent, lot_trace, serial_master, lot_master, stock_balance, item_master, location_register, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, transaction_tagging_rules, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE indent_issue_line, indent_issue, indent_info_request, indent_line, indent, lot_trace, serial_master, lot_master, stock_balance, item_master, location_register, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, transaction_tagging_rules, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');

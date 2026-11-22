@@ -171,6 +171,7 @@ describe('Story 1.15 Employee Base Role', () => {
       '../../read/projections/notification.sql',
       '../../read/projections/indent.sql',
       '../../read/projections/indent_line.sql',
+      '../../read/projections/indent_info_request.sql',
       '../../read/projections/item_master.sql',
       '../../read/projections/location_register.sql',
       '../../read/projections/stock_balance.sql',

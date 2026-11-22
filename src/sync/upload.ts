@@ -399,6 +399,7 @@ export function assertEdgeDamageEventAllowed(envelope: EventEnvelope): void {
 const EDGE_REFUSED_INDENT_EVENT_TYPES: ReadonlySet<string> = new Set([
   'indent.issued',
   'indent.line_closed',
+  'indent.info_requested',
 ]);
 
 export function assertEdgeIndentIssueEventRefused(envelope: EventEnvelope): void {

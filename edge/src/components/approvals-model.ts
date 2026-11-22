@@ -20,6 +20,8 @@ export interface ApprovalRow {
   pending_for_me_line_ids: string[];
   line_skus: string[];
   approved_line_count?: number;
+  /** Story 4.13: the newest approver question; the row stays Waiting. */
+  info_requested?: { question: string; asked_at: string } | null;
 }
 
 /** A line of `GET /api/v1/indents/:indentId` as the detail reads it. */
@@ -39,6 +41,20 @@ export interface ApprovalLine {
   cap: string | null;
   month_to_date_issued: string | null;
   approver_band: ApproverBand | null;
+}
+
+/** An entry of `info_requests[]` on the indent detail, newest first (Story 4.13). */
+export interface InfoRequest {
+  info_request_id: string;
+  line_ids: string[];
+  question: string;
+  asked_by: string | null;
+  asked_at: string;
+}
+
+/** Ask for info only where a DOA approver holds a pending line (standing or self lines have none). */
+export function canAskInfo(lines: ApprovalLine[], pendingIds: string[]): boolean {
+  return lines.some((l) => pendingIds.includes(l.indent_line_id) && l.approval_route === 'doa');
 }
 
 export type RowStatus = 'waiting' | 'approved' | 'rejected';

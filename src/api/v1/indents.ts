@@ -20,6 +20,7 @@ import { config } from '../../config/index.js';
 import {
   getIndentById,
   getIndentLines,
+  listInfoRequestsByIndent,
   getIndentWithCounts,
   listIndents,
   findOpenDuplicate,
@@ -441,12 +442,15 @@ export const getIndentBase: RouteHandler = async (req, res, params) => {
     indent.status === 'raised' && indent.requester_user_id !== userId
       ? await pendingLineIdsFor(indent, userId, now)
       : [];
+  const infoRequests = await listInfoRequestsByIndent(indentId);
   const [names, bands, approverBands] = await Promise.all([
     // A pre-approved line is decided by 'system', not a user id; only ids are looked up.
     displayNamesFor(
-      [indent.requester_user_id, ...rawLines.map((l) => l.decided_by)].filter(
-        (id): id is string => id !== null && UUID_REGEX.test(id),
-      ),
+      [
+        indent.requester_user_id,
+        ...rawLines.map((l) => l.decided_by),
+        ...infoRequests.map((q) => q.asked_by_user_id),
+      ].filter((id): id is string => id !== null && UUID_REGEX.test(id)),
     ),
     getDoaBandsByIds(rawLines.map((l) => l.doa_entry_id)),
     approverBandsFor(userId, now),
@@ -464,6 +468,14 @@ export const getIndentBase: RouteHandler = async (req, res, params) => {
       };
     }),
     requester_display_name: names.get(indent.requester_user_id) ?? null,
+    // Story 4.13: newest first; the first entry is the one the detail shows.
+    info_requests: infoRequests.map((q) => ({
+      info_request_id: q.info_request_id,
+      line_ids: q.line_ids,
+      question: q.question,
+      asked_by: names.get(q.asked_by_user_id) ?? null,
+      asked_at: q.asked_at,
+    })),
     pending_for_me_line_ids: pendingForMe,
     approver_bands: approverBands,
   });
@@ -1221,6 +1233,67 @@ export const rejectIndentBase: RouteHandler = async (req, res, params) => {
   });
 };
 
+/**
+ * Story 4.13: an approver's question to the requester. The gate and the per-line guards are the
+ * approve ones (the seam checks them with decision 'rejected', so the requester is always
+ * refused); nothing about the lines or the header status changes.
+ */
+export const requestInfoIndentBase: RouteHandler = async (req, res, params) => {
+  const indent = await loadIndentOr404(req, res, params?.['indentId']);
+  if (!indent) return;
+
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  const question = typeof body?.question === 'string' ? body.question.trim() : '';
+  if (question.length === 0) {
+    sendRequestError(req, res, 400, 'INDENT_INFO_QUESTION_REQUIRED', 'A question is required', {
+      indent_id: indent.indent_id,
+    });
+    return;
+  }
+  if (question.length > 2000) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INDENT_INFO_QUESTION_TOO_LONG',
+      'A question must be at most 2000 characters',
+      { indent_id: indent.indent_id },
+    );
+    return;
+  }
+
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  const lineIds = await resolveDecisionLineIds(req, res, indent, actor.userId, now);
+  if (!lineIds) return;
+  const persisted = await persistEvent(
+    {
+      stream_type: 'procurement',
+      stream_id: indent.indent_id,
+      event_type: 'indent.info_requested',
+      event_id: randomUUID(),
+      payload: {
+        indent_id: indent.indent_id,
+        info_request_id: randomUUID(),
+        line_ids: lineIds,
+        question,
+      },
+      metadata: {
+        correlation_id: indent.correlation_id ?? randomUUID(),
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurred_at: now,
+      },
+    },
+    auditCtxFor(req, actor, 200),
+  );
+
+  sendJson(res, 200, {
+    event_id: persisted.event_id,
+    indent: await getIndentWithCounts(indent.indent_id),
+    lines: await presentLines(await getIndentLines(indent.indent_id)),
+  });
+};
+
 export const cancelIndentBase: RouteHandler = async (req, res, params) => {
   const indent = await loadIndentOr404(req, res, params?.['indentId']);
   if (!indent) return;
@@ -1317,6 +1390,11 @@ export const rejectIndentHandler = requireRole({
   module: [EMPLOYEE_MODULE, 'procurement'],
   functionScope: 'write',
 })(rejectIndentBase);
+
+export const requestInfoIndentHandler = requireRole({
+  module: [EMPLOYEE_MODULE, 'procurement'],
+  functionScope: 'write',
+})(requestInfoIndentBase);
 
 export const cancelIndentHandler = requireRole({
   module: 'procurement',

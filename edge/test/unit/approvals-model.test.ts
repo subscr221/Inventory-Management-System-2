@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ageOf,
   bandLine,
+  canAskInfo,
   doaNote,
   formatRupees,
   matchesSearch,
@@ -57,6 +58,19 @@ const chips = {
 };
 
 describe('approvals model', () => {
+  it('Ask for info needs a pending-for-me line routed through DOA (Story 4.13)', () => {
+    assert.strictEqual(canAskInfo([line({})], ['l-1']), true);
+    assert.strictEqual(canAskInfo([line({})], []), false);
+    assert.strictEqual(canAskInfo([line({ approval_route: 'self_approval' })], ['l-1']), false);
+    assert.strictEqual(
+      canAskInfo(
+        [line({ approval_route: 'standing_approval' }), line({ indent_line_id: 'l-2' })],
+        ['l-1'],
+      ),
+      false,
+    );
+  });
+
   it('merges waiting before decided and drops duplicates', () => {
     const merged = mergeAll(
       [row({ indent_id: 'a' })],

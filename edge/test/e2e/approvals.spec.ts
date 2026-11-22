@@ -82,6 +82,38 @@ test('reject needs a reason: Confirm reject stays disabled until text, Cancel re
   ]);
 });
 
+test('Ask for info sends the question, shows the status block and keeps the decision open', async ({
+  page,
+}) => {
+  await provisionApprovals(page);
+  await page.goto(`/approvals?indent=${INDENT_ID}`);
+  const detail = page.getByRole('region', { name: 'Approval detail' });
+  await detail.getByRole('button', { name: 'Ask for info' }).click();
+  const send = detail.getByRole('button', { name: 'Send question' });
+  await expect(send).toBeDisabled();
+  await expect(detail.getByText('Required before you can send.')).toBeVisible();
+  await detail
+    .getByLabel('Question for the requester (sent to the requester)')
+    .fill('Which machine ($& spare)?');
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(detail.getByText(/^Info asked, /)).toBeVisible();
+  // `$&` is a String.replace pattern; the typed question must come back untouched.
+  await expect(
+    detail.getByText('"Which machine ($& spare)?" - you can still decide.'),
+  ).toBeVisible();
+  await expect(detail.getByRole('button', { name: 'Approve' })).toBeEnabled();
+  expect(await posts(page)).toEqual([
+    {
+      action: 'request-info',
+      body: { line_ids: [LINE_PENDING], question: 'Which machine ($& spare)?' },
+    },
+  ]);
+  // The row stays Waiting and gains the Info asked chip.
+  await expect(page.getByRole('button', { name: 'Waiting 1' })).toBeVisible();
+  await expect(page.getByRole('table').getByText('Info asked')).toBeVisible();
+});
+
 test('a 409 shows the error text and reloads the detail', async ({ page }) => {
   await provisionApprovals(page, { conflictFirst: true });
   await page.goto(`/approvals?indent=${INDENT_ID}`);
@@ -130,6 +162,8 @@ test('offline: the block shows, actions are disabled, data stays readable', asyn
   await expect(page.getByText(/Offline - approvals need a connection/)).toHaveCount(1);
   await expect(detail.getByRole('button', { name: 'Approve' })).toBeDisabled();
   await expect(detail.getByRole('button', { name: 'Reject' })).toBeDisabled();
+  // Story 4.13: asking needs a live connection, so the offline detail offers no Ask for info.
+  await expect(detail.getByRole('button', { name: 'Ask for info' })).toHaveCount(0);
   await expect(detail.getByText('CON-WELD-ROD').first()).toBeVisible();
   await context.setOffline(false);
   await expect(detail.getByRole('button', { name: 'Approve' })).toBeEnabled();

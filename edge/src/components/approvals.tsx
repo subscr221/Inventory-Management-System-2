@@ -7,6 +7,7 @@ import { useDeviceClass } from '../lib/use-device-class';
 import {
   ageOf,
   bandLine,
+  canAskInfo,
   doaNote,
   formatRupees,
   isApprovalRow,
@@ -19,6 +20,7 @@ import {
   type ApprovalLine,
   type ApprovalRow,
   type ApproverBand,
+  type InfoRequest,
   type RowStatus,
   type Tab,
 } from './approvals-model';
@@ -47,6 +49,8 @@ interface DetailData {
   lines: ApprovalLine[];
   requester_display_name: string | null;
   pending_for_me_line_ids: string[];
+  /** Story 4.13: newest first; absent from a pre-4.13 server. */
+  info_requests?: InfoRequest[];
 }
 
 type DetailState =
@@ -126,6 +130,8 @@ export function Approvals({ online, onTaskModeChange }: ApprovalsProps) {
   const [detail, setDetail] = useState<DetailState>({ kind: 'idle' });
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState('');
+  const [askOpen, setAskOpen] = useState(false);
+  const [question, setQuestion] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -235,6 +241,8 @@ export function Approvals({ online, onTaskModeChange }: ApprovalsProps) {
     setDetail({ kind: 'idle' });
     setRejectOpen(false);
     setReason('');
+    setAskOpen(false);
+    setQuestion('');
     setError(null);
     setConfirmation(null);
   }, [indentId]);
@@ -306,6 +314,42 @@ export function Approvals({ online, onTaskModeChange }: ApprovalsProps) {
     }
   };
 
+  // Story 4.13: a question is not a decision; the footer stays so the approver can still decide.
+  const askInfo = async () => {
+    if (busyRef.current || detail.kind !== 'ready' || !online) return;
+    const data = detail.data;
+    const trimmed = question.trim();
+    if (!trimmed) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authorizedFetch(
+        `/api/v1/indents/${encodeURIComponent(data.indent.indent_id)}/request-info`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ line_ids: data.pending_for_me_line_ids, question: trimmed }),
+        },
+      );
+      if (readIndentParam() !== indentId) return;
+      if (res.ok) {
+        setAskOpen(false);
+        setQuestion('');
+        await Promise.all([loadList(), loadDetail()]);
+        return;
+      }
+      const code = await errorCodeOf(res);
+      setError(code ? errorMessage(code) : t('approvals.info.failed'));
+      if (res.status === 409) await loadDetail();
+    } catch {
+      if (readIndentParam() === indentId) setError(t('approvals.info.failed'));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
   const fetchedAt =
     detail.kind === 'ready' ? detail.fetchedAt : list.kind === 'ready' ? list.fetchedAt : null;
   const offlineBlock = !online ? (
@@ -356,6 +400,10 @@ export function Approvals({ online, onTaskModeChange }: ApprovalsProps) {
   const statusPill = (status: RowStatus) => (
     <span className={STATUS_PILL[status]}>{t(STATUS_KEY[status])}</span>
   );
+  const infoChip = (row: ApprovalRow) =>
+    row.info_requested ? (
+      <span className="state-pill state-pill-info">{t('approvals.info.chip')}</span>
+    ) : null;
   const ageText = (createdAt: string) => {
     const age = ageOf(createdAt, now);
     return t(AGE_KEY[age.unit]).replace('{n}', String(age.n));
@@ -452,7 +500,10 @@ export function Approvals({ online, onTaskModeChange }: ApprovalsProps) {
                     <td>{row.requester_display_name ?? ''}</td>
                     <td className="num">{amountText(row.estimated_value)}</td>
                     <td>{ageText(row.created_at)}</td>
-                    <td>{statusPill(rowStatus(row))}</td>
+                    <td>
+                      {statusPill(rowStatus(row))}
+                      {infoChip(row)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -477,6 +528,7 @@ export function Approvals({ online, onTaskModeChange }: ApprovalsProps) {
                     {row.requester_display_name ?? ''} - {ageText(row.created_at)}
                   </span>
                   {statusPill(rowStatus(row))}
+                  {infoChip(row)}
                 </button>
               </li>
             ))}
@@ -505,14 +557,25 @@ export function Approvals({ online, onTaskModeChange }: ApprovalsProps) {
           handheld={handheld}
           rejectOpen={rejectOpen}
           reason={reason}
+          askOpen={askOpen}
+          question={question}
           error={error}
           confirmation={confirmation}
           confirmationRef={confirmationRef}
           offlineBlock={offlineBlock}
           onApprove={() => void decide('approve')}
           onReject={() => void decide('reject')}
-          onRejectOpen={setRejectOpen}
+          onRejectOpen={(open) => {
+            setRejectOpen(open);
+            if (open) setAskOpen(false);
+          }}
           onReason={setReason}
+          onAskOpen={(open) => {
+            setAskOpen(open);
+            if (open) setRejectOpen(false);
+          }}
+          onQuestion={setQuestion}
+          onAsk={() => void askInfo()}
           onBack={() => select('')}
         />
       ) : detail.kind === 'no-access' ? (
@@ -562,6 +625,8 @@ interface DetailBodyProps {
   handheld: boolean;
   rejectOpen: boolean;
   reason: string;
+  askOpen: boolean;
+  question: string;
   error: string | null;
   confirmation: Confirmation | null;
   confirmationRef: RefObject<HTMLDivElement | null>;
@@ -570,11 +635,14 @@ interface DetailBodyProps {
   onReject: () => void;
   onRejectOpen: (open: boolean) => void;
   onReason: (reason: string) => void;
+  onAskOpen: (open: boolean) => void;
+  onQuestion: (question: string) => void;
+  onAsk: () => void;
   onBack: () => void;
 }
 
 function DetailBody(props: DetailBodyProps) {
-  const { data, online, busy, rejectOpen, reason, error, confirmation } = props;
+  const { data, online, busy, rejectOpen, reason, askOpen, question, error, confirmation } = props;
   const pending = data.pending_for_me_line_ids;
   const requester = data.requester_display_name ?? t('approvals.confirm.requester');
   const note = doaNote(data.lines, pending, {
@@ -592,6 +660,11 @@ function DetailBody(props: DetailBodyProps) {
   const decided = data.lines.filter((l) => l.line_status !== 'pending' && l.decided_at);
   const reasonId = 'approvals-reject-reason';
   const hintId = 'approvals-reject-hint';
+  const questionId = 'approvals-info-question';
+  const questionHintId = 'approvals-info-hint';
+  const open = data.indent.status === 'raised' && pending.length > 0;
+  const latestQuestion = open ? (data.info_requests?.[0] ?? null) : null;
+  const canAsk = online && open && canAskInfo(data.lines, pending);
 
   return (
     <div className="approvals-detail-body">
@@ -708,6 +781,15 @@ function DetailBody(props: DetailBodyProps) {
       </ol>
 
       <div aria-live="polite">
+        {latestQuestion ? (
+          <div className="approvals-block">
+            <b>
+              {t('approvals.info.asked').replace('{time}', formatTime(latestQuestion.asked_at))}
+            </b>{' '}
+            {/* A function replacer: typed text may hold a dollar-ampersand, which a string replacement expands. */}
+            {t('approvals.info.question').replace('{question}', () => latestQuestion.question)}
+          </div>
+        ) : null}
         {confirmation ? (
           <div className="approvals-block" tabIndex={-1} ref={props.confirmationRef}>
             {confirmation.kind === 'approved'
@@ -765,6 +847,41 @@ function DetailBody(props: DetailBodyProps) {
                 </button>
               </div>
             </div>
+          ) : askOpen ? (
+            <div className="approvals-reject">
+              <label htmlFor={questionId}>{t('approvals.info.label')}</label>
+              <textarea
+                id={questionId}
+                value={question}
+                autoFocus
+                maxLength={2000}
+                aria-describedby={question.trim() ? undefined : questionHintId}
+                onChange={(e) => props.onQuestion(e.target.value)}
+              />
+              {question.trim() ? null : (
+                <p id={questionHintId} className="approvals-hint">
+                  {t('approvals.info.hint')}
+                </p>
+              )}
+              <div className="approvals-actions">
+                <button
+                  type="button"
+                  className="primary-action"
+                  disabled={!online || busy || !question.trim()}
+                  onClick={props.onAsk}
+                >
+                  {t('approvals.info.send')}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  disabled={busy}
+                  onClick={() => props.onAskOpen(false)}
+                >
+                  {t('approvals.info.cancel')}
+                </button>
+              </div>
+            </div>
           ) : (
             <div className="approvals-actions">
               <button
@@ -783,6 +900,16 @@ function DetailBody(props: DetailBodyProps) {
               >
                 {t('approvals.action.reject')}
               </button>
+              {canAsk ? (
+                <button
+                  type="button"
+                  className="secondary-action"
+                  disabled={busy}
+                  onClick={() => props.onAskOpen(true)}
+                >
+                  {t('approvals.action.askInfo')}
+                </button>
+              ) : null}
             </div>
           )}
         </div>

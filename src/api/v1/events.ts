@@ -559,12 +559,14 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   // route (bin under site, open quantity, slip number); this door never accepts them.
   if (
     body.stream_type === 'procurement' &&
-    (body.event_type === 'indent.issued' || body.event_type === 'indent.line_closed')
+    (body.event_type === 'indent.issued' ||
+      body.event_type === 'indent.line_closed' ||
+      body.event_type === 'indent.info_requested')
   ) {
     throw new AppError(
       403,
       'FUNCTION_ACCESS_DENIED',
-      `Event "${body.event_type}" is accepted only through the stores issue routes`,
+      `Event "${body.event_type}" is accepted only through its dedicated online route`,
       { event_type: body.event_type },
     );
   }

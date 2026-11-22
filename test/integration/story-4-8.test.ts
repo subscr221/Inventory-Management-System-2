@@ -287,6 +287,7 @@ describe('Story 4.8 standing approvals and self-approval limits', () => {
       '../../read/projections/inventory_valuation.sql',
       '../../read/projections/indent.sql',
       '../../read/projections/indent_line.sql',
+      '../../read/projections/indent_info_request.sql',
       '../../read/projections/indent_issue.sql',
       '../../read/projections/standing_grant.sql',
     ]) {

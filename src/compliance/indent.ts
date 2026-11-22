@@ -9,6 +9,7 @@ import {
   getIndentById,
   getIndentLines,
   insertIndent,
+  insertIndentInfoRequest,
   insertIndentLine,
   recomputeIndentEstimatedValue,
   updateIndentStatus,
@@ -39,6 +40,7 @@ const INDENT_EVENT_TYPES = new Set([
   'indent.withdrawn',
   'indent.approved',
   'indent.rejected',
+  'indent.info_requested',
   'indent.ordered',
   'indent.cancelled',
   'indent.closed',
@@ -119,6 +121,26 @@ export function assertIndentShape(envelope: EventEnvelope): void {
           {
             indent_id: p['indent_id'],
           },
+        );
+      break;
+    case 'indent.info_requested':
+      if (!isUuid(p['indent_id']))
+        reject('INVALID_PARAMS', 'indent_id is required and must be a UUID');
+      if (!isUuid(p['info_request_id']))
+        reject('INVALID_PARAMS', 'info_request_id is required and must be a UUID');
+      if (!Array.isArray(p['line_ids']) || p['line_ids'].length === 0) {
+        reject('INVALID_PARAMS', 'line_ids must be a non-empty array of indent_line_id UUIDs');
+      }
+      assertLineIdsShape(p);
+      if (
+        !isNonEmptyString(p['question']) ||
+        p['question'].trim().length === 0 ||
+        p['question'].length > 2000
+      )
+        reject(
+          'INDENT_INFO_QUESTION_REQUIRED',
+          'A question is required and must be at most 2000 characters',
+          { indent_id: p['indent_id'] },
         );
       break;
     case 'indent.ordered':
@@ -349,6 +371,9 @@ export async function applyIndentProjection(
       break;
     case 'indent.rejected':
       await applyIndentRejected(envelope, client);
+      break;
+    case 'indent.info_requested':
+      await applyIndentInfoRequested(envelope, client, eventId);
       break;
     case 'indent.ordered':
       await applyIndentOrdered(envelope, client);
@@ -1154,6 +1179,88 @@ async function applyIndentRejected(envelope: EventEnvelope, client: PoolClient):
     );
   }
   await applyLineDecision(envelope, client, 'rejected', (p['rejection_reason'] as string).trim());
+}
+
+/**
+ * Story 4.13: an approver's question. Same header and per-line guards as a rejection (the
+ * requester is always refused), but no line or header status changes; the row, the audit entry
+ * and the requester notification are written in the same transaction as the event.
+ */
+async function applyIndentInfoRequested(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as Record<string, unknown>;
+  const indentId = p['indent_id'] as string;
+  const indent = await getIndentById(indentId, client, true);
+  if (!indent) {
+    reject('INDENT_NOT_FOUND', 'Indent not found', { indent_id: indentId }, 404);
+  }
+  assertHeaderDecidable(indent);
+
+  const lines = await getIndentLines(indentId, client, true);
+  const byId = new Map(lines.map((l) => [l.indent_line_id, l]));
+  const lineIds = [...new Set(p['line_ids'] as string[])];
+  const actorId = envelope.metadata.actor.user_id;
+  const now = envelope.metadata.occurred_at;
+  for (const id of lineIds) {
+    const line = byId.get(id);
+    if (!line) {
+      reject(
+        'INDENT_LINE_NOT_FOUND',
+        'No such line on this indent',
+        { indent_id: indentId, indent_line_id: id },
+        404,
+      );
+    }
+    await assertLineDecisionAllowed(indent, line, actorId, now, client, 'rejected');
+  }
+
+  const question = (p['question'] as string).trim();
+  await insertIndentInfoRequest(client, {
+    info_request_id: p['info_request_id'] as string,
+    indent_id: indentId,
+    line_ids: lineIds,
+    question,
+    asked_by_user_id: actorId,
+    asked_at: now,
+    source_event_id: eventId,
+  });
+  await logAuditEntry(client, {
+    trace_id: envelope.metadata.correlation_id ?? '',
+    user_id: actorId,
+    role: envelope.metadata.actor.role,
+    location_id: envelope.metadata.actor.location_id,
+    endpoint: `/indents/${indentId}/request-info`,
+    method: 'POST',
+    event_id: envelope.event_id ?? null,
+    http_status: 200,
+    error_code: 'indent.info_requested',
+    details: {
+      indent_id: indentId,
+      info_request_id: p['info_request_id'],
+      line_nos: lineIds.map((id) => byId.get(id)!.line_no),
+      question,
+    },
+  });
+  await emitNotificationInTransaction(
+    {
+      target: { role: envelope.metadata.actor.role, user_id: indent.requester_user_id },
+      event_type: 'indent_info_requested',
+      status_verb: 'asked',
+      object_type: 'indent',
+      object_id: indentId,
+      actor_label: `Indent ${indent.indent_number_ext}`,
+      next_step: `An approver asked: ${question}`,
+      actor: envelope.metadata.actor,
+      correlation_id: envelope.metadata.correlation_id,
+      occurred_at: now,
+    },
+    client,
+  );
 }
 
 async function applyIndentOrdered(envelope: EventEnvelope, client: PoolClient): Promise<void> {

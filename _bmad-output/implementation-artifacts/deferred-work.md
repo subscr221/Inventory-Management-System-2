@@ -1423,3 +1423,41 @@ eload() cannot fetch while offline, so the two-pane list reconciles only after c
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-20-unloading-exceptions-screen.md`
   summary: `GET /api/v1/receiving/exceptions` returns at most 500 rows oldest first with no date filter, so once a site holds more than 500 resolved (or sent) rows the 3.20 `Resolved today` group loses today's rows.
   evidence: `src/read/projections/receiving_exception.ts:255` caps the list at 500 ordered ascending, and the route accepts only `site` and `status` (`src/api/v1/unloading-exceptions.ts:290-332`).
+
+## Deferred from: story-4.13 (2026-11-22)
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: There is no requester reply channel; the requester sees the question on My requests and answers the approver outside the app.
+  evidence: `edge/src/components/my-requests.tsx` renders `info_requested` read-only and no `indent.info_replied` event or route exists.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: The `indent_info_requested` notification is stored and returned by `GET /notifications` but no edge notifications bell or in-app display shows it.
+  evidence: `src/compliance/indent.ts` `applyIndentInfoRequested` emits it; the edge shell has no notifications surface.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: A question always covers every line the approver currently holds; there is no line-scoped question picker.
+  evidence: `src/api/v1/indents.ts` `requestInfoIndentBase` accepts `line_ids` but `edge/src/components/approvals.tsx` always sends `pending_for_me_line_ids`.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: Replay: the route mints a new event_id and info_request_id per HTTP call, so a client retry creates a duplicate question and notification.
+  evidence: `src/api/v1/indents.ts` `requestInfoIndentBase` generates ids per request; no idempotency key is read.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: The server does not enforce the DOA-route-only rule for Ask for info; only the UI hides it. Needs an owner ruling on server refusal.
+  evidence: `edge/src/approvals-model.ts` `canAskInfo` checks `approval_route === 'doa'`; `requestInfoIndentBase` does not.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: No cap on the number of questions per approver per indent; only the newest is shown.
+  evidence: `indent_info_request` inserts are unbounded and `info_requests[0]` is rendered.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: `listIndents` info_requested join is not cleared when the requisition is decided or withdrawn, so the chip stays on closed requisitions.
+  evidence: `src/api/v1/indents.ts` `listIndents` join on `indent_info_request` has no status condition.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: `listIndents` DISTINCT ON subquery scans all `indent_info_request` rows on every list call; scope it to the page's indents.
+  evidence: Subquery in `src/api/v1/indents.ts` `listIndents` is unfiltered by page ids.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: `GET /indents/:id` returns all info_requests to any viewer passing `getIndentBase`; the AC has no per-line visibility rule.
+  evidence: `src/api/v1/indents.ts` `getIndentBase` attaches every info request.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: The status block shows `info_requests[0]` to every approver, not only the asker or line holder.
+  evidence: `edge/src/components/approvals.tsx` `latestQuestion` is not filtered by asker.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: A 403 `INDENT_RAISER_CANNOT_APPROVE` or `NOT_RESOLVED_APPROVER` on ask does not reload the detail; only 409 does.
+  evidence: `edge/src/components/approvals.tsx` `askInfo` reloads only on `res.status === 409`.
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
+  summary: Notification target role uses the actor role, not the requester role (unverified; check the notification list filter).
+  evidence: `src/compliance/indent.ts` `applyIndentInfoRequested` notification target; verify against `src/api/v1/notification.ts` list filter.

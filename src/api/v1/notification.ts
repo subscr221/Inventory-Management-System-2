@@ -36,6 +36,7 @@ const KNOWN_EVENT_TYPES = [
   'goods_received',
   'sync_complete',
   'qc_hold_placed',
+  'indent_info_requested',
 ];
 
 type WriteAuditCtx = Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>;

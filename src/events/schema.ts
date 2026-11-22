@@ -1154,6 +1154,14 @@ export interface IndentRejectedEnvelope extends Omit<EventEnvelope, 'payload'> {
   payload: IndentRejectedPayload;
 }
 
+/** Story 4.13: an approver's question to the requester; no line status changes. */
+export interface IndentInfoRequestedPayload {
+  indent_id: string;
+  info_request_id: string;
+  line_ids: string[];
+  question: string;
+}
+
 export interface IndentOrderedPayload {
   indent_id: string;
   purchase_order_id: string;
@@ -6153,6 +6161,10 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'indent.rejected': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.info_requested': {
     streamType: 'procurement',
     requiresBusinessStream: false,
   },

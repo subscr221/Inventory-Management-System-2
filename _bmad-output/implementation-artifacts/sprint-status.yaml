@@ -971,7 +971,7 @@ development_status:
   4-10-requisition-line-level-approval-and-mixed-routing: done   # PILOT; story file created 2026-10-20 (baseline 76b2acf); party-mode 2026-10-20 added AC 6 no-band refusal at raise (takes that half of 4-9) and AC 7 header counts; O1 band amounts confirmed by owner 2026-10-21 (dept head to 1,00,000, finance controller above); prerequisite of 4-8; seeds pilot DOA value bands; coordinate with 4-9 (user ruling 2026-09-29)
   4-11-stores-counter-issue-against-a-requisition: done   # PILOT; implemented and code-reviewed 2026-10-21 (2627 of 2627), committed 4657937; review patches applied; prerequisite of 4-8; story file created 2026-10-21 from baseline 908443f; owner questions Q1-Q4 open in the story file; party-mode 2026-10-20 ruling (late-approved line slip and notification) applied as AC 7
   4-12-approvals-inbox-and-requisition-approval-detail: done   # PRE-PILOT BLOCKING (sprint-change 2026-10-21; G06; L); story file created 2026-11-19 from baseline 5ea4f23; implemented 2026-11-19 (2736 of 2736, edge 120 of 120), uncommitted; staging row 2.10n open; code review 2026-11-19: 1 decision, 10 patches applied, status done (2737 of 2737, edge 123 of 123), uncommitted; staging row 2.10n open
-  4-13-requisition-ask-for-info: backlog   # PILOT (sprint-change 2026-10-21; G06 ask for info; S-M)
+  4-13-requisition-ask-for-info: done   # PILOT (sprint-change 2026-10-21; G06 ask for info; S-M)
   epic-4-retrospective: optional
   # story 4-2 skipped for now: epics.md sequences it LAST in epic 4 (consumes PurchaseOrderIssued/Confirmed
   # from 4.4, GoodsReceived + match results from 4.5, SupplierInvoiceCaptured from 4.7). Create 4-2 after

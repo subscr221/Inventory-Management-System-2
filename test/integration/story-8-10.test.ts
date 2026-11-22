@@ -502,6 +502,7 @@ describe('Story 8.10 receipt-lot QC task, governed putaway release and observati
       '../../read/projections/attachment.sql',
       '../../read/projections/indent.sql',
       '../../read/projections/indent_line.sql',
+      '../../read/projections/indent_info_request.sql',
       '../../read/projections/indent_damage_link.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));

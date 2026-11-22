@@ -187,6 +187,7 @@ import {
   withdrawIndentHandler,
   approveIndentHandler,
   rejectIndentHandler,
+  requestInfoIndentHandler,
   cancelIndentHandler,
   issueIndentHandler,
   closeIndentLineHandler,
@@ -882,6 +883,7 @@ export function createAppRouter(): Router {
   router.post('/api/v1/indents/:indentId/withdraw', withdrawIndentHandler);
   router.post('/api/v1/indents/:indentId/approve', approveIndentHandler);
   router.post('/api/v1/indents/:indentId/reject', rejectIndentHandler);
+  router.post('/api/v1/indents/:indentId/request-info', requestInfoIndentHandler);
   router.post('/api/v1/indents/:indentId/cancel', cancelIndentHandler);
   // Story 4.11: stores counter issue against a requisition. `/indents/issues/:issueId` has a
   // different segment count from the `/:indentId/...` routes, so the two cannot swallow each other.

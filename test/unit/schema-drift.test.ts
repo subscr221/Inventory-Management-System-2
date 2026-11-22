@@ -579,6 +579,14 @@ const EXPECTED = [
     // Review: a slip line is immutable once written, so app_user never updates it.
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 4.13: requisition ask-for-info questions
+  {
+    canonical: 'read/projections/indent_info_request.sql',
+    table: 'indent_info_request',
+    constraints: ['uq_indent_info_request_source_event'],
+    indexes: ['idx_indent_info_request_indent'],
+    appUserGrant: 'INSERT, SELECT',
+  },
   // Story 4.8: standing approvals and self-approval limits. The CHECKs are inline in the CREATE
   // TABLE (compared between the two copies); the item-group FK is a named guarded block.
   {

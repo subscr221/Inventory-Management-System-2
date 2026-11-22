@@ -18,6 +18,8 @@ export interface MyIndentRow {
   approved_line_count?: number;
   /** Story 4.9: set while a line waits on the head-of-department fallback. */
   waiting_on_label?: string | null;
+  /** Story 4.13: the newest approver question on the requisition. */
+  info_requested?: { question: string; asked_at: string } | null;
   /** Story 4.10: per-line state when the API returns lines (detail reads only). */
   lines?: Array<{ line_no: number; line_status: string }>;
 }
@@ -162,6 +164,20 @@ function RequisitionCard({ row }: { row: MyIndentRow }) {
           }
         />
       </dl>
+      {row.info_requested ? (
+        <p>
+          <span className="state-pill state-pill-info">{t('myRequests.infoRequest.chip')}</span>{' '}
+          {/* A function replacer: typed text may hold `$&`, which a string replacement expands. */}
+          {t('myRequests.infoRequest.question').replace(
+            '{question}',
+            () => row.info_requested!.question,
+          )}{' '}
+          {t('myRequests.infoRequest.asked').replace(
+            '{time}',
+            formatDateTime(row.info_requested.asked_at),
+          )}
+        </p>
+      ) : null}
       {row.lines && row.lines.length > 0 ? (
         <span>
           {row.lines.map((line) => (
