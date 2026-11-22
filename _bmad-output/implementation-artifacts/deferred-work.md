@@ -1941,6 +1941,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-un
 location: n/a
 reason: The workbench's authority branch scans up to 2,000 recent cases per request (`listOpenDamageReports`) to find those the caller is the pending authority for; fine at pilot volume, needs an indexed pending-step view at scale.
 status: open
+decision: 2026-11-22 Keep open, revisit post-pilot
 
 ### DW-165: The report-time relocation into `ZONE-QC-HOLD` writes no `lot_trace` entry (the bin-move precedent); a lot's trace shows the damage case only through the case itself.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
