@@ -1780,6 +1780,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-r
 location: n/a
 reason: Withdrawing or confirming one's own requisition from the base role (D3): confirm, withdraw, approve, reject and cancel stay procurement write, so an employee-only person who raises a duplicate-held requisition cannot confirm or withdraw it without help. Reasonable next step; needs an access-matrix row first. Annotated 2026-11-19: Story 4.12 takes the approve, reject and detail-read half (gate widened to the employee hat with per-line identity); confirm, withdraw and cancel remain deferred.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-143: Availability "Low" state, "expected <date>" and "Collect at <counter>" chips (D5): need min-max levels, open PO data and a counter register. `mockups/key-requisitions.html` still shows "In stock - 12 available" and "Low - N available"; the UX owner is to amend the mock to the no-number rule.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
