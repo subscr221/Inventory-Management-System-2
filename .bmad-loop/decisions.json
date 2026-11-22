@@ -251,6 +251,15 @@
     "label": "Keep open",
     "resolution": ""
   },
+  "DW-162": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "3",
+    "label": "Keep open",
+    "resolution": ""
+  },
   "DW-19": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
