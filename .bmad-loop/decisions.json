@@ -35,6 +35,15 @@
     "label": "Fix now",
     "resolution": ""
   },
+  "DW-29": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "2",
+    "label": "Keep open for the sweep",
+    "resolution": ""
+  },
   "DW-5": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
