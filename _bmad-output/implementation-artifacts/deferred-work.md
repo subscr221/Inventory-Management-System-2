@@ -2183,6 +2183,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 1-16-site-he
 location: n/a
 reason: `findRoleHolder` with a location returns the oldest assignment among the site's own holders and the holders at `'*'`, so an older wildcard holder outranks the site's own. Task 2.1 of Story 1.16 kept the ordering on purpose. Story 4.8 (its D3) is the first caller and should decide whether the site's own holder must win, and add the mixed-case test.
 status: open
+decision: 2026-11-22 Site holder wins, add test — Order findRoleHolder with a location so the site's own assignment outranks '*', then oldest; add the mixed-case integration test.
 
 ### DW-202: `docs/migration/pilot-mock-extract/world.json` `people[].roles` omits `employee`, which `deploy/rehearsal/mock/generate.mjs` has written since Story 1.15. `test/unit/site-head-role-pack.test.ts` pins the committed form, so a regeneration of the pack breaks that test until both are aligned.
 origin: migrated from legacy ledger ("Deferred from: code review of 1-16-site-head-role (2026-09-30)"), 2026-11-22
