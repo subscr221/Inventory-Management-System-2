@@ -1498,6 +1498,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-capture
 location: n/a
 reason: `edge_outbox_retained` growth is bounded only by manual dismiss; no age cap and no drop on central resolution.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-104: An unsalvaged `needs_attention` row (an older build's row on a device that has not bootstrapped online since) appears in the needs-attention list but lives in `edge_outbox`, not the retained table, so Dismiss removes nothing for it until the next online bootstrap salvages it; the list refresh shows it still present and the notice reads as if it were removed.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
