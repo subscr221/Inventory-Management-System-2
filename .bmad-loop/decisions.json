@@ -89,6 +89,15 @@
     "label": "Keep immutable, flag",
     "resolution": ""
   },
+  "DW-46": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "2",
+    "label": "Keep open with DW-41",
+    "resolution": ""
+  },
   "DW-5": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
