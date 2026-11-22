@@ -1511,6 +1511,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-capture
 location: n/a
 reason: Bootstrap `navigation` is not cached: an offline start renders Dashboard and Frontline only. Harmless because the page is online-only, but the entry disappears from the header offline.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-106: On the supervisor page the Dashboard and Frontline links are hash links to sections that are not on that page (pre-existing on `/maintenance` too); a real dashboard route or `aria-current` handling is a shell story.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
