@@ -697,6 +697,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (
 location: n/a
 reason: 11.2R-2 IRN applier refusals other than `IRN_MISSING` (`DISPATCH_IRN_CONFLICT`, `DISPATCH_ORDER_SITE_MISMATCH`) leave no `audit_log` row: the store audits only on success and the applier self-audits only the statutory refusal. This matches every sibling applier; raised because a competing-invoice conflict is a compliance-relevant event with no trace.
 status: open
+decision: 2026-11-22 Add refusal audit — Write an audit_log row for DISPATCH_IRN_CONFLICT and DISPATCH_ORDER_SITE_MISMATCH refusals in the dispatch IRN door, with tests.
 
 ### DW-14: 11.2R-3 `also_covers` on `POST /api/v1/dispatch/:dispatchOrderId/irn` is uncapped: N site
 origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
