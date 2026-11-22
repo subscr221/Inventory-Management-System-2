@@ -1882,7 +1882,9 @@ decision: 2026-11-22 Keep open
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
 location: n/a
 reason: A scheduled sweep for overdue external checks (Table 8 last row): no existing sweep was reusable, so none runs; the workbench lists overdue external checks first instead.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Workbench lists overdue external checks first; no sweep needed for pilot.
+decision: 2026-11-22 Close, workbench ordering suffices — Workbench lists overdue external checks first; no sweep needed for pilot.
 
 ### DW-158: An employee-only reporter cannot see the central refusal of their own offline damage capture (deferred-work L1187): refused captures are scoped by the stream module, and no one holds a `damage` module. The device still shows "Needs attention" with the code.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
