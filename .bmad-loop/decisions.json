@@ -341,6 +341,15 @@
     "label": "Keep open for later",
     "resolution": ""
   },
+  "DW-263": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "2",
+    "label": "Keep open for later",
+    "resolution": ""
+  },
   "DW-29": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
