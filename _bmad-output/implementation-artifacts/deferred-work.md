@@ -2544,6 +2544,7 @@ origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-
 location: n/a
 reason: Stock-by-location read for the putaway card: the card shows the task quantity and source bay, not live bin occupancy.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-250: Server-side label print queue: labels are device-local IndexedDB only; there is no cross-device restore or print server.
 origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-10-22)"), 2026-11-22
