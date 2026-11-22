@@ -2077,7 +2077,7 @@ const EXPECTED = [
   {
     canonical: 'read/projections/dispatch_irn.sql',
     table: 'dispatch_irn',
-    constraints: ['chk_dispatch_irn_present'],
+    constraints: ['chk_dispatch_irn_present', 'chk_dispatch_so_number_present'],
     indexes: ['idx_dispatch_irn_source_event', 'idx_dispatch_irn_invoice', 'idx_dispatch_irn_so'],
     indexBodies: [
       'CREATE INDEX IF NOT EXISTS idx_dispatch_irn_source_event ON dispatch_irn (source_event_id)',
@@ -2353,6 +2353,15 @@ describe('Story 2.1 schema drift guard', () => {
   // are the two statements that upgrade a database already carrying Story 9.2 or 9.4 data - the one
   // case where a missing mirror is silent and the damage (challans with no clock, invisible to the
   // sweep and to ITC-04) shows up only as a statutory miss.
+  it('Story 11.2 DW-15: both dispatch_irn copies carry the whitespace-class CHECK bodies', () => {
+    for (const path of ['read/projections/dispatch_irn.sql', 'deploy/compose/init-db.sql']) {
+      const sql = read(path);
+      assert.ok(sql.includes("invoice_number_ext ~ '[^[:space:]]'"), `${path} invoice CHECK body`);
+      assert.ok(sql.includes("so_number_ext ~ '[^[:space:]]'"), `${path} so_number CHECK body`);
+      assert.ok(!sql.includes("btrim(invoice_number_ext) <> ''"), `${path} still has btrim check`);
+    }
+  });
+
   it('Story 9.5 mirrors the challan_class additive column and the return-clock backfill into init-db.sql', () => {
     const receiptSql = read('read/projections/jobwork_material_receipt.sql');
     const clockSql = read('read/projections/jobwork_return_clock.sql');

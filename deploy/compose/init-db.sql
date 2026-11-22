@@ -13817,8 +13817,10 @@ DO $$
 BEGIN
   ALTER TABLE dispatch_irn DROP CONSTRAINT IF EXISTS chk_dispatch_irn_present;
   ALTER TABLE dispatch_irn ADD CONSTRAINT chk_dispatch_irn_present CHECK (
-    irn_ext ~ '^[0-9a-f]{64}$' AND btrim(invoice_number_ext) <> ''
+    irn_ext ~ '^[0-9a-f]{64}$' AND invoice_number_ext ~ '[^[:space:]]'
   );
+  ALTER TABLE dispatch_irn DROP CONSTRAINT IF EXISTS chk_dispatch_so_number_present;
+  ALTER TABLE dispatch_irn ADD CONSTRAINT chk_dispatch_so_number_present CHECK (so_number_ext ~ '[^[:space:]]');
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_dispatch_irn_source_event ON dispatch_irn (source_event_id);

@@ -705,7 +705,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
 location: n/a
 reason: 11.2R-4 `chk_dispatch_irn_present` uses `btrim` (spaces only), so a tab-only `irn_ext` passes the DB constraint, and there is no CHECK on a blank `so_number_ext`. Both app doors `trim()` before insert, so this is reachable only by direct SQL.
-status: open
+status: done 2026-11-22
+resolution: resolved by sweep bundle dw-s0-dispatch-irn-checks
+resolution-undo: a8b445292569f296c8ea0899c1a4746e5133bbcbaf11a95956aeab5e4b944ad1 2026-11-22 7374617475733a206f70656e
 
 ### DW-16: 11.2R-5 No uniqueness on `irn_ext` across invoice numbers: the same IRN under two different
 origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22

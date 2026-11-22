@@ -1088,6 +1088,28 @@ describe('Story 11.2 - IRN-Before-Dispatch Enforcement', () => {
     }
   });
 
+  it('7.3b arm: whitespace-only invoice_number_ext / so_number_ext are refused by the DB CHECKs', async () => {
+    const ins = (id: string, inv: string, so: string) =>
+      getPool().query(
+        `INSERT INTO dispatch_irn
+           (dispatch_order_id, invoice_number_ext, irn_ext, so_number_ext, site_id, recorded_by, source_event_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, inv, irnFor('x'), so, siteId, warehouseManager.userId, randomUUID()],
+      );
+    const refusedBy = (constraint: string) => (err: unknown) =>
+      (err as { code?: string }).code === '23514' &&
+      (err as { constraint?: string }).constraint === constraint;
+    const soNo = `SO-112-W-${run}`;
+    await seedErpSalesOrder(randomUUID(), soNo, `SKU-112-W-${run}`, '5', siteId);
+    for (const inv of ['', '   ', '\t', '\n', '\r\n', '\v', '\f']) {
+      await assert.rejects(ins(randomUUID(), inv, soNo), refusedBy('chk_dispatch_irn_present'), `invoice ${JSON.stringify(inv)}`);
+    }
+    for (const so of ['', '   ', '\t']) {
+      await assert.rejects(ins(randomUUID(), `INV-112-W-${run}`, so), refusedBy('chk_dispatch_so_number_present'), `so ${JSON.stringify(so)}`);
+    }
+    await ins(randomUUID(), `INV-112-W-OK-${run}`, soNo);
+  });
+
   it('7.1 arm: a job-work dispatch is unaffected - jobwork.output_dispatched never meets the IRN wall', async () => {
     // Story 9.4's job-work dispatch seam is a DIFFERENT applier (jobwork-dispatch.ts) that shares
     // nothing with applyDispatchDispatchedProjection. The STRUCTURAL guarantee is that the job-work
