@@ -1635,6 +1635,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-mi
 location: n/a
 reason: A same-key replay of an amendment with a different body returns the original event and silently drops the new levels (existing platform-wide idempotency gap).
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-123: An amendment replay returns the current catalogue row, not the levels that event set, following the `createSpareBase` read-back pattern.
 origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
