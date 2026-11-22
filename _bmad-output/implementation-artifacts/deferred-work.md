@@ -2680,6 +2680,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approva
 location: n/a
 reason: Delegation windows read the UTC date, not the IST calendar date: `hasIndentApprovalScope`, `isApproverOfAnyLine` and `approverIdsFor` follow the same wall-clock `today` as `decideAsApprover` and `pendingLineIdsFor`, so the inbox agrees with the seam but both are a day behind between 00:00 and 05:30 IST. Already recorded as a platform-wide convention (see the entry on `resolveDamageAuthority` and `findActiveDelegation` call sites); Story 4.12 adds three more call sites to change in the same pass.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-269: A line routed to its own requester is undecidable (already recorded under Story 4.9). Story 4.12 code review patched the inbox so such a row no longer shows under Waiting for the requester; the routing itself is unchanged.
 origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
