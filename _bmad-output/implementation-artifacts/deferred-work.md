@@ -2411,7 +2411,9 @@ resolution: already resolved: edge/src/components/standing-grants.tsx and standi
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
 location: n/a
 reason: Web push of the pruning list follows the platform rule that push is opt-in per event type (`standing_grant_review`, default off) and needs a push subscription; in-app delivery is unconditional. If the pilot wants push by default, seed the preference at provisioning.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Push stays opt-in per platform rule; in-app delivery is the pilot channel.
+decision: 2026-11-22 Leave opt-in; close as ruled platform behaviour — Push stays opt-in per platform rule; in-app delivery is the pilot channel.
 
 ### DW-231: Cap is counted on quantity ISSUED (D7). A requisition raised under a grant does not reserve any cap, so two requisitions can both ride a grant and the later issue lapses and re-routes to normal approval (D8). This is the ruled behaviour, not a defect, but it surprises a storekeeper who sees a line approved at raise and refused at the counter; the refusal names the lapsed line and the line is re-routed in the same call.
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
