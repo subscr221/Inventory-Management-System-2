@@ -1948,6 +1948,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-un
 location: n/a
 reason: The report-time relocation into `ZONE-QC-HOLD` writes no `lot_trace` entry (the bin-move precedent); a lot's trace shows the damage case only through the case itself.
 status: open
+decision: 2026-11-22 Keep open, revisit post-pilot
 
 
 ## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)
