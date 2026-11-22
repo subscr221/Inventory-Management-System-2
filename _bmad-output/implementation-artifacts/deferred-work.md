@@ -969,6 +969,7 @@ origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 
 location: src/compliance/receiving.ts
 reason: Receiving ignores legacy-received quantity - `src/compliance/receiving.ts:410-430` computes over-receipt from the cumulative `grn_line` sum against `ordered_qty` and never reads `erp_purchase_order_line.open_qty`, so a line partly received in the legacy system before cutover can be over-received post-cutover by the legacy amount. Story 13.2 reports the fact on the open-PO domain report (`received_qty` mismatch between the manifest and `ordered_qty - open_qty`) and does not change receiving. Ruling belongs to Epic 3 (Story 3.4).
 status: open
+decision: 2026-11-22 Keep open for Epic 3 ruling
 
 ### DW-36: Enterprise-wide `missing_in_source` for BOMs and ERP POs - `bom` and `erp_purchase_order` carry no `site_id`, so `computeDomainFindings` (`src/read/projections/migration_domain_verification.ts`) reports platform documents absent from the manifest across the enterprise for `active_boms` and `open_pos` unless the run body names a `document_ref_prefix` (Story 13.2 Open Question 1). A multi-site wave should scope the manifest, not add a site column to the projections.
 origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
