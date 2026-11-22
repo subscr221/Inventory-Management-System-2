@@ -1689,6 +1689,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condit
 location: n/a
 reason: EXPERIENCE.md L146 (every receipt lands in the inspection bay first, putaway only after inspection clearance) and L83 (capped excess recorded as "Excess - returned with vehicle", not posted) are not built; receiving still posts GOOD lines straight to the target and over-tolerance quantity as a rejected line.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-131: The "Inspect on opening" flag (EXPERIENCE.md L84, observation plus photo travelling to the inspector) is not built; the stores mock uses it instead of a DAMAGED tile.
 origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
