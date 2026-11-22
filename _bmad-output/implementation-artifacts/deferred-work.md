@@ -2486,6 +2486,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of story-3-13 (2026-10-
 location: n/a
 reason: The offline PO and ASN PowerSync bucket (`erp_open_purchase_orders`) is a follow-up. At pilot the challan resolves ASN then PO online with a typed fallback; a typed challan records `po_ref_ext` `UNKNOWN` (Q1, Q2).
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-242: The Trucks on site list is fed by the `openTrucks` prop; deriving it on-device from the synced `edge_site_events` bucket joined to unsynced outbox rows is a follow-up once the gate bucket is replicated.
 origin: migrated from legacy ledger ("Deferred from: dev of story-3-13 (2026-10-21)"), 2026-11-22
