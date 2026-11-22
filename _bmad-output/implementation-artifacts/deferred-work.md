@@ -1703,6 +1703,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condit
 location: n/a
 reason: `reason_photo_ref` is an opaque key with no upload endpoint or blob store behind it (the Story 3.2 `challan_photo_ref` precedent); nothing verifies that the referenced photo exists.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-133: Site-configurable reason labels are parked post-pilot (UX Q14); the catalogue is fixed in `src/compliance/receiving-reasons.ts`.
 origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
