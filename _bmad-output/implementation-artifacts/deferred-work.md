@@ -1279,6 +1279,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 1-12-edge-ui
 location: n/a
 reason: Closure codes (`cached_closure_code`) are now read `ORDER BY kind, code` because PowerSync views expose no `rowid`; server-curated fault/cause/remedy order is lost. Needs an explicit position column in the snapshot (edge/src/local-db/worklist.ts:229).
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-72: After an offline start, `db.connect` never runs until reload (the `online` handler only refreshes local state and the worklist), so the blocked sign-out drain and any queued upload wait for a reload (edge/src/components/edge-client.tsx:327). Pre-existing since Story 7.8.
 origin: migrated from legacy ledger ("Deferred from: code review of 1-12-edge-ui-sign-in-through-keycloak-pkce (2026-09-13)"), 2026-11-22
