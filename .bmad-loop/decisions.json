@@ -278,6 +278,15 @@
     "label": "Fix now",
     "resolution": ""
   },
+  "DW-201": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Order findRoleHolder with a location so the site's own assignment outranks '*', then oldest; add the mixed-case integration test.",
+    "key": "1",
+    "label": "Site holder wins, add test",
+    "resolution": ""
+  },
   "DW-29": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
