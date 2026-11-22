@@ -1574,6 +1574,7 @@ origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay rac
 location: src/events/store.ts
 reason: The replay-race mapping in `persistEvent` (`src/events/store.ts`) covers only transactions `persistEvent` owns. A caller-owned transaction (receiving, gate, and now the REST pack request) cannot query after the 23505 aborts it, so a projection-key race there still surfaces the projection constraint's own shape. A loser refused by a business `AppError` raised in a projection, rather than by a 23505, also keeps that error's shape instead of `DUPLICATE_EVENT`.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-114: Contract note for the same mapping: a submission that reuses an idempotency key or event id with a DIFFERENT payload and collides on a projection key now gets the existing event's identity (the outcome the sequential short-circuit already gave) instead of the projection code such as `DUPLICATE_LOT` or `STREAM_CONFLICT`.
 origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
