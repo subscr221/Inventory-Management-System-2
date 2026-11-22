@@ -7,5 +7,14 @@
     "key": "1",
     "label": "Fix now",
     "resolution": ""
+  },
+  "DW-5": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "3",
+    "label": "Keep open",
+    "resolution": ""
   }
 }
