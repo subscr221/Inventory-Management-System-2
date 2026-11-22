@@ -1181,7 +1181,7 @@ development_status:
 
   # --- Epic 10: R&D and Maker-Hub Operations (wave, post-pilot) ---
   epic-10: backlog
-  10-1-randd-and-maker-hub-location-types-and-project-master: backlog
+  10-1-randd-and-maker-hub-location-types-and-project-master: done
   10-2-randd-requisition-budget-check-and-issue-types: backlog
   10-3-project-wip-ledger-and-prototype-build-records: backlog
   10-4-hub-member-records-and-machine-time-booking: backlog

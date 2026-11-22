@@ -2,7 +2,7 @@
 title: 'Story 10.1: R&D and Maker-Hub Location Types and Project Master'
 type: 'feature'
 created: '2026-11-22'
-status: 'done'
+status: 'blocked'
 baseline_revision: 'eda81325144b5c35f1055345f788771eb2a0c943'
 final_revision: '926f776504b86cce911ff63dd8f08c6d1f2c13b6'
 review_loop_iteration: 0
@@ -25,6 +25,15 @@ warnings: []
 **Block If:** None expected. Reclassification approval is defined below (an approved `rd_reclassification` row with approver distinct from requester).
 
 **Never:** No change to sprint-status.yaml. No edge UI screens in this story (backend and contract only). No change to existing non-R&D issue behaviour beyond the new guards. No reuse of `approved_by` as a poster-supplied string.
+
+## Owner Rulings (2026-11-22)
+
+Resolves the review-pass intent gaps. Binding on re-drive:
+
+1. **Write paths.** `location_type` is set through the location-register create/update route (optional field, default `standard`), gated to the role that already manages the location register. `rd_designated` is set through the lot-master setter (optional field, default `false`), gated to the role that already manages lot master. No new event family for these two setters; they follow the existing master-data write seams.
+2. **Reclassification lifecycle.** Add `POST /api/v1/rd-reclassifications` (request, requester role) and `POST /api/v1/rd-reclassifications/:id/approve` (approve, approver role), both emitting events through `persistEvent` with the projection applying `status`. The approve route enforces `approved_by != requested_by` server-side. Pre-approved inserts are disallowed: a reclassification must move `pending` to `approved` through the approve route. Model the request/approve role gate on the existing indent approval seam.
+3. **Consumption.** An approved reclassification is single-use: the material-issue guard consumes it on the first matching issue, and a consumed reclassification no longer satisfies `CROSS_ISSUE_BLOCKED`. The guard enforces demand matching: the issue's demand must equal the reclassification `to_demand` and the source must equal `from_demand`. Quantity-binding and time-boxing are out of scope (deferred-work).
+4. **Scope.** The guard is enforced at the material-issue seam only. Transfer, pick, adjustment, and production-issue seams are out of scope for this story (deferred-work).
 
 ## I/O & Edge-Case Matrix
 
@@ -82,6 +91,18 @@ warnings: []
   - `[medium]` `[patch]` app_user UPDATE on new tables; grants narrowed
   - `[high]` `[bad_spec]` and `[high]` `[intent_gap]` items: recorded above, carried to follow-up, see deferred-work entries for story 10.1
 
+### 2026-11-22 — Review pass (dev-auto re-review)
+- intent_gap: 3 (high 3)
+- bad_spec: 0
+- patch: 0 (moot, not processed: intent_gap branch takes precedence)
+- defer: 0 (moot, not processed)
+- reject: 0
+- addressed_findings:
+  - none
+
+### 2026-11-22 — Owner ruling
+- intent gaps 1-3 and the scope question ruled by the owner. See Owner Rulings (2026-11-22) above.
+
 ## Design Notes
 
 Reclassification approval is an approved `rd_reclassification` row whose `approved_by` differs from `requested_by`, so approval is not a self-grant. Project-code check reads the project row at transaction time, so a project closed after an issue does not retroactively block it.
@@ -98,21 +119,16 @@ Reclassification approval is an approved `rd_reclassification` row whose `approv
 
 ## Auto Run Result
 
-Status: done
-
-Summary: Story 10.1 implemented. `location_type` on the location register (standard, rd_store, maker_hub_store); `rd_designated` on lot master; `rd_project` master (code, owner, phase, budget, status); `rd_reclassification` table with approver-not-requester CHECK; shared guards in `src/compliance/rd-guards.ts` enforcing `CROSS_ISSUE_BLOCKED` and `PROJECT_CODE_REQUIRED` on the indent issue seam; `POST`/`GET` routes at `/api/v1/rd-projects`; error codes mirrored to edge `PERMANENT_ERROR_CODES`.
-
-Files changed: see git commit for this story (projections, migrate.ts, compliance guards, indents and indent-issue, rd-projects route, server.ts mount, error-code registries, edge connector and en.json, integration test story-10-1.test.ts).
-
-Review: Blind Hunter and Edge Case Hunter, one pass. 9 patches applied; 9 deferred to deferred-work.md; 5 rejected; 3 intent gaps and 2 bad-spec items carried to follow-up, see Review Triage Log.
-
-Verification: `story-10-1.test.ts` 9 of 9 pass; `npx tsc --noEmit` exit 0. Full `npm test` not run in this pass.
-
-Residual risks:
-- rd_designated and reclassification approval have no write API; the ring-fence is reachable only by direct DB writes until a follow-up story.
-- An approved reclassification releases the whole lot for all later issues; no quantity or consumption binding.
-- Transfers, picks, adjustments and scrap of R&D stock are not guarded.
-- R&D demand is defined as business_stream research or maker_hub (assumption, not in the original spec).
-- rd_project and rd_reclassification writes bypass the event log.
-
-Auto-run decision for owner: confirm release semantics for approved reclassification and the seam scope before follow-up.
+- Status: blocked
+- Blocking condition: intent gap in intent contract
+- Summary: Story 10.1 code is committed (926f776, docs record d1b4202). This pass made no code change. Blind Hunter and Edge Case Hunter reviewed `git diff eda81325` excluding `_bmad-output`.
+- Intent-gap findings (owner ruling needed):
+  1. `location_type` and `lot_master.rd_designated` have no write path (no API, event, or sync setter). The guards are live but inert: every location is `standard` and every lot is `rd_designated=false`. Ruling needed: which API or event sets these, and who may set them.
+  2. Reclassification has no request or approve path. `app_user` holds INSERT and SELECT only, so a row cannot move from `pending` to `approved`, and an approved row can only be inserted pre-approved. Ruling needed: request and approve endpoints, role gate, and whether a pre-approved insert is allowed.
+  3. An approved reclassification is not consumed, quantity-bound, or expiring, and `from_demand` and `to_demand` are not matched. One approval releases the whole lot indefinitely. Ruling needed: single-use, quantity-bound, or time-boxed, and the demand-matching rule.
+- Scope question for owner (not triaged): are transfer, pick, adjustment, and production-issue seams in scope for 10.1? The Tasks limit the guard to the material-issue seam.
+- Not triaged (moot under the intent_gap cascade): lot lookup `LIMIT 1` without `ORDER BY` on `lot_number`; project_code case mismatch between route payload and guard; `owner_user_id` not existence-checked; unpaginated `GET /api/v1/rd-projects`; per-line guard queries; English-only `en.json` keys. Re-raise after rulings.
+- Revert: none. No uncommitted code change in this pass. Committed 926f776 left in place; reverting it is an owner decision.
+- Deferred ledger: no entries written; no existing entries touched.
+- Verification: none run this pass (no code change). `npm run test:integration -- test/integration/story-10-1.test.ts`, `npx tsc --noEmit`, and `npm test` not re-run here.
+- sprint-status.yaml: not touched.

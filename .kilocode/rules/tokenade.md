@@ -8,8 +8,13 @@ Use these only when you don't yet know where code lives — if you know the path
 `tokenade map` (repo structure; `map <path>` for one subtree) · `skeleton <file…>` (signatures) · `query <symbol…>` (locate a symbol) · `impact <file…>` (dependents) · `semantic "<query>"` (search by meaning). They take MANY targets per call (`tokenade skeleton a.rs b.rs c.rs`) — batch in ONE turn.
 
 ## Reading documents & media
-tokenade extends your `Read` tool: reading .pdf .docx .doc .xlsx .xls .xlsb .pptx .ppt .odt .ods .odp .odg .epub .rtf .fb2 .msg (and their flat-XML, macro-enabled and template variants) returns extracted text instead of failing on the binary; .mp4 .mkv .mov .webm .avi .mp3 .wav .m4a .flac .ogg .opus (and other common containers) returns what the file is plus a transcript when one is available; and .png .jpg .jpeg .gif .webp .bmp .tif .tiff .ico .tga .pnm .pbm .pgm .ppm .qoi .hdr are decoded for you — any image format you cannot display yourself is converted to PNG automatically. Just Read the path as usual.
-For a big document, asking beats reading it whole — `tokenade read <file> --prompt "q1, q2"` returns only the passages that answer, and putting several questions in ONE comma-separated call is the CHEAPEST option in tokens spent: each is answered under its own heading in ONE round-trip, instead of re-sending the context once per question.
+tokenade can read .pdf .docx .doc .xlsx .xls .xlsb .pptx .ppt .odt .ods .odp .odg .epub .rtf .fb2 .msg (and their flat-XML, macro-enabled and template variants) (extracted text), .mp4 .mkv .mov .webm .avi .mp3 .wav .m4a .flac .ogg .opus (and other common containers) (what the file is, plus a transcript when available) and .png .jpg .jpeg .gif .webp .bmp .tif .tiff .ico .tga .pnm .pbm .pgm .ppm .qoi .hdr (the text they show, when a local tesseract is installed) — your own file reader cannot. Use:
+`tokenade read <file>` — the document as text
+`tokenade read <file> --prompt "q1, q2"` — only the passages answering your questions; several questions in ONE comma-separated call is the CHEAPEST option in tokens spent, answering each under its own heading in ONE round-trip instead of re-sending the context once per question.
+
+## Searching the web
+`tokenade search "<query>"` — one query, fanned out across several independent search engines, merged, deduped and ranked by cross-engine agreement. Returns title/url/snippet only, so it costs a fraction of reading a results page. Add `--json` for machine-readable output.
+Follow a result with `tokenade web <url>` to read the page itself.
 
 ## Fetching or searching several things
 Do them in ONE call — `tokenade web <url1> <url2> …` / `tokenade search "<q1>" "<q2>" …` — they run concurrently, so you pay ONE round-trip instead of N and never re-send the context each extra turn would have re-sent.
