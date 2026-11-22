@@ -2214,6 +2214,7 @@ origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10
 location: n/a
 reason: Found during Story 2.10 dev (2026-10-02): item group notifications are delivered as in-app rows to every Table 2 holder, but in the pilot roles pack only `cmf_supervisor@ancorlabs.org` holds `notification` read, so `ceo1@`, `accounts@`, `anupam@` and `invctl1@` cannot open the inbox (`GET /api/v1/notifications` answers 403 `MODULE_ACCESS_DENIED`). Runbook row 2.10i checks their rows by SQL. Follow-up: an owner ruling on whether those hats (or the `employee` base hat) gain `notification` read, then a roles-pack change.
 status: open
+decision: 2026-11-22 Keep open
 
 
 ### DW-206: Found during Story 2.10 dev (2026-10-02): `test/integration/story-2-3.test.ts` AC1 (FEFO) and AC4 (lot trace) fail on the baseline `fd6c5c8` as well. AC1 hardcodes lot expiry `2026-09-30`, so from 2026-10-01 `LOT-2026-001` is expired and FEFO picks `LOT-2026-002`; AC4 depends on the same lots. Follow-up: derive the expiry dates from today (for example today plus 30 and plus 90 days) instead of fixed dates.`n`n## Deferred from: code review of story-2-10 (2026-10-05)
