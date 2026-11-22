@@ -2617,7 +2617,9 @@ decision: 2026-11-22 Keep open for later
 origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
 location: n/a
 reason: SLA column and SLA pills (mock key-approvals.html L548-551, L598-603): SLA hours are mock values (EXPERIENCE.md:171); no SLA is stored, so the column is omitted.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 ### DW-265: Offline read of the inbox: the lists and detail are fetched live and held in memory only; a cold start offline shows the needs-connection card. Needs a PowerSync bucket for approver rows.
 origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
