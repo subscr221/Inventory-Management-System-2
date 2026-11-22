@@ -667,6 +667,7 @@ origin: migrated from legacy ledger ("Deferred from: development of story-9-9 (2
 location: test/integration/story-9-9.test.ts
 reason: 9.9-1 A revaluation proposal that is refused `CREDIT_NOTE_SUPERSEDED` at approve time (AC 5, a below-band revaluation landed between propose and approve) is stale forever, and it still holds the holding's ONE pending slot from `uq_job_work_offcut_acq_proposal_pending`. No further proposal can be raised on that offcut, because Story 9.8 reserved the `superseded` status for a withdrawal path that nothing writes. Story 9.9 deliberately did not invent one: withdrawing a pending signature request is its own authority question (who may withdraw, and is the withdrawal itself a governed decision), and answering it inside a story about forgery would have been a design decision taken by a developer. The refusal message is worded not to promise a re-proposal that would be refused `DUPLICATE_EVENT`, and `test/integration/story-9-9.test.ts` asserts the gap so it cannot change silently.
 status: open
+decision: 2026-11-22 Keep open pending authority ruling
 
 ### DW-10: 9.9-2 The edge connector's `PERMANENT_ERROR_CODES` twin
 origin: migrated from legacy ledger ("Deferred from: development of story-9-9 (2026-09-09)"), 2026-11-22
