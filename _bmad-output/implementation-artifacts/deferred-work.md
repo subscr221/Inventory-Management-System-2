@@ -1567,6 +1567,7 @@ origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay rac
 location: src/warehouse/replenishment-job.ts
 reason: Replenishment generation still raises a task with `from_location_id` NULL when no reserve bin has enough drainable stock (`src/warehouse/replenishment-job.ts`), the same not-ready task an empty reserve has always produced (`REPLENISHMENT_TASK_NOT_READY` on confirm). Held-only or QC-gated reserve stock now lands here instead of naming a bin that can never be drained. Needs an owner ruling on whether such a check should raise no task at all.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-113: The replay-race mapping in `persistEvent` (`src/events/store.ts`) covers only transactions `persistEvent` owns. A caller-owned transaction (receiving, gate, and now the REST pack request) cannot query after the 23505 aborts it, so a projection-key race there still surfaces the projection constraint's own shape. A loser refused by a business `AppError` raised in a projection, rather than by a 23505, also keeps that error's shape instead of `DUPLICATE_EVENT`.
 origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
