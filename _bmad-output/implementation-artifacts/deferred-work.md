@@ -1917,6 +1917,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-un
 location: n/a
 reason: Notification inbox reach: `qc_inspector`, `qc_head`, `store_assistant`, `finance_controller` and `ceo` hold no `notification` module grant in the pilot pack, so the damage notifications reach them through the dispatcher and web push but not through `GET /api/v1/notifications` (the Story 3.12 finding, which added the grant for `unload1@` only). The Damage cases workbench is their inbox for now.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-163: DOA authority is the single oldest active holder of the governing role (`findRoleHolder`, platform-wide Phase-1 simplification): a second QC head or finance controller cannot turn a damage key unless the first is on vacation delegation.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
