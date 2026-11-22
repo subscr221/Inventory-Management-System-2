@@ -1087,7 +1087,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-13-3 (2026-09-12)"), 2026-11-22
 location: n/a
 reason: The 20,000-row opening-stock promotion perf figure (item #800, Story 13.1 Task 7.2) is still owed; Story 13.3 measured 10,000 rows locally (import 62.7 s) and no staging figure exists. Pre-existing 13.1 item carried forward unchanged.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: 10,000-row local measurement accepted for the one-week pilot; 20k figure not required
+decision: 2026-11-22 Close, 10k figure accepted for pilot — 10,000-row local measurement accepted for the one-week pilot; 20k figure not required
 
 ### DW-53: Story 13.3 test suite does not exercise a `pending_approval` or `stale` variance status blocking the go-live gate [test/integration/story-13-3.test.ts]. Needs a `doa_registry_entries` fixture and a resolvable approver (the 13.1 explanation route freezes one at post time). The gate filters on `status !== 'explained'`, which the 13.1 suite pins per status, so the gap is coverage, not behaviour.
 origin: migrated from legacy ledger ("Deferred from: code review of story-13-3 (2026-09-12)"), 2026-11-22
