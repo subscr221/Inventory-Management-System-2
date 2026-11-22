@@ -296,6 +296,15 @@
     "label": "Keep open until correct-course",
     "resolution": ""
   },
+  "DW-205": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "3",
+    "label": "Keep open",
+    "resolution": ""
+  },
   "DW-29": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
