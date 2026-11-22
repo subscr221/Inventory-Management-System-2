@@ -1920,6 +1920,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-un
 location: n/a
 reason: Location codes are globally unique (`uq_location_register_code`), so the literal `ZONE-QC-HOLD` serves one site per database - the same limit receiving has had since Story 3.4. A second pilot site needs a per-site QC hold lookup in both places.
 status: open
+decision: 2026-11-22 Keep open, revisit post-pilot
 
 ### DW-162: Notification inbox reach: `qc_inspector`, `qc_head`, `store_assistant`, `finance_controller` and `ceo` hold no `notification` module grant in the pilot pack, so the damage notifications reach them through the dispatcher and web push but not through `GET /api/v1/notifications` (the Story 3.12 finding, which added the grant for `unload1@` only). The Damage cases workbench is their inbox for now.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
