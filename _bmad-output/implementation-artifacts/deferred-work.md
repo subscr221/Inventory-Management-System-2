@@ -2611,6 +2611,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox
 location: n/a
 reason: One inbox for every approval type (EXPERIENCE.md:169, owner question Q26): `/approvals` lists requisitions only. A follow-up folds damage-case concurrence and standing-grant decisions into it with an approval-type filter.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-264: SLA column and SLA pills (mock key-approvals.html L548-551, L598-603): SLA hours are mock values (EXPERIENCE.md:171); no SLA is stored, so the column is omitted.
 origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
