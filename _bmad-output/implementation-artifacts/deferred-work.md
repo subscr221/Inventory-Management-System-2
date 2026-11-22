@@ -1813,6 +1813,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-r
 location: n/a
 reason: No users lookup for display names on the edge: My requests says "Routed for approval" instead of naming the approver.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-148: Bootstrap `navigation` is not cached offline: an offline start shows the two-entry placeholder menu, so the base entries appear only once the device reaches the API. Deep links still work; the no-access card is shown only after a live bootstrap (`navigationConfirmed`).
 origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
