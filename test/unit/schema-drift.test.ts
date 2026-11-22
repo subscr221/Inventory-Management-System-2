@@ -2335,13 +2335,84 @@ const EXPECTED = [
     indexes: ['uq_damage_report_action_source_event', 'idx_damage_report_action_report'],
     appUserGrant: 'INSERT, SELECT',
   },
-  {
-    canonical: 'read/projections/attachment.sql',
-    table: 'attachment',
-    constraints: [] as string[],
-    indexes: ['idx_attachment_uploaded_by'],
+{
+  canonical: 'read/projections/attachment.sql',
+  table: 'attachment',
+  constraints: [] as string[],
+  indexes: ['idx_attachment_uploaded_by'],
+  appUserGrant: 'INSERT, SELECT',
+},
+// Story 10.2: R&D requisition header and lines, the six-criterion capitalization checklist,
+// the append-only issue costing record, and the equipment custody register.
+{
+  canonical: 'read/projections/rd_requisition.sql',
+  table: 'rd_requisition',
+  constraints: ['chk_rd_requisition_status', 'chk_rd_requisition_value'],
+  indexes: ['uq_rd_requisition_source_event', 'idx_rd_requisition_project'],
+  appUserGrant: 'INSERT, SELECT, UPDATE',
+},
+{
+  canonical: 'read/projections/rd_requisition_line.sql',
+  table: 'rd_requisition_line',
+  constraints: [
+    'chk_rd_requisition_line_qty',
+    'chk_rd_requisition_line_issued',
+    'chk_rd_requisition_line_value',
+    'chk_rd_requisition_line_value_fits',
+    'chk_rd_requisition_line_issue_type',
+  ],
+    indexes: ['idx_rd_requisition_line_requisition', 'uq_rd_requisition_line_source_event'],
+    // Story 10.2 review: widened to (source_event_id, requisition_line_id) so one raise event
+    // may post several lines. A name-only pin stays green if the single-column index returns.
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_requisition_line_source_event ON rd_requisition_line (source_event_id, requisition_line_id)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+},
+{
+  canonical: 'read/projections/rd_project_checklist.sql',
+  table: 'rd_project_checklist',
+  constraints: ['chk_rd_project_checklist_criterion'],
+  indexes: ['uq_rd_project_checklist_grain'],
+  appUserGrant: 'INSERT, SELECT, UPDATE',
+},
+{
+  canonical: 'read/projections/rd_issue_cost.sql',
+  table: 'rd_issue_cost',
+  constraints: [
+    'chk_rd_issue_cost_capitalization',
+    'chk_rd_issue_cost_issue_type',
+    'chk_rd_issue_cost_phase',
+    'chk_rd_issue_cost_amount',
+  ],
+    indexes: [
+      'idx_rd_issue_cost_project',
+      'uq_rd_issue_cost_source_event',
+      'uq_rd_issue_cost_issue_line',
+    ],
+    // Story 10.2 review: widened to (source_event_id, issue_cost_id) so one issue event may
+    // post several costing rows.
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_issue_cost_source_event ON rd_issue_cost (source_event_id, issue_cost_id)',
+    ],
     appUserGrant: 'INSERT, SELECT',
-  },
+},
+{
+  canonical: 'read/projections/rd_equipment_custody.sql',
+  table: 'rd_equipment_custody',
+  constraints: ['chk_rd_equipment_custody_status', 'chk_rd_equipment_custody_qty'],
+    indexes: [
+      'idx_rd_equipment_custody_custodian',
+      'uq_rd_equipment_custody_source_event',
+      'uq_rd_equipment_custody_issue_line',
+    ],
+    // Story 10.2 review: widened to (source_event_id, custody_id) so one issue event may post
+    // several custody rows.
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_equipment_custody_source_event ON rd_equipment_custody (source_event_id, custody_id)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+},
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -2613,11 +2684,27 @@ describe('Story 2.1 schema drift guard', () => {
       'custody_ledger_entry.sql guard must test the column list',
     );
     assert.ok(initDb.includes(guard), 'init-db.sql guard must test the column list');
-    assert.ok(
-      !custodySql.includes("indexdef NOT LIKE '%NULLS NOT DISTINCT%'"),
-      'the null-handling clause is not a column-list discriminator',
-    );
-  });
+  assert.ok(
+    !custodySql.includes("indexdef NOT LIKE '%NULLS NOT DISTINCT%'"),
+    'the null-handling clause is not a column-list discriminator',
+  );
+});
+
+// Story 10.2 review: the R&D source-event indexes were widened from a single (source_event_id)
+// column to (source_event_id, <pk>) so one raise/issue event may write several rows. Keyed on the
+// column list, the guarded DROP discriminates like custody_ledger_entry: a single-column index
+// carrying the same name would otherwise never be dropped and every multi-row post would fail 23505.
+it('Story 10.2 R&D source-event index guards discriminate on the widened column list', () => {
+  for (const [path, guard] of [
+    ['read/projections/rd_requisition_line.sql', "indexdef NOT LIKE '%(source_event_id, requisition_line_id)%'"],
+    ['read/projections/rd_issue_cost.sql', "indexdef NOT LIKE '%(source_event_id, issue_cost_id)%'"],
+    ['read/projections/rd_equipment_custody.sql', "indexdef NOT LIKE '%(source_event_id, custody_id)%'"],
+  ] as const) {
+    const sql = read(path);
+    assert.ok(sql.includes(guard), `${path} guard must test the widened column list`);
+    assert.ok(initDb.includes(guard), `init-db.sql guard must test the widened column list for ${path}`);
+  }
+});
 
   it('Story 4.6 mirrors every MSME additive column into init-db.sql and registers msme_ageing_feed in MIGRATIONS', () => {
     const supplierSql = read('read/projections/supplier.sql');
@@ -3789,5 +3876,49 @@ describe('Story 1.13 event-type registry', () => {
         requiresBusinessStream: false,
       });
     }
+  });
+});
+
+// Story 10.2 (FR-RD-04/06): the R&D requisition and issue events live on the new central-only
+// 'research' stream; only the raise carries a business stream.
+describe('Story 10.2 event-type registry', () => {
+  it('registers the requisition and issue events on the research stream', () => {
+    assert.deepStrictEqual(SUPPORTED_EVENT_TYPES['rd_requisition.raised'], {
+      streamType: 'research',
+      requiresBusinessStream: true,
+    });
+    for (const type of [
+      'rd_requisition.approved',
+      'rd_requisition.rejected',
+      'rd_requisition.issued',
+    ] as const) {
+      assert.deepStrictEqual(SUPPORTED_EVENT_TYPES[type], {
+        streamType: 'research',
+        requiresBusinessStream: false,
+      });
+    }
+  });
+
+  it('mirrors the Story 10.2 projections into migrate.ts and init-db.sql', () => {
+    const initDb = read('deploy/compose/init-db.sql');
+    const migrate = read('src/events/migrate.ts');
+    for (const file of [
+      'rd_requisition.sql',
+      'rd_requisition_line.sql',
+      'rd_project_checklist.sql',
+      'rd_issue_cost.sql',
+      'rd_equipment_custody.sql',
+    ]) {
+      assert.ok(migrate.includes(file), `migrate.ts missing ${file}`);
+      const table = file.replace('.sql', '');
+      assert.ok(
+        initDb.includes(`CREATE TABLE IF NOT EXISTS ${table}`),
+        `init-db.sql missing CREATE TABLE for ${table}`,
+      );
+    }
+    assert.ok(
+      initDb.includes('ALTER TABLE rd_project ADD COLUMN IF NOT EXISTS capitalization_effective_date TIMESTAMPTZ;'),
+      'init-db.sql missing the capitalization_effective_date ALTER',
+    );
   });
 });

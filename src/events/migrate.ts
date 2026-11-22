@@ -347,9 +347,19 @@ const MIGRATIONS = [
   // tail; putaway_task.sql is NOT edited.
   '../../read/projections/putaway_task_qc_release.sql',
   '../../read/projections/qc_observation_note.sql',
-  // Story 3.19: unloading exception state (receiving_exception) and the grn_line resolver columns
-  // (forward-only ADD COLUMN; grn_line.sql is NOT edited). Appended at the tail.
-  '../../read/projections/receiving_exception.sql',
+// Story 3.19: unloading exception state (receiving_exception) and the grn_line resolver columns
+// (forward-only ADD COLUMN; grn_line.sql is NOT edited). Appended at the tail.
+'../../read/projections/receiving_exception.sql',
+// Story 10.2: R&D requisition, budget check and issue types (FR-RD-04/05/06). The requisition
+// header and lines, the six-criterion capitalization checklist (plus the forward-only
+// capitalization_effective_date ALTER on rd_project), the append-only issue costing record, and
+// the equipment custody register. Appended at the tail; rd_project.sql and rd_reclassification.sql
+// keep their positions above and no earlier file is edited.
+'../../read/projections/rd_requisition.sql',
+'../../read/projections/rd_requisition_line.sql',
+'../../read/projections/rd_project_checklist.sql',
+'../../read/projections/rd_issue_cost.sql',
+'../../read/projections/rd_equipment_custody.sql',
 ];
 
 async function migrate(): Promise<void> {

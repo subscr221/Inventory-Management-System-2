@@ -261,7 +261,16 @@ import {
   createRdProjectHandler,
   listRdProjectsHandler,
   getRdProjectHandler,
+  setRdProjectChecklistHandler,
 } from './api/v1/rd-projects.js';
+import {
+  raiseRdRequisitionHandler,
+  listRdRequisitionsHandler,
+  getRdRequisitionHandler,
+  approveRdRequisitionHandler,
+  rejectRdRequisitionHandler,
+} from './api/v1/rd-requisitions.js';
+import { issueRdRequisitionHandler } from './api/v1/rd-issues.js';
 import {
   defineAlternateHandler,
   listBomAlternatesHandler,
@@ -969,9 +978,17 @@ export function createAppRouter(): Router {
   router.post('/api/v1/boms/:bomId/productization-signoffs', signProductizationHandler);
   router.get('/api/v1/boms/:bomId/productization-gate', getProductizationGateHandler);
   router.post('/api/v1/boms/:bomId/productize', productizeHandler);
-  router.post('/api/v1/rd-projects', createRdProjectHandler);
-  router.get('/api/v1/rd-projects', listRdProjectsHandler);
-  router.get('/api/v1/rd-projects/:projectCode', getRdProjectHandler);
+router.post('/api/v1/rd-projects', createRdProjectHandler);
+router.get('/api/v1/rd-projects', listRdProjectsHandler);
+router.get('/api/v1/rd-projects/:projectCode', getRdProjectHandler);
+// Story 10.2: R&D requisition lifecycle and the development-capitalization checklist.
+router.post('/api/v1/rd-projects/:projectCode/checklist', setRdProjectChecklistHandler);
+router.post('/api/v1/rd-requisitions', raiseRdRequisitionHandler);
+router.get('/api/v1/rd-requisitions', listRdRequisitionsHandler);
+router.get('/api/v1/rd-requisitions/:requisitionId', getRdRequisitionHandler);
+router.post('/api/v1/rd-requisitions/:requisitionId/approve', approveRdRequisitionHandler);
+router.post('/api/v1/rd-requisitions/:requisitionId/reject', rejectRdRequisitionHandler);
+router.post('/api/v1/rd-requisitions/:requisitionId/issue', issueRdRequisitionHandler);
 
   // Story 5.5: Approved Alternates and BOM Explosion. Every second segment is a literal distinct
   // from the :bomId-only routes above, so there is no route-order trap here.

@@ -3174,5 +3174,8 @@ status: open
   summary: R&D demand is defined as business_stream research or maker_hub with no validation of unknown stream values; owner_user_id not checked against users; project_code and location_type value sets are duplicated between SQL CHECK and TypeScript.
   evidence: review pass 2026-11-22 medium findings; rd-guards.ts hardcoded sets.
 - source_spec: `spec-10-1-randd-and-maker-hub-location-types-and-project-master.md`
-  summary: CROSS_ISSUE_BLOCKED and PROJECT_CODE_REQUIRED placed in ERP_ERROR_CODES enum and treated as permanent edge errors, so a queued issue blocked by a later-fixable condition is dropped with no resubmit path.
-  evidence: review pass 2026-11-22; src/adapters/erp/sync.ts and src/sync/upload.ts placement.
+summary: CROSS_ISSUE_BLOCKED and PROJECT_CODE_REQUIRED placed in ERP_ERROR_CODES enum and treated as permanent edge errors, so a queued issue blocked by a later-fixable condition is dropped with no resubmit path.
+evidence: review pass 2026-11-22; src/adapters/erp/sync.ts and src/sync/upload.ts placement.
+- source_spec: `spec-10-2-randd-requisition-budget-check-and-issue-types.md`
+summary: CAPITALIZATION_CRITERIA_NOT_MET is registered in both PERMANENT_ERROR_CODES sets but is only surfaced as a `capitalization_blocked_reason` field on a 201 issue response, never thrown as an `error_code`, so the edge permanent-retry classification is dead code.
+evidence: review pass 2 2026-11-22 (Blind Hunter) low finding; the incomplete-checklist issue succeeds with the cost expensed rather than failing, so the code never reaches the sync retry path.

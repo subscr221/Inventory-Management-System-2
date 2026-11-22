@@ -2088,6 +2088,82 @@ export interface RdProductizedEnvelope extends Omit<EventEnvelope, 'payload'> {
 }
 
 // ---------------------------------------------------------------------------
+// Story 10.2: R&D requisition, budget check and issue types (FR-RD-04, FR-RD-05, FR-RD-06).
+//
+// The requisition and issue events ride a NEW 'research' stream. Quantities, unit costs and the
+// line value are exact decimal strings - every arithmetic step happens in PostgreSQL NUMERIC
+// inside the seams, never in JS floats. issue_type is captured at raise time on the line; the
+// issue seam reads it back and never trusts a client-supplied capitalization claim.
+// ---------------------------------------------------------------------------
+
+/** One requisition line carried on rd_requisition.raised. Quantities and costs are decimal strings. */
+export interface RdRequisitionRaisedLine {
+  line_id: string;
+  sku: string;
+  requested_qty: string;
+  uom: string;
+  unit_cost_estimate: string;
+  issue_type: 'consumable' | 'project_material' | 'equipment_custody';
+}
+
+/** Raises an R&D requisition against an active project. stream_id is requisition_id. */
+export interface RdRequisitionRaisedPayload {
+  requisition_id: string;
+  project_code: string;
+  requester_user_id: string;
+  business_stream: string;
+  lines: RdRequisitionRaisedLine[];
+  correlation_id?: string;
+}
+
+export interface RdRequisitionRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_requisition.raised';
+  payload: RdRequisitionRaisedPayload;
+}
+
+/** Approves or rejects one leg of a breach-flagged requisition. stream_id is requisition_id. */
+export interface RdRequisitionDecidedPayload {
+  requisition_id: string;
+  rejection_reason?: string | null;
+  correlation_id?: string;
+}
+
+export interface RdRequisitionApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_requisition.approved';
+  payload: RdRequisitionDecidedPayload;
+}
+
+export interface RdRequisitionRejectedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_requisition.rejected';
+  payload: RdRequisitionDecidedPayload;
+}
+
+/** One line carried on rd_requisition.issued. issue_type is read from the requisition line. */
+export interface RdRequisitionIssueLine {
+  requisition_line_id: string;
+  quantity: string;
+  location_id: string;
+  lot_id?: string | null;
+  custodian_user_id?: string | null;
+  expected_return_date?: string | null;
+  condition_codes?: string[] | null;
+  asset_id?: string | null;
+}
+
+/** Issues one or more lines against an approved requisition. stream_id is requisition_id. */
+export interface RdRequisitionIssuedPayload {
+  requisition_id: string;
+  issue_id: string;
+  lines: RdRequisitionIssueLine[];
+  correlation_id?: string;
+}
+
+export interface RdRequisitionIssuedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_requisition.issued';
+  payload: RdRequisitionIssuedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Story 5.5: approved alternates and BOM explosion (FR-B-12, FR-B-07).
 //
 // The epics' PascalCase names (AlternateDefined, SubstitutionApproved, BomExploded) map to the
@@ -6441,6 +6517,25 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'bom.sync_conflict_raised': {
     streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  // Story 10.2: R&D requisition and issue events on a NEW 'research' stream. rd_requisition.raised
+  // creates a new tagged document header (requiresBusinessStream: true); approved, rejected and
+  // issued are transitions on that already-tagged requisition (requiresBusinessStream: false).
+  'rd_requisition.raised': {
+    streamType: 'research',
+    requiresBusinessStream: true,
+  },
+  'rd_requisition.approved': {
+    streamType: 'research',
+    requiresBusinessStream: false,
+  },
+  'rd_requisition.rejected': {
+    streamType: 'research',
+    requiresBusinessStream: false,
+  },
+  'rd_requisition.issued': {
+    streamType: 'research',
     requiresBusinessStream: false,
   },
   // Story 7.1: asset register on a NEW 'maintenance' stream (AD-9). An asset is master data, not

@@ -457,6 +457,18 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/boms/:bomId/productization-signoffs',
       'GET /api/v1/boms/:bomId/productization-gate',
       'POST /api/v1/boms/:bomId/productize',
+      // Story 10.1: R&D project master.
+      'POST /api/v1/rd-projects',
+      'GET /api/v1/rd-projects',
+      'GET /api/v1/rd-projects/:projectCode',
+      // Story 10.2: R&D requisition lifecycle and the development-capitalization checklist.
+      'POST /api/v1/rd-projects/:projectCode/checklist',
+      'POST /api/v1/rd-requisitions',
+      'GET /api/v1/rd-requisitions',
+      'GET /api/v1/rd-requisitions/:requisitionId',
+      'POST /api/v1/rd-requisitions/:requisitionId/approve',
+      'POST /api/v1/rd-requisitions/:requisitionId/reject',
+      'POST /api/v1/rd-requisitions/:requisitionId/issue',
       // Story 5.5: Approved Alternates and BOM Explosion
       'POST /api/v1/boms/:bomId/alternates',
       'GET /api/v1/boms/:bomId/alternates',

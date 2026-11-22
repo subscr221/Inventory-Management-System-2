@@ -1,8 +1,15 @@
 import type { RouteHandler } from '../../middleware/error.js';
-import { sendJson, sendRequestError } from '../../middleware/error.js';
+import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import { getParsedBody, getAuthContext } from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { getPool } from '../../config/db.js';
+import {
+  RD_CHECKLIST_CRITERIA,
+  getRdProjectChecklist,
+  upsertRdProjectChecklistCriterion,
+  setRdProjectCapitalizationEffectiveDate,
+  getRdProjectCapitalizationDates,
+} from '../../read/projections/rd_project_checklist.js';
 
 /**
  * Story 10.1 (FR-RD-03): R&D project master. shortcut: written straight to the rd_project
@@ -79,3 +86,82 @@ export const listRdProjectsHandler = requireRole({ module: 'engineering', functi
 export const getRdProjectHandler = requireRole({ module: 'engineering', functionScope: 'read' })(
   getBase,
 );
+
+/**
+ * Story 10.2 (FR-AC-03/06): sets the six Ind AS 38 development-capitalization criteria. The
+ * effective date is derived server-side and set forward-only once all six are met; any attempt to
+ * supply a capitalization_effective_date is refused with RETROACTIVE_REINSTATEMENT_BLOCKED.
+ */
+const setChecklistBase: RouteHandler = async (req, res, params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const code = (params?.['projectCode'] ?? '').trim().toUpperCase();
+  const bad = (m: string) => sendRequestError(req, res, 400, 'INVALID_PARAMS', m);
+
+  if (body['capitalization_effective_date'] !== undefined && body['capitalization_effective_date'] !== null) {
+    sendRequestError(req, res, 409, 'RETROACTIVE_REINSTATEMENT_BLOCKED', 'capitalization_effective_date is derived server-side and cannot be supplied', {
+      project_code: code,
+    });
+    return;
+  }
+
+  const rawCriteria = body['criteria'];
+  if (!rawCriteria || typeof rawCriteria !== 'object' || Array.isArray(rawCriteria)) {
+    return bad('criteria must be an object mapping criterion codes to booleans');
+  }
+  const entries = Object.entries(rawCriteria as Record<string, unknown>);
+  if (entries.length === 0) return bad('criteria must contain at least one criterion');
+  for (const [criterion, met] of entries) {
+    if (!(RD_CHECKLIST_CRITERIA as readonly string[]).includes(criterion)) {
+      return bad(`unknown criterion code: ${criterion}`);
+    }
+    if (typeof met !== 'boolean') return bad(`criterion ${criterion} must be a boolean`);
+  }
+
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const project = await client.query(
+      `SELECT status FROM rd_project WHERE project_code = $1 FOR UPDATE`,
+      [code],
+    );
+    if (project.rows.length === 0) {
+      await client.query('ROLLBACK');
+      sendRequestError(req, res, 404, 'PROJECT_NOT_FOUND', 'Project not found');
+      return;
+    }
+    if (project.rows[0]!['status'] !== 'active') {
+      await client.query('ROLLBACK');
+      sendRequestError(req, res, 409, 'PROJECT_CODE_REQUIRED', 'Only an active project can hold a checklist');
+      return;
+    }
+    for (const [criterion, met] of entries) {
+      await upsertRdProjectChecklistCriterion(code, criterion as (typeof RD_CHECKLIST_CRITERIA)[number], met as boolean, client);
+    }
+    const checklist = await getRdProjectChecklist(code, client);
+    if (checklist.length === 6 && checklist.every((c) => c.met)) {
+      await setRdProjectCapitalizationEffectiveDate(code, client);
+    }
+    const dates = await getRdProjectCapitalizationDates(code, client);
+    await client.query('COMMIT');
+    sendJson(res, 200, {
+      project_code: code,
+      criteria: checklist,
+      capitalization_effective_date: dates.capitalization_effective_date,
+      capitalization_effective_date_ist: dates.capitalization_effective_date_ist,
+    });
+  } catch (err: unknown) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    if (err instanceof AppError) {
+      sendRequestError(req, res, err.statusCode, err.errorCode, err.message, err.details);
+      return;
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+export const setRdProjectChecklistHandler = requireRole({
+  module: 'engineering',
+  functionScope: 'write',
+})(setChecklistBase);

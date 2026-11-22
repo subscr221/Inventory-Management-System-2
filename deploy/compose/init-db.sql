@@ -15706,3 +15706,441 @@ BEGIN
     GRANT SELECT ON receiving_exception TO readonly_user;
   END IF;
 END $$;
+
+-- MUST stay identical to read/projections/rd_project.sql (canonical source).
+
+-- R&D project master (Story 10.1, FR-RD-03). Canonical definition, applied by
+-- src/events/migrate.ts and the integration-test harness. Idempotent; carries its own grants.
+-- A project code is required (and must be active) on every R&D material issue.
+
+CREATE TABLE IF NOT EXISTS rd_project (
+  project_code   TEXT PRIMARY KEY,
+  owner_user_id  UUID NOT NULL,
+  phase          TEXT NOT NULL,
+  budget_amount  NUMERIC(18,2) NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'active',
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_project_phase CHECK (phase IN ('research', 'development')),
+  CONSTRAINT chk_rd_project_budget CHECK (budget_amount >= 0),
+  CONSTRAINT chk_rd_project_status CHECK (status IN ('active', 'on_hold', 'closed'))
+);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON rd_project TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_project TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/rd_reclassification.sql (canonical source).
+
+-- R&D lot reclassification requests (Story 10.1, FR-RD-02). An approved row whose approver differs
+-- from the requester releases an R&D-designated lot to non-R&D demand. Idempotent; own grants.
+
+CREATE TABLE IF NOT EXISTS rd_reclassification (
+  reclassification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lot_id              UUID NOT NULL,
+  from_demand         TEXT NOT NULL DEFAULT 'rd',
+  to_demand           TEXT NOT NULL DEFAULT 'non_rd',
+  requested_by        UUID NOT NULL,
+  approved_by         UUID,
+  status              TEXT NOT NULL DEFAULT 'pending',
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_reclassification_status CHECK (status IN ('pending', 'approved', 'rejected')),
+  CONSTRAINT chk_rd_reclassification_approver CHECK (
+    status <> 'approved' OR (approved_by IS NOT NULL AND approved_by <> requested_by)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_rd_reclassification_lot ON rd_reclassification (lot_id, status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_rd_reclassification_lot'
+      AND conrelid = 'rd_reclassification'::regclass
+  ) THEN
+    ALTER TABLE rd_reclassification
+      ADD CONSTRAINT fk_rd_reclassification_lot FOREIGN KEY (lot_id) REFERENCES lot_master (lot_id);
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON rd_reclassification TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_reclassification TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/rd_requisition.sql (canonical source).
+
+-- Story 10.2 (FR-RD-04): R&D requisition header. The budget check and the owner/head dual
+-- approval live in the rd_requisition.raised/approved/rejected seams; this projection is the
+-- durable read model those seams write. source_event_id is the replay grain.
+
+CREATE TABLE IF NOT EXISTS rd_requisition (
+  requisition_id     UUID PRIMARY KEY,
+  project_code       TEXT NOT NULL,
+  requester_user_id  UUID NOT NULL,
+  business_stream    TEXT NOT NULL,
+  estimated_value    NUMERIC(18,4) NOT NULL,
+  status             TEXT NOT NULL DEFAULT 'approved',
+  budget_breach      BOOLEAN NOT NULL DEFAULT false,
+  approver_actor_id  UUID,
+  doa_entry_id       UUID,
+  owner_approver_id  UUID,
+  owner_approved_at  TIMESTAMPTZ,
+  head_approved_at   TIMESTAMPTZ,
+  decided_at         TIMESTAMPTZ,
+  decided_by         UUID,
+  rejection_reason   TEXT,
+  source_event_id    UUID NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_requisition_status CHECK (status IN ('approved', 'approval_required', 'rejected')),
+  CONSTRAINT chk_rd_requisition_value CHECK (estimated_value >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_requisition_source_event ON rd_requisition (source_event_id);
+CREATE INDEX IF NOT EXISTS idx_rd_requisition_project ON rd_requisition (project_code, status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_requisition_status'
+      AND conrelid = 'rd_requisition'::regclass
+  ) THEN
+    ALTER TABLE rd_requisition
+      ADD CONSTRAINT chk_rd_requisition_status CHECK (status IN ('approved', 'approval_required', 'rejected'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_requisition_value'
+      AND conrelid = 'rd_requisition'::regclass
+  ) THEN
+    ALTER TABLE rd_requisition
+      ADD CONSTRAINT chk_rd_requisition_value CHECK (estimated_value >= 0);
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_requisition TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_requisition TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/rd_requisition_line.sql (canonical source).
+
+-- Story 10.2 (FR-RD-04): R&D requisition lines. issued_quantity is the per-line issue lifecycle
+-- counter: the issue seam refuses any issue exceeding requested_qty - issued_quantity with
+-- RD_REQUISITION_LINE_EXCEEDED and increments it in the same transaction.
+
+CREATE TABLE IF NOT EXISTS rd_requisition_line (
+  requisition_line_id  UUID PRIMARY KEY,
+  requisition_id       UUID NOT NULL,
+  sku                  TEXT NOT NULL,
+  requested_qty        NUMERIC(18,3) NOT NULL,
+  issued_quantity      NUMERIC(18,3) NOT NULL DEFAULT 0,
+  uom                  TEXT NOT NULL,
+  unit_cost_estimate   NUMERIC(18,4) NOT NULL,
+  line_value           NUMERIC(18,4) NOT NULL,
+  issue_type           TEXT NOT NULL,
+  source_event_id      UUID NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_requisition_line_qty CHECK (requested_qty > 0),
+  CONSTRAINT chk_rd_requisition_line_issued CHECK (issued_quantity >= 0 AND issued_quantity <= requested_qty),
+  CONSTRAINT chk_rd_requisition_line_value CHECK (line_value >= 0),
+  CONSTRAINT chk_rd_requisition_line_value_fits CHECK (line_value < 100000000000000),
+  CONSTRAINT chk_rd_requisition_line_issue_type CHECK (issue_type IN ('consumable', 'project_material', 'equipment_custody'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_rd_requisition_line_requisition ON rd_requisition_line (requisition_id);
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename = 'rd_requisition_line'
+      AND indexname = 'uq_rd_requisition_line_source_event'
+      AND indexdef NOT LIKE '%(source_event_id, requisition_line_id)%'
+  ) THEN
+    DROP INDEX IF EXISTS uq_rd_requisition_line_source_event;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_requisition_line_source_event ON rd_requisition_line (source_event_id, requisition_line_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_requisition_line_qty'
+      AND conrelid = 'rd_requisition_line'::regclass
+  ) THEN
+    ALTER TABLE rd_requisition_line
+      ADD CONSTRAINT chk_rd_requisition_line_qty CHECK (requested_qty > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_requisition_line_issued'
+      AND conrelid = 'rd_requisition_line'::regclass
+  ) THEN
+    ALTER TABLE rd_requisition_line
+      ADD CONSTRAINT chk_rd_requisition_line_issued CHECK (issued_quantity >= 0 AND issued_quantity <= requested_qty);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_requisition_line_value'
+      AND conrelid = 'rd_requisition_line'::regclass
+  ) THEN
+    ALTER TABLE rd_requisition_line
+      ADD CONSTRAINT chk_rd_requisition_line_value CHECK (line_value >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_requisition_line_value_fits'
+      AND conrelid = 'rd_requisition_line'::regclass
+  ) THEN
+    ALTER TABLE rd_requisition_line
+      ADD CONSTRAINT chk_rd_requisition_line_value_fits CHECK (line_value < 100000000000000);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_requisition_line_issue_type'
+      AND conrelid = 'rd_requisition_line'::regclass
+  ) THEN
+    ALTER TABLE rd_requisition_line
+      ADD CONSTRAINT chk_rd_requisition_line_issue_type CHECK (issue_type IN ('consumable', 'project_material', 'equipment_custody'));
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_requisition_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_requisition_line TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/rd_project_checklist.sql (canonical source).
+
+-- Story 10.2 (FR-AC-03): the six Ind AS 38 (IAS 38.57) development-capitalization criteria, one
+-- row per (project, criterion). capitalization_effective_date on rd_project is set forward-only
+-- once all six are met; it never moves backwards.
+
+CREATE TABLE IF NOT EXISTS rd_project_checklist (
+  checklist_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_code    TEXT NOT NULL,
+  criterion_code  TEXT NOT NULL,
+  met             BOOLEAN NOT NULL DEFAULT false,
+  met_at          TIMESTAMPTZ,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_project_checklist_criterion CHECK (criterion_code IN (
+    'technical_feasibility',
+    'intention_to_complete',
+    'ability_to_use_or_sell',
+    'future_economic_benefits',
+    'resources_available',
+    'expenditure_measurable'
+  ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_project_checklist_grain ON rd_project_checklist (project_code, criterion_code);
+
+-- Forward-only: the effective date is set server-side when all six criteria first become met and
+-- is never back-dated. The checklist set route and the raise seam's budget lock both write/read
+-- rd_project, so app_user gains UPDATE on rd_project (the raise seam takes SELECT ... FOR UPDATE).
+ALTER TABLE rd_project ADD COLUMN IF NOT EXISTS capitalization_effective_date TIMESTAMPTZ;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT UPDATE ON rd_project TO app_user;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_project_checklist_criterion'
+      AND conrelid = 'rd_project_checklist'::regclass
+  ) THEN
+    ALTER TABLE rd_project_checklist
+      ADD CONSTRAINT chk_rd_project_checklist_criterion CHECK (criterion_code IN (
+        'technical_feasibility',
+        'intention_to_complete',
+        'ability_to_use_or_sell',
+        'future_economic_benefits',
+        'resources_available',
+        'expenditure_measurable'
+      ));
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_project_checklist TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_project_checklist TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/rd_issue_cost.sql (canonical source).
+
+-- Story 10.2 (FR-AC-02/03): the immutable R&D issue costing record. Append-only (app_user holds
+-- INSERT, SELECT): a cost row is written once per issued line and is never flipped between
+-- expensed and capitalized, which makes retroactive reinstatement structurally impossible.
+
+CREATE TABLE IF NOT EXISTS rd_issue_cost (
+  issue_cost_id                 UUID PRIMARY KEY,
+  issue_id                      UUID NOT NULL,
+  requisition_id                UUID NOT NULL,
+  requisition_line_id           UUID NOT NULL,
+  project_code                  TEXT NOT NULL,
+  issue_type                    TEXT NOT NULL,
+  phase                         TEXT NOT NULL,
+  capitalization                TEXT NOT NULL,
+  capitalization_blocked_reason TEXT,
+  checklist_reference           TEXT,
+  cost_amount                   NUMERIC(18,4) NOT NULL,
+  unit_cost                     NUMERIC(18,6),
+  business_date                 DATE NOT NULL,
+  source_event_id               UUID NOT NULL,
+  created_at                    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_issue_cost_capitalization CHECK (capitalization IN ('expensed', 'capitalized')),
+  CONSTRAINT chk_rd_issue_cost_issue_type CHECK (issue_type IN ('consumable', 'project_material')),
+  CONSTRAINT chk_rd_issue_cost_phase CHECK (phase IN ('research', 'development')),
+  CONSTRAINT chk_rd_issue_cost_amount CHECK (cost_amount >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rd_issue_cost_project ON rd_issue_cost (project_code);
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename = 'rd_issue_cost'
+      AND indexname = 'uq_rd_issue_cost_source_event'
+      AND indexdef NOT LIKE '%(source_event_id, issue_cost_id)%'
+  ) THEN
+    DROP INDEX IF EXISTS uq_rd_issue_cost_source_event;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_issue_cost_source_event ON rd_issue_cost (source_event_id, issue_cost_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_issue_cost_issue_line ON rd_issue_cost (issue_id, requisition_line_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_issue_cost_capitalization'
+      AND conrelid = 'rd_issue_cost'::regclass
+  ) THEN
+    ALTER TABLE rd_issue_cost
+      ADD CONSTRAINT chk_rd_issue_cost_capitalization CHECK (capitalization IN ('expensed', 'capitalized'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_issue_cost_issue_type'
+      AND conrelid = 'rd_issue_cost'::regclass
+  ) THEN
+    ALTER TABLE rd_issue_cost
+      ADD CONSTRAINT chk_rd_issue_cost_issue_type CHECK (issue_type IN ('consumable', 'project_material'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_issue_cost_phase'
+      AND conrelid = 'rd_issue_cost'::regclass
+  ) THEN
+    ALTER TABLE rd_issue_cost
+      ADD CONSTRAINT chk_rd_issue_cost_phase CHECK (phase IN ('research', 'development'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_issue_cost_amount'
+      AND conrelid = 'rd_issue_cost'::regclass
+  ) THEN
+    ALTER TABLE rd_issue_cost
+      ADD CONSTRAINT chk_rd_issue_cost_amount CHECK (cost_amount >= 0);
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON rd_issue_cost TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_issue_cost TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/rd_equipment_custody.sql (canonical source).
+
+-- Story 10.2 (FR-RD-06): the R&D equipment custody register. An equipment loan drains stock via
+-- applyStockIssue but writes no cost row and relieves no valuation (the loan keeps its value).
+-- Overdue ageing is derived from expected_return_date, never stored. The return and custodian
+-- confirmation flow is Story 10.5.
+
+CREATE TABLE IF NOT EXISTS rd_equipment_custody (
+  custody_id           UUID PRIMARY KEY,
+  issue_id             UUID NOT NULL,
+  requisition_id       UUID NOT NULL,
+  requisition_line_id  UUID NOT NULL,
+  project_code         TEXT NOT NULL,
+  custodian_user_id    UUID NOT NULL,
+  asset_id             UUID,
+  sku                  TEXT NOT NULL,
+  quantity             NUMERIC(18,3) NOT NULL,
+  expected_return_date DATE NOT NULL,
+  condition_codes      TEXT[] NOT NULL,
+  status               TEXT NOT NULL DEFAULT 'on_loan',
+  source_event_id      UUID NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_equipment_custody_status CHECK (status IN ('on_loan', 'returned')),
+  CONSTRAINT chk_rd_equipment_custody_qty CHECK (quantity > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rd_equipment_custody_custodian ON rd_equipment_custody (custodian_user_id, status);
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename = 'rd_equipment_custody'
+      AND indexname = 'uq_rd_equipment_custody_source_event'
+      AND indexdef NOT LIKE '%(source_event_id, custody_id)%'
+  ) THEN
+    DROP INDEX IF EXISTS uq_rd_equipment_custody_source_event;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_equipment_custody_source_event ON rd_equipment_custody (source_event_id, custody_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_equipment_custody_issue_line ON rd_equipment_custody (issue_id, requisition_line_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_equipment_custody_status'
+      AND conrelid = 'rd_equipment_custody'::regclass
+  ) THEN
+    ALTER TABLE rd_equipment_custody
+      ADD CONSTRAINT chk_rd_equipment_custody_status CHECK (status IN ('on_loan', 'returned'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_equipment_custody_qty'
+      AND conrelid = 'rd_equipment_custody'::regclass
+  ) THEN
+    ALTER TABLE rd_equipment_custody
+      ADD CONSTRAINT chk_rd_equipment_custody_qty CHECK (quantity > 0);
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_equipment_custody TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_equipment_custody TO readonly_user;
+  END IF;
+END $$;
+
+
