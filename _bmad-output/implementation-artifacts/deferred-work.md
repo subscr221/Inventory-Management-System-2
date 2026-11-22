@@ -633,6 +633,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-9-9 (2
 location: n/a
 reason: 9.9R-1 The holdings read surface (`GET /service-orders/:serviceOrderId/offcut-holdings`, src/api/v1/service-orders.ts:2573-2574) exposes `resolved_approver_actor_id` and `proposed_by` on every pending proposal of both kinds. Pre-existing from Story 9.8; Story 9.9 extends it to revaluation rows. The refusal seams deliberately never name the approver, so the read surface and the refusal message now disagree about what may be disclosed. No release blocker: user ids are not bearer credentials (the story's own position), but the defence-in-depth intent of the anonymous refusals is undermined.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-6: 9.9R-2 The approve applier executes the frozen `proposed_value` with no invariant re-derivation
 origin: migrated from legacy ledger ("Deferred from: code review of story-9-9 (2026-09-09)"), 2026-11-22
