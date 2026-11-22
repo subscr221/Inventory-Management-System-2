@@ -2581,6 +2581,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (
 location: n/a
 reason: Lot and expiry inputs on the stores acceptance screen (owner ruling 2b, 2026-11-19): follow-up story; pilot receipts taken as not lot-controlled, not confirmed by the owner. A plain-language refusal ships meanwhile.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-260: Server-side enforcement of material_photo_ref on goods.received (owner ruling 3b): a server rule affects ERP inbound and every other caller.
 origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
