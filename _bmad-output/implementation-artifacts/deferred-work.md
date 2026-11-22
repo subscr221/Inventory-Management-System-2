@@ -1934,6 +1934,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-un
 location: n/a
 reason: DOA authority is the single oldest active holder of the governing role (`findRoleHolder`, platform-wide Phase-1 simplification): a second QC head or finance controller cannot turn a damage key unless the first is on vacation delegation.
 status: open
+decision: 2026-11-22 Keep open, revisit post-pilot
 
 ### DW-164: The workbench's authority branch scans up to 2,000 recent cases per request (`listOpenDamageReports`) to find those the caller is the pending authority for; fine at pilot volume, needs an indexed pending-step view at scale.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
