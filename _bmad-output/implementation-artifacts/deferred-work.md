@@ -2979,6 +2979,7 @@ location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor
 source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 reason: Story 7.11: the card states this; a real reapply is a future story.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-308: Maintenance desk board is company-wide, not site scoped (Q32).
 origin: story-7.11 (2026-11-22)
