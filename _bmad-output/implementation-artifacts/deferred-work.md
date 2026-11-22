@@ -1802,6 +1802,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-r
 location: n/a
 reason: Availability omits `item_name` (Table 2 lists it): `item_master` has no name or description column anywhere in the schema, and adding one is a schema change outside this story (AD-14, schema-drift). The response carries `sku`, `uom`, `in_stock`, `locations`; add the name when the item master gains one.
 status: open
+decision: 2026-11-22 Keep open, revisit post-pilot
 
 ### DW-145: My requests cards show no line count: `GET /api/v1/indents` returns indent headers only, and fetching lines per card is one call per row. Add a `line_count` to the list projection if the count is wanted.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
