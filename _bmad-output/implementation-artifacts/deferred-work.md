@@ -2886,7 +2886,9 @@ origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 
 location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
 source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
 reason: summary: `GET /indents/:id` returns all info_requests to any viewer passing `getIndentBase`; the AC has no per-line visibility rule. evidence: `src/api/v1/indents.ts` `getIndentBase` attaches every info request.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 ### DW-301: The status block shows `info_requests[0]` to every approver, not only the asker or line holder.
 origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
