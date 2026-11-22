@@ -2365,6 +2365,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-
 location: n/a
 reason: Header of a requisition with a pending or rejected line stays `raised`/`approved` after every approved line is issued or closed; define terminal header handling in Story 4.8.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-228: Smoke step issues 2 of 100 then closes the remainder; INDENT_LINE_FULLY_ISSUED is covered by test/integration/story-4-11.test.ts and runbook 2.10k only.
 origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
