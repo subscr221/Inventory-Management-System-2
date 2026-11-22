@@ -2963,6 +2963,7 @@ location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor
 source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 reason: Story 7.11 scope: no priority selector on accept.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-306: Maintenance desk has no send-back-to-technician action.
 origin: story-7.11 (2026-11-22)
