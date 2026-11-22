@@ -1869,6 +1869,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-un
 location: n/a
 reason: Reporter screen: "or pick from material issued to me (last 7 days)" and "of N issued" (no issued-material read exists); serial-level reporting (a serial-controlled report records `serial_controlled` and holds nothing); damaged job-work or customer material (deferred-work L1155).
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-156: Correcting a locked case: after both keys or an escalation the case is locked; a correction as a linked new case is not built.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
