@@ -2975,63 +2975,143 @@ location: src/read/projections/maintenance_work_order.ts
 source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 reason: Story 7.11 review: desk now reads per asset (P2), but the ordering still truncates global completed lists for other callers.
 status: open
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Desk POST actions have no idempotency key, so a timed-out accept, override or sign that succeeded can be retried as a duplicate.
-  evidence: Story 7.11 follow-up review: run() has no idempotency key; the user retries after a timeout. Location: maintenance-desk.tsx run() POST path; busy flag is UI-only.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Board-wide busy flag disables every card during any action; sign-off ticks persist after a failed sign.
-  evidence: Story 7.11 follow-up review: a single busy flag over the whole board; DeskCardView ticks state survives a failed run. Location: maintenance-desk.tsx busy state and DeskCardView ticks.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: readOverride maps every non-OK response to a retryable error, so a permanent 403 or 404 shows "warranty unknown" forever.
-  evidence: Story 7.11 follow-up review: retry can never succeed for permanent refusals. Location: maintenance-desk.tsx readOverride and retryWarranty.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: One warranty-overrides GET per flagged work order on every load (N+1), and retryWarranty can commit a stale snapshot over a newer board.
-  evidence: Story 7.11 follow-up review: no batching; no sequence check in retryWarranty. Location: maintenance-desk.tsx load() override reads and retryWarranty.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: No-access state is inferred only from 403 on asset-status; a DOA holder without maintenance read gets a half-populated board, and a transient 403 has no retry.
-  evidence: Story 7.11 follow-up review: the no-access card has no retry, so a transient 403 sticks. Location: maintenance-desk.tsx load() classification.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Accept confirmation notice is dropped when load() removes the fault card from its group, leaving only the live-region announcement.
-  evidence: Story 7.11 follow-up review: notice cleanup runs after the reload that moves the card. Location: maintenance-desk.tsx run() and load() notice filter.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Done group and "Awaiting signature" count depend on the 500-capped asset-status list, so past the cap, assets awaiting sign-off disappear and the count under-reports.
-  evidence: Story 7.11 follow-up review: the limit banner does not cover this path; count and focus target can also disagree. Location: maintenance-desk-model.ts Done group and awaitingSignature count.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Partial-failure merge can discard fresh per-status rows in favour of stale ones, and a failed asset-status read with no prior board can wipe the Done group.
-  evidence: Story 7.11 follow-up review: part() merge logic in load(). Location: maintenance-desk.tsx load() part() merges.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Offline "Check connection" button is a silent no-op because load() returns early.
-  evidence: Story 7.11 follow-up review: the retry control is not disabled or explained while offline. Location: maintenance-desk.tsx needs-connection card.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Resolving a conflict from the panel moves focus to the board heading, out of the open conflict panel.
-  evidence: Story 7.11 follow-up review: run() always focuses boardHeading after success. Location: maintenance-desk.tsx run() focus call.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: canResolveConflict compares untrimmed note length while submit sends the trimmed note; completedAfter compares null completed_at as an empty string.
-  evidence: Story 7.11 follow-up review: validation mismatch and sort tie-break on null timestamps. Location: maintenance-desk.tsx canResolveConflict; maintenance-desk-model.ts completedAfter.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Done group issues one completed-work-order read per out-of-service asset in sequential batches of 8, repeated on every load(), and load() runs after every action while holding busy.
-  evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk.tsx load() batch loop over statuses with status=completed&asset_id=. Accepted for pilot size in Design Notes; batch or page once the out-of-service count grows.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: run() calls onOk and setNotice inside the fetch try block, so an exception after a 2xx response shows the command-failed message and skips load(), making a committed write look failed.
-  evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk.tsx run() catch sets commandFailed for any exception.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Conflict notices are created with group undefined, so the group filter never drops them, and ConflictPanel receives notice without rendering it; resolved-conflict confirmations accumulate.
-  evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx notice filter and ConflictPanel props.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: The blocked-reason paragraph carries id from whyId, but no disabled control references it through aria-describedby.
-  evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk.tsx whyId paragraph and disabled fieldset controls.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: activeAssets blocks Done for any work-order status other than completed, with no tie to the status enum, so a future status such as cancelled would silently block sign-off.
-  evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk-model.ts activeAssets filter status !== 'completed'.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: hasMaintenanceDeskScope runs three entry queries plus one holder query per entry on every bootstrap and navigation call, with no cache, and is not site-scoped.
-  evidence: Story 7.11 review pass (Blind Hunter): src/api/v1/edge.ts hasMaintenanceDeskScope, awaited in navigationFor.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: assetLabelsFor adds an unbounded asset-label query to every work-order and asset-status list call, including callers that never read the labels.
-  evidence: Story 7.11 review pass (Blind Hunter and Edge Case Hunter): src/api/v1/maintenance.ts assetLabelsFor called from list handlers; ANY($1::uuid[]) has no size cap.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: Desk POST responses other than 409 and 404 (including 5xx and 401) do not reload the board, so a write that was applied may stay hidden until a manual refresh.
-  evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx run() reloads only on status 409 or 404.
-- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
-  summary: A selected warranty overrideCode stays in card state across reloads and is not revalidated against the current reasonCodes, so a code removed from config can still be posted.
-  evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx overrideCode state; confirm button checks only for non-null.
+
+### DW-313: Desk POST actions have no idempotency key, so a timed-out accept, override or sign that succeeded can be retried as a duplicate.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Desk POST actions have no idempotency key, so a timed-out accept, override or sign that succeeded can be retried as a duplicate. Evidence: Story 7.11 follow-up review: run() has no idempotency key; the user retries after a timeout. Location: maintenance-desk.tsx run() POST path; busy flag is UI-only.
+status: open
+
+### DW-314: Board-wide busy flag disables every card during any action; sign-off ticks persist after a failed sign.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Board-wide busy flag disables every card during any action; sign-off ticks persist after a failed sign. Evidence: Story 7.11 follow-up review: a single busy flag over the whole board; DeskCardView ticks state survives a failed run. Location: maintenance-desk.tsx busy state and DeskCardView ticks.
+status: open
+
+### DW-315: readOverride maps every non-OK response to a retryable error, so a permanent 403 or 404 shows "warranty unknown" forever.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: readOverride maps every non-OK response to a retryable error, so a permanent 403 or 404 shows "warranty unknown" forever. Evidence: Story 7.11 follow-up review: retry can never succeed for permanent refusals. Location: maintenance-desk.tsx readOverride and retryWarranty.
+status: open
+
+### DW-316: One warranty-overrides GET per flagged work order on every load (N+1), and retryWarranty can commit a stale snapshot over a newer board.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: One warranty-overrides GET per flagged work order on every load (N+1), and retryWarranty can commit a stale snapshot over a newer board. Evidence: Story 7.11 follow-up review: no batching; no sequence check in retryWarranty. Location: maintenance-desk.tsx load() override reads and retryWarranty.
+status: open
+
+### DW-317: No-access state is inferred only from 403 on asset-status; a DOA holder without maintenance read gets a half-populated board, and a transient 403 has no retry.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: No-access state is inferred only from 403 on asset-status; a DOA holder without maintenance read gets a half-populated board, and a transient 403 has no retry. Evidence: Story 7.11 follow-up review: the no-access card has no retry, so a transient 403 sticks. Location: maintenance-desk.tsx load() classification.
+status: open
+
+### DW-318: Accept confirmation notice is dropped when load() removes the fault card from its group, leaving only the live-region announcement.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Accept confirmation notice is dropped when load() removes the fault card from its group, leaving only the live-region announcement. Evidence: Story 7.11 follow-up review: notice cleanup runs after the reload that moves the card. Location: maintenance-desk.tsx run() and load() notice filter.
+status: open
+
+### DW-319: Done group and "Awaiting signature" count depend on the 500-capped asset-status list, so past the cap, assets awaiting sign-off disappear and the count under-reports.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk-model.ts
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Done group and "Awaiting signature" count depend on the 500-capped asset-status list, so past the cap, assets awaiting sign-off disappear and the count under-reports. Evidence: Story 7.11 follow-up review: the limit banner does not cover this path; count and focus target can also disagree. Location: maintenance-desk-model.ts Done group and awaitingSignature count.
+status: open
+
+### DW-320: Partial-failure merge can discard fresh per-status rows in favour of stale ones, and a failed asset-status read with no prior board can wipe the Done group.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Partial-failure merge can discard fresh per-status rows in favour of stale ones, and a failed asset-status read with no prior board can wipe the Done group. Evidence: Story 7.11 follow-up review: part() merge logic in load(). Location: maintenance-desk.tsx load() part() merges.
+status: open
+
+### DW-321: Offline "Check connection" button is a silent no-op because load() returns early.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Offline "Check connection" button is a silent no-op because load() returns early. Evidence: Story 7.11 follow-up review: the retry control is not disabled or explained while offline. Location: maintenance-desk.tsx needs-connection card.
+status: open
+
+### DW-322: Resolving a conflict from the panel moves focus to the board heading, out of the open conflict panel.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Resolving a conflict from the panel moves focus to the board heading, out of the open conflict panel. Evidence: Story 7.11 follow-up review: run() always focuses boardHeading after success. Location: maintenance-desk.tsx run() focus call.
+status: open
+
+### DW-323: canResolveConflict compares untrimmed note length while submit sends the trimmed note; completedAfter compares null completed_at as an empty string.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: canResolveConflict compares untrimmed note length while submit sends the trimmed note; completedAfter compares null completed_at as an empty string. Evidence: Story 7.11 follow-up review: validation mismatch and sort tie-break on null timestamps. Location: maintenance-desk.tsx canResolveConflict; maintenance-desk-model.ts completedAfter.
+status: open
+
+### DW-324: Done group issues one completed-work-order read per out-of-service asset in sequential batches of 8, repeated on every load(), and load() runs after every action while holding busy.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Done group issues one completed-work-order read per out-of-service asset in sequential batches of 8, repeated on every load(), and load() runs after every action while holding busy. Evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk.tsx load() batch loop over statuses with status=completed&asset_id=. Accepted for pilot size in Design Notes; batch or page once the out-of-service count grows.
+status: open
+
+### DW-325: run() calls onOk and setNotice inside the fetch try block, so an exception after a 2xx response shows the command-failed message and skips load(), making a committed write look failed.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: run() calls onOk and setNotice inside the fetch try block, so an exception after a 2xx response shows the command-failed message and skips load(), making a committed write look failed. Evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk.tsx run() catch sets commandFailed for any exception.
+status: open
+
+### DW-326: Conflict notices are created with group undefined, so the group filter never drops them, and ConflictPanel receives notice without rendering it; resolved-conflict confirmations accumulate.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Conflict notices are created with group undefined, so the group filter never drops them, and ConflictPanel receives notice without rendering it; resolved-conflict confirmations accumulate. Evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx notice filter and ConflictPanel props.
+status: open
+
+### DW-327: The blocked-reason paragraph carries id from whyId, but no disabled control references it through aria-describedby.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: The blocked-reason paragraph carries id from whyId, but no disabled control references it through aria-describedby. Evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk.tsx whyId paragraph and disabled fieldset controls.
+status: open
+
+### DW-328: activeAssets blocks Done for any work-order status other than completed, with no tie to the status enum, so a future status such as cancelled would silently block sign-off.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk-model.ts
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: activeAssets blocks Done for any work-order status other than completed, with no tie to the status enum, so a future status such as cancelled would silently block sign-off. Evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk-model.ts activeAssets filter status !== 'completed'.
+status: open
+
+### DW-329: hasMaintenanceDeskScope runs three entry queries plus one holder query per entry on every bootstrap and navigation call, with no cache, and is not site-scoped.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: src/api/v1/edge.ts
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: hasMaintenanceDeskScope runs three entry queries plus one holder query per entry on every bootstrap and navigation call, with no cache, and is not site-scoped. Evidence: Story 7.11 review pass (Blind Hunter): src/api/v1/edge.ts hasMaintenanceDeskScope, awaited in navigationFor.
+status: open
+
+### DW-330: assetLabelsFor adds an unbounded asset-label query to every work-order and asset-status list call, including callers that never read the labels.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: src/api/v1/maintenance.ts
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: assetLabelsFor adds an unbounded asset-label query to every work-order and asset-status list call, including callers that never read the labels. Evidence: Story 7.11 review pass (Blind Hunter and Edge Case Hunter): src/api/v1/maintenance.ts assetLabelsFor called from list handlers; ANY($1::uuid[]) has no size cap.
+status: open
+
+### DW-331: Desk POST responses other than 409 and 404 (including 5xx and 401) do not reload the board, so a write that was applied may stay hidden until a manual refresh.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Desk POST responses other than 409 and 404 (including 5xx and 401) do not reload the board, so a write that was applied may stay hidden until a manual refresh. Evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx run() reloads only on status 409 or 404.
+status: open
+
+### DW-332: A selected warranty overrideCode stays in card state across reloads and is not revalidated against the current reasonCodes, so a code removed from config can still be posted.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: maintenance-desk.tsx
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: A selected warranty overrideCode stays in card state across reloads and is not revalidated against the current reasonCodes, so a code removed from config can still be posted. Evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx overrideCode state; confirm button checks only for non-null.
+status: open
