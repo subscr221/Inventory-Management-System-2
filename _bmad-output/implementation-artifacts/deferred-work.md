@@ -1046,6 +1046,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (
 location: n/a
 reason: `getExcludedPlatformRefs` loads the entire `migration_domain_platform_exclusion` table for a site+domain on every verification run with no cap comparable to `MAX_EVENT_ARRAY_ENTRIES` [src/read/projections/migration_domain_verification.ts:712-720]. Same class as the already-deferred 10,000-finding cap; pilot volumes are far below any real bound.
 status: open
+decision: 2026-11-22 Keep open with DW-41
 
 ### DW-47: `POST /api/v1/migration/domains/:domain/platform-exclusions` accepts `platform_ref` with no existence check against the domain's real platform table - a typo'd or wrong-domain reference is silently accepted and downgrades nothing. Consistent with the route's existing trust-the-authenticated-actor design elsewhere in this story, not a regression; would need a per-domain platform-ref lookup to fix.
 origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-11, round 2)"), 2026-11-22
