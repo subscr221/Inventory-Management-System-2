@@ -750,7 +750,9 @@ decision: 2026-11-22 Reorder in transfer applier — Acquire lockInventoryValuat
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
 location: read/projections/site_gstin.sql
 reason: 11.5R-4 No intra-state versus inter-state discriminator, so the CGST and SGST versus IGST split has no input from this platform. `site_gstin.state_code_ext` (`read/projections/site_gstin.sql:32`) is nullable, never validated against the GSTIN's own first two digits, and never read. Outside the Story 11.5 AC set (the ERP computes tax), but the platform presents itself as the system of record for the document register.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: ERP computes tax; platform does not need the discriminator.
+decision: 2026-11-22 Leave to ERP — ERP computes tax; platform does not need the discriminator.
 
 ### DW-21: 11.5R-5 A partial projection rebuild never rebuilds valuations: `applyTransferRequestProjection`
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
