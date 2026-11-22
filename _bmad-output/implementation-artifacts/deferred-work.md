@@ -1862,6 +1862,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-un
 location: n/a
 reason: Partial release of unconfirmed units on a receipt putaway task: the held putaway of a DAMAGED or REJECTED line releases whole, only after the case is cleared or closed accepted as-is. Stores moves unconfirmed units with a bin move, which the D5 guard allows once the case holds fewer units.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-155: Reporter screen: "or pick from material issued to me (last 7 days)" and "of N issued" (no issued-material read exists); serial-level reporting (a serial-controlled report records `serial_controlled` and holds nothing); damaged job-work or customer material (deferred-work L1155).
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
