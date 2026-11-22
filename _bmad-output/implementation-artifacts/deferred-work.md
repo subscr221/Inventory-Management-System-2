@@ -1748,6 +1748,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-bre
 location: n/a
 reason: The edge app has no notification inbox screen (`git grep api/v1/notifications -- edge/src` is empty), so a supervisor sees a breach only through `GET /api/v1/notifications` or web push until one is built.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-139: The pilot roles file had to gain a `notification` read grant for `unload1@ancorlabs.org` so the holder can read the inbox; `requireRole` on the notifications routes checks the `notification` module, which no frontline role in the pack held. Whether every routed role should carry that grant by construction (a derived grant or a module-agnostic self-inbox route) is an access-matrix question for the role review.
 origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
