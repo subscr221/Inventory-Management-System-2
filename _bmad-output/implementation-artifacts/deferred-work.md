@@ -1471,7 +1471,9 @@ decision: 2026-11-22 Keep open
 origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
 location: n/a
 reason: Refusals raised before the route handler (413 `PAYLOAD_TOO_LARGE`, 400 `INVALID_JSON`) never reach the central list, so the supervisor screen cannot show them; the device list still does.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Covered by DW-85
+decision: 2026-11-22 Close, duplicate of DW-85 — Covered by DW-85
 
 ### DW-100: The duplicated RBAC matcher in `src/api/v1/refused-captures.ts` versus `middleware/rbac.ts` now has a third dependant, `hasRefusedCaptureReadScope` (bootstrap navigation); a future consolidation must move all three together.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
