@@ -187,5 +187,14 @@
     "key": "1",
     "label": "Keep open",
     "resolution": ""
+  },
+  "DW-98": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "1",
+    "label": "Keep open",
+    "resolution": ""
   }
 }
