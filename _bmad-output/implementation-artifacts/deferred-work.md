@@ -1675,6 +1675,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condit
 location: n/a
 reason: The SHORT rule depends on capture order on a split receipt: the PO band is cumulative, so a GOOD line posted before the DAMAGED line of the same delivery looks short and needs a SHORT or OTHER reason. The client must post non-clean lines first; the server enforces the rule on whatever order arrives. A per-delivery reconciliation would remove the dependence.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-129: A held DAMAGED or REJECTED putaway task can still be released to a shelf through `goods.putaway_released` (DOA `receiving.putaway_release`) with no QC disposition record. Story 8.9 owns the disposition and should gate that release.
 origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
