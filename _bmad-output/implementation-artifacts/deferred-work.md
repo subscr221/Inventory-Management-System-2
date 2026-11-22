@@ -2423,7 +2423,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
 location: n/a
 reason: Terminal header handling for a requisition whose approved lines are all issued or closed while another line is pending or rejected (deferred from Story 4.11 review) is still undefined; Story 4.8 does not change header derivation.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Duplicate of DW-227.
+decision: 2026-11-22 Close as duplicate of DW-227 — Duplicate of DW-227.
 
 ### DW-237: `findRoleHolder` with a location still returns the oldest of the site's own and every-location holders. Story 4.8 does not depend on it for authority (assign and finance approval are membership tests on the DOA role at the site, so a newer site holder is never locked out; covered by test); it uses it only to pick the active delegate and the finance approver whose list receives a disabled assigner's grants.
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
