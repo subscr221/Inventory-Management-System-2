@@ -744,6 +744,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 c
 location: transfer-request.ts
 reason: 11.5R-3 Lock-order inversion: the transfer applier takes the `stock_balance` row (`transfer-request.ts:576`) before `lockInventoryValuation` (`:429`), while `src/compliance/inventory-valuation.ts:323` takes `inventory_valuation` first. A `cost_plus` transfer concurrent with a `stock.issued` on the same SKU can deadlock. The `cost_plus` path is new, but the ordering convention gap is repo-wide.
 status: open
+decision: 2026-11-22 Reorder in transfer applier — Acquire lockInventoryValuation before the stock_balance row in the transfer applier and add a concurrency test.
 
 ### DW-20: 11.5R-4 No intra-state versus inter-state discriminator, so the CGST and SGST versus IGST split has
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
