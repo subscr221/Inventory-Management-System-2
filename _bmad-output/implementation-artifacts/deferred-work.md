@@ -728,7 +728,9 @@ resolution: already resolved: src/events/store.ts:413-429 now bounds metadata.oc
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
 location: src/compliance/transfer-request.ts
 reason: 11.5R-2 `assertAndApplyTransferRequestCompliance` (`src/compliance/transfer-request.ts:1133`) is dead code: the live dispatch is the hand-maintained applier list in `src/events/store.ts:584` and `:888`. Nothing executes the seam, so the two lists can diverge silently. Story 11.5 doubled the size of the duplicate by extending both in parallel.
-status: open
+status: done 2026-11-22
+resolution: resolved by sweep bundle dw-s0-transfer-request-door-hardening
+resolution-undo: 0506b79372f77fe4361912a0b7c71777f928a4daa2e3dd7f0487a196a8f76947 2026-11-22 7374617475733a206f70656e
 
 ### DW-19: 11.5R-3 Lock-order inversion: the transfer applier takes the `stock_balance` row
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
@@ -786,13 +788,17 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
 location: src/api/v1/sites.ts
 reason: 11.5R-11 The `gst` block on `GET /api/v1/transfer-requests/:id` exposes both GSTINs and the taxable value to any inventory reader, while the configuration routes restrict GSTIN reads to `finance_controller` and `gst_officer` (`src/api/v1/sites.ts:352`). The restriction on the configuration route is therefore decorative.
-status: open
+status: done 2026-11-22
+resolution: resolved by sweep bundle dw-s0-transfer-request-door-hardening
+resolution-undo: 0506b79372f77fe4361912a0b7c71777f928a4daa2e3dd7f0487a196a8f76947 2026-11-22 7374617475733a206f70656e
 
 ### DW-28: 11.5R-12 `getTransferRequestById` is read OUTSIDE the persisting transaction in the valuation
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
 location: n/a
 reason: 11.5R-12 `getTransferRequestById` is read OUTSIDE the persisting transaction in the valuation override and GST document routes (`src/api/v1/transfer-requests.ts:1299, 1368`), so `business_stream` and the site scope are decided against a snapshot the applier's `FOR UPDATE` lock does not cover. Benign today only because the applier re-locks and re-validates everything that matters.
-status: open
+status: done 2026-11-22
+resolution: resolved by sweep bundle dw-s0-transfer-request-door-hardening
+resolution-undo: 0506b79372f77fe4361912a0b7c71777f928a4daa2e3dd7f0487a196a8f76947 2026-11-22 7374617475733a206f70656e
 
 ### DW-29: 11.5R-13 `GET /api/v1/transfer-requests` has no pagination: no `limit`, no cursor, and the
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
@@ -2845,3 +2851,77 @@ location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor
 source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 reason: Story 7.11: the desk shows a 500+ marker only; the edge worklist total is not wired in.
 status: open
+
+### DW-311: sync-conflicts location filter applied after LIMIT, so a page can be emptied for location-scoped holders.
+origin: story-7.11 review (2026-11-22)
+location: src/api/v1/maintenance.ts (listSyncConflictsBase)
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Story 7.11 review: pre-existing server query order; desk count and 500+ marker unreliable for scoped holders.
+status: open
+
+### DW-312: Completed work orders ordered by due_date ASC with limit 500 on the server.
+origin: story-7.11 review (2026-11-22)
+location: src/read/projections/maintenance_work_order.ts
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Story 7.11 review: desk now reads per asset (P2), but the ordering still truncates global completed lists for other callers.
+status: open
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Desk POST actions have no idempotency key, so a timed-out accept, override or sign that succeeded can be retried as a duplicate.
+  evidence: Story 7.11 follow-up review: run() has no idempotency key; the user retries after a timeout. Location: maintenance-desk.tsx run() POST path; busy flag is UI-only.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Board-wide busy flag disables every card during any action; sign-off ticks persist after a failed sign.
+  evidence: Story 7.11 follow-up review: a single busy flag over the whole board; DeskCardView ticks state survives a failed run. Location: maintenance-desk.tsx busy state and DeskCardView ticks.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: readOverride maps every non-OK response to a retryable error, so a permanent 403 or 404 shows "warranty unknown" forever.
+  evidence: Story 7.11 follow-up review: retry can never succeed for permanent refusals. Location: maintenance-desk.tsx readOverride and retryWarranty.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: One warranty-overrides GET per flagged work order on every load (N+1), and retryWarranty can commit a stale snapshot over a newer board.
+  evidence: Story 7.11 follow-up review: no batching; no sequence check in retryWarranty. Location: maintenance-desk.tsx load() override reads and retryWarranty.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: No-access state is inferred only from 403 on asset-status; a DOA holder without maintenance read gets a half-populated board, and a transient 403 has no retry.
+  evidence: Story 7.11 follow-up review: the no-access card has no retry, so a transient 403 sticks. Location: maintenance-desk.tsx load() classification.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Accept confirmation notice is dropped when load() removes the fault card from its group, leaving only the live-region announcement.
+  evidence: Story 7.11 follow-up review: notice cleanup runs after the reload that moves the card. Location: maintenance-desk.tsx run() and load() notice filter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Done group and "Awaiting signature" count depend on the 500-capped asset-status list, so past the cap, assets awaiting sign-off disappear and the count under-reports.
+  evidence: Story 7.11 follow-up review: the limit banner does not cover this path; count and focus target can also disagree. Location: maintenance-desk-model.ts Done group and awaitingSignature count.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Partial-failure merge can discard fresh per-status rows in favour of stale ones, and a failed asset-status read with no prior board can wipe the Done group.
+  evidence: Story 7.11 follow-up review: part() merge logic in load(). Location: maintenance-desk.tsx load() part() merges.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Offline "Check connection" button is a silent no-op because load() returns early.
+  evidence: Story 7.11 follow-up review: the retry control is not disabled or explained while offline. Location: maintenance-desk.tsx needs-connection card.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Resolving a conflict from the panel moves focus to the board heading, out of the open conflict panel.
+  evidence: Story 7.11 follow-up review: run() always focuses boardHeading after success. Location: maintenance-desk.tsx run() focus call.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: canResolveConflict compares untrimmed note length while submit sends the trimmed note; completedAfter compares null completed_at as an empty string.
+  evidence: Story 7.11 follow-up review: validation mismatch and sort tie-break on null timestamps. Location: maintenance-desk.tsx canResolveConflict; maintenance-desk-model.ts completedAfter.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Done group issues one completed-work-order read per out-of-service asset in sequential batches of 8, repeated on every load(), and load() runs after every action while holding busy.
+  evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk.tsx load() batch loop over statuses with status=completed&asset_id=. Accepted for pilot size in Design Notes; batch or page once the out-of-service count grows.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: run() calls onOk and setNotice inside the fetch try block, so an exception after a 2xx response shows the command-failed message and skips load(), making a committed write look failed.
+  evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk.tsx run() catch sets commandFailed for any exception.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Conflict notices are created with group undefined, so the group filter never drops them, and ConflictPanel receives notice without rendering it; resolved-conflict confirmations accumulate.
+  evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx notice filter and ConflictPanel props.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: The blocked-reason paragraph carries id from whyId, but no disabled control references it through aria-describedby.
+  evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk.tsx whyId paragraph and disabled fieldset controls.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: activeAssets blocks Done for any work-order status other than completed, with no tie to the status enum, so a future status such as cancelled would silently block sign-off.
+  evidence: Story 7.11 review pass (Blind Hunter): maintenance-desk-model.ts activeAssets filter status !== 'completed'.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: hasMaintenanceDeskScope runs three entry queries plus one holder query per entry on every bootstrap and navigation call, with no cache, and is not site-scoped.
+  evidence: Story 7.11 review pass (Blind Hunter): src/api/v1/edge.ts hasMaintenanceDeskScope, awaited in navigationFor.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: assetLabelsFor adds an unbounded asset-label query to every work-order and asset-status list call, including callers that never read the labels.
+  evidence: Story 7.11 review pass (Blind Hunter and Edge Case Hunter): src/api/v1/maintenance.ts assetLabelsFor called from list handlers; ANY($1::uuid[]) has no size cap.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: Desk POST responses other than 409 and 404 (including 5xx and 401) do not reload the board, so a write that was applied may stay hidden until a manual refresh.
+  evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx run() reloads only on status 409 or 404.
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md`
+  summary: A selected warranty overrideCode stays in card state across reloads and is not revalidated against the current reasonCodes, so a code removed from config can still be posted.
+  evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx overrideCode state; confirm button checks only for non-null.

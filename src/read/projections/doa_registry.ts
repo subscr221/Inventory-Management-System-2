@@ -229,6 +229,20 @@ export async function listActiveDoaEntries(
   return result.rows.map(mapEntry);
 }
 
+export async function findActiveDoaEntries(
+  transactionType: string,
+  client?: PoolClient,
+): Promise<DoaRegistryEntry[]> {
+  const result = await runner(client).query(
+    `SELECT entry_id, role, transaction_type, value_min, value_max, active, created_at, updated_at
+     FROM doa_registry_entries
+     WHERE transaction_type = $1 AND active = true
+     ORDER BY created_at ASC, entry_id ASC`,
+    [transactionType],
+  );
+  return result.rows.map((row) => mapEntry(row));
+}
+
 export async function findFirstActiveDoaEntry(
   transactionType: string,
   client?: PoolClient,

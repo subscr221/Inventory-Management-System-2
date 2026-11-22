@@ -33,7 +33,8 @@ import {
 } from '../../read/projections/branch_transfer_classification.js';
 // Story 11.5 chunk-2 review Q17: ONE definition of the 8.7 D8 (#AD-16) idempotency-key guard,
 // exported by the sibling GST route module rather than copied here.
-import { requireIdempotencyKey } from './sites.js';
+import { requireIdempotencyKey, SITE_GSTIN_ROLES } from './sites.js';
+import type { RoleAssignment } from '../../read/projections/users.js';
 
 import type { TransferRequestRow } from '../../read/projections/transfer_request.js';
 import {
@@ -655,8 +656,52 @@ const getTransferRequestBase: RouteHandler = async (req, res, params) => {
     );
   }
 
-  sendJson(res, 200, { ...transferRequestRowToJson(row), gst: await gstBlockFor(row) });
+  sendJson(res, 200, {
+    ...transferRequestRowToJson(row),
+    gst: redactGstBlock(await gstBlockFor(row), authContext.roles),
+  });
 };
+
+/**
+ * DW-27 (11.5R-11): the GSTIN and taxable-value half of the `gst` block is for the roles the GST
+ * configuration routes admit (SITE_GSTIN_ROLES, the same predicate as assertGstConfigRole: role on
+ * the inventory module or wildcard). Any other inventory reader keeps the supply class, document
+ * status and ship_blockers, since the warehouse must see why a ship is blocked. The valuation is an
+ * allowlist, so a monetary or identifier field added later stays hidden by default.
+ */
+const GST_VALUATION_READER_VISIBLE_FIELDS = [
+  'transfer_request_id',
+  'from_site_id',
+  'to_site_id',
+  'business_date',
+  'valuation_basis',
+  'basis_source',
+  'currency',
+  'valued_at',
+  'overridden_by',
+  'override_reason_code',
+] as const;
+
+function canReadGstIdentifiers(roles: ReadonlyArray<RoleAssignment>): boolean {
+  return roles.some(
+    (r) => (r.module === 'inventory' || r.module === '*') && SITE_GSTIN_ROLES.includes(r.role),
+  );
+}
+
+function redactGstBlock(
+  block: Record<string, unknown>,
+  roles: ReadonlyArray<RoleAssignment>,
+): Record<string, unknown> {
+  if (canReadGstIdentifiers(roles)) return block;
+  const valuation = block['valuation'];
+  if (!valuation || typeof valuation !== 'object') return block;
+  const source = valuation as Record<string, unknown>;
+  const visible: Record<string, unknown> = {};
+  for (const field of GST_VALUATION_READER_VISIBLE_FIELDS) {
+    if (field in source) visible[field] = source[field];
+  }
+  return { ...block, valuation: visible };
+}
 
 /**
  * Story 11.5 (Task 3.6): the `gst` block for ONE transfer.
@@ -1405,8 +1450,8 @@ function optionalTagFields(body: Record<string, unknown>): Record<string, unknow
 }
 
 /** The transfer's FROM site (the site the officer must hold), from its source location. */
-async function fromSiteOf(row: TransferRequestRow): Promise<string> {
-  const fromLocation = await getLocationById(row.from_location_id);
+async function fromSiteOf(row: TransferRequestRow, client: PoolClient): Promise<string> {
+  const fromLocation = await getLocationById(row.from_location_id, client);
   if (!fromLocation) {
     throw new AppError(400, 'LOCATION_NOT_FOUND', 'from_location_id does not exist', {
       from_location_id: row.from_location_id,
@@ -1465,42 +1510,60 @@ const overrideValuationBase: RouteHandler = async (req, res, params) => {
     );
   }
 
-  const row = await getTransferRequestById(id);
-  if (!row) throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
-  // Site scope through the FROM location (the Story 2.5 idiom), resolved from the SAME gst_officer
-  // assignment that grants the privilege (Q5), and that assignment is the audited actor (Q6). The
-  // seam is the guard for every business refusal (NOT_A_BRANCH_TRANSFER, VALUATION_LOCKED,
-  // BASIS_NOT_ELIGIBLE).
-  const siteId = await fromSiteOf(row);
-  const actor = gstOfficerActor(req, { locationId: row.from_location_id, siteId });
+  const pool = getPool();
+  const client = await pool.connect();
+  let committed = false;
 
-  const result = await persistEvent(
-    {
-      stream_type: 'inventory',
-      stream_id: id,
-      event_type: 'transfer_request.valuation_overridden',
-      idempotency_key: idempotencyKey,
-      payload: {
-        transfer_request_id: id,
-        site_id: siteId,
-        business_stream: row.business_stream,
-        valuation_basis: body['valuation_basis'],
-        ...(body['declared_unit_value'] !== undefined
-          ? { declared_unit_value: body['declared_unit_value'] }
-          : {}),
-        reason_code: (body['reason_code'] as string).trim(),
-        ...optionalTagFields(body),
+  try {
+    await client.query('BEGIN');
+    // DW-28 (11.5R-12): read and lock the request inside the transaction the applier commits in, so
+    // business_stream and the site scope are decided on the snapshot the applier validates.
+    // Site scope through the FROM location (the Story 2.5 idiom), resolved from the SAME gst_officer
+    // assignment that grants the privilege (Q5), and that assignment is the audited actor (Q6). The
+    // seam is the guard for every business refusal (NOT_A_BRANCH_TRANSFER, VALUATION_LOCKED,
+    // BASIS_NOT_ELIGIBLE).
+    const row = await getTransferRequestById(id, client, true);
+    if (!row) throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
+    const siteId = await fromSiteOf(row, client);
+    const actor = gstOfficerActor(req, { locationId: row.from_location_id, siteId });
+
+    const result = await persistEvent(
+      {
+        stream_type: 'inventory',
+        stream_id: id,
+        event_type: 'transfer_request.valuation_overridden',
+        idempotency_key: idempotencyKey,
+        payload: {
+          transfer_request_id: id,
+          site_id: siteId,
+          business_stream: row.business_stream,
+          valuation_basis: body['valuation_basis'],
+          ...(body['declared_unit_value'] !== undefined
+            ? { declared_unit_value: body['declared_unit_value'] }
+            : {}),
+          reason_code: (body['reason_code'] as string).trim(),
+          ...optionalTagFields(body),
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
-        occurred_at: new Date().toISOString(),
-      },
-    },
-    auditCtxFor(req, actor, 200),
-  );
-  const valuation = await getBranchTransferValuation(id);
-  sendJson(res, 200, { eventId: result.event_id, transfer_request_id: id, valuation });
+      auditCtxFor(req, actor, 200),
+      client,
+    );
+    await client.query('COMMIT');
+    committed = true;
+
+    const valuation = await getBranchTransferValuation(id);
+    sendJson(res, 200, { eventId: result.event_id, transfer_request_id: id, valuation });
+  } catch (err: unknown) {
+    if (!committed) await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -1563,51 +1626,68 @@ const recordGstDocumentBase: RouteHandler = async (req, res, params) => {
     throw new AppError(400, 'INVALID_PARAMS', 'irn_ext applies to a tax_invoice only');
   }
 
-  const row = await getTransferRequestById(id);
-  if (!row) throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
-  // Privilege and site scope from the SAME gst_officer assignment, which is also the audited
-  // actor (chunk-2 review Q5/Q6).
-  const siteId = await fromSiteOf(row);
-  const actor = gstOfficerActor(req, { locationId: row.from_location_id, siteId });
+  const pool = getPool();
+  const client = await pool.connect();
+  let committed = false;
 
-  const result = await persistEvent(
-    {
-      stream_type: 'inventory',
-      stream_id: id,
-      event_type: 'transfer_request.gst_document_recorded',
-      idempotency_key: idempotencyKey,
-      payload: {
-        transfer_request_id: id,
-        site_id: siteId,
-        business_stream: row.business_stream,
-        document_kind: kind,
-        document_number_ext: documentNumber.trim(),
-        ...(kind === 'tax_invoice' ? { irn_ext: normalizeIrnExt(irnExt as string) } : {}),
-        ...(body['irp_acknowledged_at'] !== undefined
-          ? { irp_acknowledged_at: body['irp_acknowledged_at'] }
-          : {}),
-        ...(body['ewb_valid_until'] !== undefined
-          ? { ewb_valid_until: body['ewb_valid_until'] }
-          : {}),
-        issued_at: body['issued_at'] ?? new Date().toISOString(),
-        ...optionalTagFields(body),
+  try {
+    await client.query('BEGIN');
+    // DW-28 (11.5R-12): read and lock the request inside the transaction the applier commits in.
+    const row = await getTransferRequestById(id, client, true);
+    if (!row) throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
+    // Privilege and site scope from the SAME gst_officer assignment, which is also the audited
+    // actor (chunk-2 review Q5/Q6).
+    const siteId = await fromSiteOf(row, client);
+    const actor = gstOfficerActor(req, { locationId: row.from_location_id, siteId });
+
+    const result = await persistEvent(
+      {
+        stream_type: 'inventory',
+        stream_id: id,
+        event_type: 'transfer_request.gst_document_recorded',
+        idempotency_key: idempotencyKey,
+        payload: {
+          transfer_request_id: id,
+          site_id: siteId,
+          business_stream: row.business_stream,
+          document_kind: kind,
+          document_number_ext: documentNumber.trim(),
+          ...(kind === 'tax_invoice' ? { irn_ext: normalizeIrnExt(irnExt as string) } : {}),
+          ...(body['irp_acknowledged_at'] !== undefined
+            ? { irp_acknowledged_at: body['irp_acknowledged_at'] }
+            : {}),
+          ...(body['ewb_valid_until'] !== undefined
+            ? { ewb_valid_until: body['ewb_valid_until'] }
+            : {}),
+          issued_at: body['issued_at'] ?? new Date().toISOString(),
+          ...optionalTagFields(body),
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
-        occurred_at: new Date().toISOString(),
-      },
-    },
-    auditCtxFor(req, actor, 200),
-  );
-  const documents = await listBranchTransferGstDocuments(id);
-  const gate = await dispatchGateGstDocuments(row);
-  sendJson(res, 200, {
-    eventId: result.event_id,
-    transfer_request_id: id,
-    documents,
-    ship_blockers: gate.reasons,
-  });
+      auditCtxFor(req, actor, 200),
+      client,
+    );
+    await client.query('COMMIT');
+    committed = true;
+
+    const documents = await listBranchTransferGstDocuments(id);
+    const gate = await dispatchGateGstDocuments(row);
+    sendJson(res, 200, {
+      eventId: result.event_id,
+      transfer_request_id: id,
+      documents,
+      ship_blockers: gate.reasons,
+    });
+  } catch (err: unknown) {
+    if (!committed) await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 const listGstDocumentsBase: RouteHandler = async (req, res, params) => {
@@ -1629,7 +1709,10 @@ const listGstDocumentsBase: RouteHandler = async (req, res, params) => {
       'No role assignment grants access to the locations in this transfer',
     );
   }
-  sendJson(res, 200, { transfer_request_id: id, gst: await gstBlockFor(row) });
+  sendJson(res, 200, {
+    transfer_request_id: id,
+    gst: redactGstBlock(await gstBlockFor(row), authContext.roles),
+  });
 };
 
 // ---------------------------------------------------------------------------

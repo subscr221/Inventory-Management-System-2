@@ -64,7 +64,7 @@ interface Board {
 interface Notice {
   text: string;
   /** The card's group when the action ran; the notice is dropped once the card leaves it. */
-  group?: GroupId;
+  group?: GroupId | undefined;
 }
 
 type LoadState =
@@ -115,17 +115,31 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
   const [announcement, setAnnouncement] = useState('');
   const [conflictsOpen, setConflictsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Record<string, string>>({});
+  const busyRef = useRef(false);
+  const [notice, setNotice] = useState<Record<string, Notice>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const conflictsButton = useRef<HTMLButtonElement | null>(null);
+  const boardHeading = useRef<HTMLHeadingElement | null>(null);
   const loadSequence = useRef(0);
+  const boardRef = useRef<Board | null>(null);
+
+  const commit = useCallback((next: Board) => {
+    boardRef.current = next;
+    setBoard(next);
+  }, []);
+
+  // Clear then set on the next tick, so the same message pressed twice is announced twice.
+  const announce = useCallback((text: string) => {
+    setAnnouncement('');
+    setTimeout(() => setAnnouncement(text), 0);
+  }, []);
 
   const load = useCallback(async () => {
     if (!online) return;
     const sequence = ++loadSequence.current;
     try {
       const q = `limit=${DESK_LIST_LIMIT}`;
-      const results = await Promise.all([
+      const [faultRes, ...rest] = await Promise.all([
         getJson(`/api/v1/maintenance/fault-reports?status=reported&${q}`),
         ...WORK_ORDER_STATUSES.map((s) =>
           getJson(`/api/v1/maintenance/work-orders?status=${s}&${q}`),
@@ -136,68 +150,143 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
         getJson(`/api/v1/maintenance/sync-conflicts?status=open&${q}`),
         getJson('/api/v1/maintenance/warranty-override-reason-codes'),
       ]);
-      if (sequence !== loadSequence.current) return;
-      if (results.some((r) => r.status === 403)) {
-        setState({ kind: 'no-access' });
-        return;
-      }
-      if (results.some((r) => r.body === null)) {
-        setState((s) => (s.kind === 'ready' ? s : { kind: 'needs-connection' }));
-        return;
-      }
-      const [faultRes, ...rest] = results as Array<{ body: Record<string, unknown> }>;
       const woRes = rest.slice(0, WORK_ORDER_STATUSES.length);
       const stRes = rest.slice(WORK_ORDER_STATUSES.length, WORK_ORDER_STATUSES.length + 2);
       const conflictRes = rest[WORK_ORDER_STATUSES.length + 2]!;
       const reasonRes = rest[WORK_ORDER_STATUSES.length + 3]!;
-      const faults = (faultRes!.body.fault_reports ?? []) as FaultRow[];
-      const workOrders = woRes.flatMap((r) => (r.body.work_orders ?? []) as WorkOrderRow[]);
-      const statuses = stRes.flatMap((r) => (r.body.asset_statuses ?? []) as AssetStatusRow[]);
-      const conflicts = (conflictRes.body.conflicts ?? []) as ConflictRow[];
+      if (sequence !== loadSequence.current) return;
+      // A 403 on the asset-status reads means no desk access; on any other read it only marks
+      // that area unavailable.
+      if (stRes.some((r) => r.status === 403)) {
+        setState({ kind: 'no-access' });
+        return;
+      }
+      const prev = boardRef.current;
+      const failed: MessageKey[] = [];
+      const part = <T,>(
+        rs: Array<{ body: Record<string, unknown> | null }>,
+        key: string,
+        area: MessageKey,
+        old: T[] | undefined,
+      ): T[] => {
+        if (rs.every((r) => r.body)) return rs.flatMap((r) => (r.body![key] ?? []) as T[]);
+        failed.push(area);
+        return old ?? [];
+      };
+      const faults = part<FaultRow>(
+        [faultRes!],
+        'fault_reports',
+        'maintenanceDesk.area.faults',
+        prev?.faults,
+      );
+      const active = part<WorkOrderRow>(
+        woRes,
+        'work_orders',
+        'maintenanceDesk.area.workOrders',
+        prev?.workOrders.filter((w) => w.status !== 'completed'),
+      );
+      const statuses = part<AssetStatusRow>(
+        stRes,
+        'asset_statuses',
+        'maintenanceDesk.area.statuses',
+        prev?.statuses,
+      );
+      const conflicts = part<ConflictRow>(
+        [conflictRes],
+        'conflicts',
+        'maintenanceDesk.area.conflicts',
+        prev?.conflicts,
+      );
+      const reasonCodes = part<string>(
+        [reasonRes],
+        'reason_codes',
+        'maintenanceDesk.area.reasonCodes',
+        prev?.reasonCodes,
+      );
+      if (!prev && failed.length === 5) {
+        setState((s) => (s.kind === 'ready' ? s : { kind: 'needs-connection' }));
+        return;
+      }
+      // shortcut: one completed-work-order read per out-of-service asset, 8 in flight at a time;
+      // batch or page it if the out-of-service count grows into the hundreds.
+      const doneRes: Awaited<ReturnType<typeof getJson>>[] = [];
+      for (let i = 0; i < statuses.length; i += 8) {
+        doneRes.push(
+          ...(await Promise.all(
+            statuses.slice(i, i + 8).map((s) =>
+              getJson(`/api/v1/maintenance/work-orders?status=completed&asset_id=${s.asset_id}&${q}`),
+            ),
+          )),
+        );
+      }
+      // Fail closed per asset: a failed read drops that asset's Done rows instead of reusing
+      // the previous board's rows, so no sign-off is offered on a stale completed state.
+      if (doneRes.some((r) => !r.body)) failed.push('maintenanceDesk.area.done');
+      const completed = doneRes.flatMap((r) => (r.body?.['work_orders'] ?? []) as WorkOrderRow[]);
+      const workOrders = [...active, ...completed];
       // One override read per flagged, uncompleted work order (pilot-sized board, Design Notes).
-      const overrides = new Map<string, OverrideRow | null>();
+      const overrides = new Map<string, OverrideState>();
       await Promise.all(
-        workOrders
-          .filter((w) => w.warranty_flagged && w.status !== 'completed')
+        active
+          .filter((w) => w.warranty_flagged)
           .map(async (w) => {
-            const res = await getJson(
-              `/api/v1/maintenance/work-orders/${w.work_order_id}/warranty-overrides`,
-            );
-            if (res.body)
-              overrides.set(w.work_order_id, (res.body['override'] as OverrideRow | null) ?? null);
+            overrides.set(w.work_order_id, await readOverride(w.work_order_id));
           }),
       );
       if (sequence !== loadSequence.current) return;
-      setBoard({
+      const rowCount = (r: { body: Record<string, unknown> | null }) =>
+        r.body
+          ? Math.max(0, ...Object.values(r.body).map((v) => (Array.isArray(v) ? v.length : 0)))
+          : 0;
+      const next: Board = {
         faults,
         workOrders,
         statuses,
         conflicts,
-        reasonCodes: (reasonRes.body.reason_codes ?? []) as string[],
+        reasonCodes,
         overrides,
-        limited: hitListLimit([
-          faults.length,
-          conflicts.length,
-          ...woRes.map((r) => ((r.body.work_orders ?? []) as unknown[]).length),
-          ...stRes.map((r) => ((r.body.asset_statuses ?? []) as unknown[]).length),
-        ]),
-      });
+        limited: hitListLimit(
+          [faultRes!, conflictRes, ...woRes, ...stRes, ...doneRes].map(rowCount),
+        ),
+        failed,
+      };
+      commit(next);
+      // Drop a card's notice once the card has left the group the action ran in.
+      const after = classifyBoard(next.faults, next.workOrders, next.statuses);
+      setNotice((n) =>
+        Object.fromEntries(
+          Object.entries(n).filter(
+            ([key, v]) =>
+              v.group === undefined || after[v.group].some((c) => c.key === key),
+          ),
+        ),
+      );
       setState({ kind: 'ready' });
     } catch {
       setState((s) => (s.kind === 'ready' ? s : { kind: 'needs-connection' }));
     }
-  }, [online]);
+  }, [online, commit]);
 
   useEffect(() => {
     if (ready && online) void load();
   }, [ready, online, load]);
+
+  async function retryWarranty(workOrderId: string) {
+    const state = await readOverride(workOrderId);
+    const current = boardRef.current;
+    if (!current) return;
+    commit({ ...current, overrides: new Map(current.overrides).set(workOrderId, state) });
+  }
 
   async function run(
     key: string,
     path: string,
     body: Record<string, unknown>,
     onOk: (json: Record<string, unknown>) => string,
+    group?: GroupId,
   ) {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setErrors((e) => ({ ...e, [key]: '' }));
     try {
@@ -207,10 +296,14 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
         body: JSON.stringify(body),
       });
       if (response.ok) {
-        const text = onOk((await response.json()) as Record<string, unknown>);
-        setNotice((n) => ({ ...n, [key]: text }));
-        setAnnouncement(text);
+        const text = onOk(
+          (await response.json().catch(() => ({}))) as Record<string, unknown>,
+        );
+        setNotice((n) => ({ ...n, [key]: { text, group } }));
+        announce(text);
         await load();
+        // The acted-on control may be gone; keep focus on the board instead of the page body.
+        boardHeading.current?.focus();
         return;
       }
       const message = await readError(response);
@@ -219,6 +312,7 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
     } catch {
       setErrors((e) => ({ ...e, [key]: t('maintenanceDesk.commandFailed') }));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
@@ -259,7 +353,7 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
 
   function focusCard(card: DeskCard | undefined, none: MessageKey) {
     if (!card) {
-      setAnnouncement(t(none));
+      announce(t(none));
       return;
     }
     const el = document.getElementById(`desk-card-${card.key.replace(':', '-')}`);
@@ -278,6 +372,22 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
       <p role="status" aria-live="polite" className="stores-announcement">
         {announcement}
       </p>
+      <h2 ref={boardHeading} tabIndex={-1}>
+        {t('maintenanceDesk.title')}
+      </h2>
+      {board.failed.length > 0 ? (
+        <section className="edge-card" role="alert">
+          <p>
+            {t('maintenanceDesk.partial').replace(
+              '{areas}',
+              board.failed.map((k) => t(k)).join(', '),
+            )}
+          </p>
+          <button className="secondary-action" type="button" onClick={() => void load()}>
+            {t('maintenanceDesk.retry')}
+          </button>
+        </section>
+      ) : null}
       {board.limited ? <p className="stores-status">{t('maintenanceDesk.limit')}</p> : null}
       <div className="desk-attention">
         <button
@@ -299,7 +409,7 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
         >
           {t('maintenanceDesk.attention.conflicts').replace(
             '{count}',
-            String(counts.syncConflicts),
+            countLabel(counts.syncConflicts),
           )}
         </button>
         <button
@@ -365,7 +475,7 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
                     board={board}
                     reason={reason}
                     error={errors[card.key] ?? ''}
-                    notice={notice[card.key] ?? ''}
+                    notice={notice[card.key]?.text ?? ''}
                     onAccept={() =>
                       void run(
                         card.key,
@@ -379,6 +489,7 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
                               t('maintenanceDesk.pill.unset'),
                           );
                         },
+                        group,
                       )
                     }
                     onReject={(text) =>
@@ -387,6 +498,7 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
                         `/api/v1/maintenance/fault-reports/${card.id}/reject`,
                         { rejection_reason: text.trim() },
                         () => t('maintenanceDesk.triage.rejected'),
+                        group,
                       )
                     }
                     onOverride={(code) =>
@@ -395,8 +507,10 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
                         `/api/v1/maintenance/work-orders/${card.id}/warranty-overrides`,
                         { reason_code: code },
                         () => t('maintenanceDesk.warranty.recorded'),
+                        group,
                       )
                     }
+                    onRetryWarranty={() => void retryWarranty(card.id)}
                     onSign={() =>
                       card.kind === 'work-order' &&
                       void run(
@@ -404,6 +518,7 @@ export function MaintenanceDesk({ online, ready }: MaintenanceDeskProps) {
                         `/api/v1/maintenance/assets/${card.workOrder.asset_id}/status`,
                         { new_status: 'running' },
                         () => t('maintenanceDesk.sign.returned'),
+                        group,
                       )
                     }
                   />
@@ -435,6 +550,7 @@ interface CardProps {
   onAccept: () => void;
   onReject: (text: string) => void;
   onOverride: (code: string) => void;
+  onRetryWarranty: () => void;
   onSign: () => void;
 }
 
@@ -446,13 +562,14 @@ function DeskCardView(props: CardProps) {
   const [overrideCode, setOverrideCode] = useState<string | null>(null);
   const [ticks, setTicks] = useState<boolean[]>(Array(SIGN_OFF_TICKS).fill(false));
   const workOrder = card.kind === 'work-order' ? card.workOrder : null;
-  const override = workOrder ? board.overrides.get(card.id) : undefined;
+  const overrideState = workOrder ? board.overrides.get(card.id) : undefined;
+  const override = overrideState && overrideState !== 'error' ? overrideState : null;
   const warrantyOpen = isWarrantyOpen(card, board.overrides);
+  const warrantyUnknown = isWarrantyUnknown(card, board.overrides);
   const priority = workOrder ? priorityLabel(workOrder.priority) : null;
   const why = reasonText(reason);
   const whyId = `${domId}-why`;
   const blocked = reason !== null;
-  const returned = Boolean(notice) && group === 'done';
 
   return (
     <li
@@ -482,10 +599,15 @@ function DeskCardView(props: CardProps) {
           {warrantyOpen ? (
             <span className="state-pill state-pill-warn">{t('maintenanceDesk.pill.warranty')}</span>
           ) : null}
+          {warrantyUnknown ? (
+            <span className="state-pill state-pill-warn">
+              {t('maintenanceDesk.pill.warrantyUnavailable')}
+            </span>
+          ) : null}
           {override ? (
             <span className="state-pill state-pill-ok">{t('maintenanceDesk.pill.overridden')}</span>
           ) : null}
-          {group === 'done' && !returned ? (
+          {group === 'done' ? (
             <span className="state-pill state-pill-warn">{t('maintenanceDesk.pill.awaiting')}</span>
           ) : null}
         </p>
@@ -565,7 +687,18 @@ function DeskCardView(props: CardProps) {
         </fieldset>
       ) : null}
 
-      {group === 'done' && !returned ? (
+      {warrantyUnknown ? (
+        <button
+          className="secondary-action"
+          type="button"
+          disabled={blocked}
+          onClick={props.onRetryWarranty}
+        >
+          {t('maintenanceDesk.warranty.retry')}
+        </button>
+      ) : null}
+
+      {group === 'done' ? (
         <fieldset className="desk-actions" disabled={blocked}>
           <legend>{t('maintenanceDesk.sign.legend')}</legend>
           {ticks.map((checked, index) => (
@@ -609,7 +742,7 @@ function ConflictPanel(props: {
   conflicts: ConflictRow[];
   reason: 'offline' | 'busy' | null;
   errors: Record<string, string>;
-  notice: Record<string, string>;
+  notice: Record<string, Notice>;
   onClose: () => void;
   onResolve: (id: string, code: string, note: string) => void;
 }) {

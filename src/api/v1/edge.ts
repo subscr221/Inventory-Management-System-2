@@ -55,7 +55,7 @@ import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
 import { routeIndentLines, headerApproverOf } from '../../compliance/indent-routing.js';
 import { damageAuthorityTypesFor } from '../../compliance/damage.js';
 import {
-  findFirstActiveDoaEntry,
+  findActiveDoaEntries,
   isActiveRoleHolderForEntry,
   listActiveDelegatorsFor,
   listHeldIndentApprovalBands,
@@ -546,9 +546,9 @@ async function hasMaintenanceDeskScope(authContext: AuthContext): Promise<boolea
     WARRANTY_OVERRIDE_DOA_TYPE,
     SYNC_CONFLICT_RESOLUTION_DOA_TYPE,
   ]) {
-    const entry = await findFirstActiveDoaEntry(type);
-    if (entry && (await isActiveRoleHolderForEntry(entry.entry_id, authContext.userId)))
-      return true;
+    for (const entry of await findActiveDoaEntries(type)) {
+      if (await isActiveRoleHolderForEntry(entry.entry_id, authContext.userId)) return true;
+    }
   }
   return false;
 }

@@ -1385,31 +1385,6 @@ export async function applyTransferReceiveProjection(
 }
 
 // ---------------------------------------------------------------------------
-// Composite compliance entry point called from persistEvent
-// ---------------------------------------------------------------------------
-
-export async function assertAndApplyTransferRequestCompliance(
-  envelope: EventEnvelope,
-  client: PoolClient,
-  eventId?: string,
-  auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
-): Promise<void> {
-  // Pre-transaction shape validation (throws AppError if invalid)
-  assertTransferRequestShape(envelope);
-  assertTransferShipShape(envelope);
-  assertTransferReceiveShape(envelope);
-  assertTransferValuationOverriddenShape(envelope);
-  assertTransferGstDocumentRecordedShape(envelope);
-
-  // Inside-transaction projection + DB validation
-  await applyTransferRequestProjection(envelope, client, eventId);
-  await applyTransferShipProjection(envelope, client, eventId, auditCtx);
-  await applyTransferReceiveProjection(envelope, client);
-  await applyTransferValuationOverridden(envelope, client, eventId);
-  await applyTransferGstDocumentRecorded(envelope, client, eventId);
-}
-
-// ---------------------------------------------------------------------------
 // Story 11.5 Task 6: the GST document ship gate
 // ---------------------------------------------------------------------------
 

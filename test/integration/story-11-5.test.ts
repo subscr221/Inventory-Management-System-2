@@ -350,7 +350,12 @@ describe('Story 11.5 branch transfer valuation and GST documents', () => {
     officerWrongModule = {
       userId: await scimCreateUser(port, offModId, 'GST Officer wrong module', [
         { role: 'gst_officer', module: 'quality', functionScope: 'write', locationId: siteA },
-        { role: 'warehouse_manager', module: 'inventory', functionScope: 'write', locationId: locA },
+        {
+          role: 'warehouse_manager',
+          module: 'inventory',
+          functionScope: 'write',
+          locationId: locA,
+        },
         { role: 'warehouse_manager', module: 'inventory', functionScope: 'read', locationId: '*' },
       ]),
       token: await tokenFor(port, offModId),
@@ -360,7 +365,12 @@ describe('Story 11.5 branch transfer valuation and GST documents', () => {
     officerReadScope = {
       userId: await scimCreateUser(port, offReadId, 'GST Officer read scope', [
         { role: 'gst_officer', module: 'inventory', functionScope: 'read', locationId: siteA },
-        { role: 'warehouse_manager', module: 'inventory', functionScope: 'write', locationId: locA },
+        {
+          role: 'warehouse_manager',
+          module: 'inventory',
+          functionScope: 'write',
+          locationId: locA,
+        },
         { role: 'warehouse_manager', module: 'inventory', functionScope: 'read', locationId: '*' },
       ]),
       token: await tokenFor(port, offReadId),
@@ -520,7 +530,21 @@ describe('Story 11.5 branch transfer valuation and GST documents', () => {
     );
   }
 
+  // DW-27: the GSTIN and taxable-value half of the gst block is for the statutory officer; the
+  // warehouse reader is redacted (see getTransferAsWarehouse). Full-view reads therefore use officer.
   async function getTransfer(id: string): Promise<Record<string, unknown>> {
+    const r = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/transfer-requests/${id}`,
+      undefined,
+      bearer(officer.token),
+    );
+    assert.equal(r.status, 200, r.raw);
+    return r.body;
+  }
+
+  async function getTransferAsWarehouse(id: string): Promise<Record<string, unknown>> {
     const r = await makeRequest(
       port,
       'GET',
@@ -626,10 +650,7 @@ describe('Story 11.5 branch transfer valuation and GST documents', () => {
     return (r.rows[0] as Record<string, unknown> | undefined) ?? null;
   }
 
-  async function auditRowsFor(
-    id: string,
-    errorCode = 'GST_DOCUMENTS_REQUIRED',
-  ): Promise<number> {
+  async function auditRowsFor(id: string, errorCode = 'GST_DOCUMENTS_REQUIRED'): Promise<number> {
     const r = await getPool().query(
       `SELECT count(*)::int AS n FROM audit_log
         WHERE error_code = $2 AND details->>'transfer_request_id' = $1`,
@@ -898,6 +919,39 @@ describe('Story 11.5 branch transfer valuation and GST documents', () => {
     assert.equal(valuation['taxable_value'], '66000.00');
     assert.equal(valuation['basis_source'], 'config_default');
     assert.deepEqual(block['ship_blockers'], ['tax_invoice_missing', 'e_way_bill_missing']);
+
+    // DW-27: the warehouse reads the same transfer redacted - class, blockers and basis stay; the
+    // GSTINs and the value they attach to do not.
+    const redacted = (await getTransferAsWarehouse(id))['gst'] as Record<string, unknown>;
+    assert.equal(redacted['supply_class'], 'inter_gstin');
+    assert.deepEqual(redacted['ship_blockers'], ['tax_invoice_missing', 'e_way_bill_missing']);
+    const redactedValuation = redacted['valuation'] as Record<string, unknown>;
+    assert.equal(redactedValuation['basis_source'], 'config_default');
+    for (const field of [
+      'from_gstin_ext',
+      'to_gstin_ext',
+      'unit_value',
+      'taxable_value',
+      'declared_unit_value',
+    ]) {
+      assert.ok(!(field in redactedValuation), `${field} must be redacted for the warehouse`);
+    }
+
+    // The gst-documents GET carries the same block and must redact it the same way.
+    const docsView = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/transfer-requests/${id}/gst-documents`,
+      undefined,
+      bearer(warehouse.token),
+    );
+    assert.equal(docsView.status, 200, docsView.raw);
+    const docsValuation = (docsView.body['gst'] as Record<string, unknown>)['valuation'] as Record<
+      string,
+      unknown
+    >;
+    assert.ok(!('taxable_value' in docsValuation), 'gst-documents must redact taxable_value');
+    assert.ok(!('from_gstin_ext' in docsValuation), 'gst-documents must redact GSTINs');
     assert.deepEqual(block['documents'], []);
   });
 
@@ -3067,9 +3121,7 @@ describe('Story 11.5 branch transfer valuation and GST documents', () => {
       assert.equal(r.rows.length, 1, `no successful audit row for ${endpoint}`);
       return r.rows[0] as Record<string, unknown>;
     }
-    const documentAudit = await lastSuccessAudit(
-      `/api/v1/transfer-requests/${id}/gst-documents`,
-    );
+    const documentAudit = await lastSuccessAudit(`/api/v1/transfer-requests/${id}/gst-documents`);
     assert.equal(documentAudit['role'], 'gst_officer');
     assert.equal(documentAudit['location_id'], siteA);
     const overrideAudit = await lastSuccessAudit(

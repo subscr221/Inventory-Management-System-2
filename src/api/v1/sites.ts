@@ -33,7 +33,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SITE_GSTIN_ROLES = ['finance_controller', 'gst_officer'];
+export const SITE_GSTIN_ROLES = ['finance_controller', 'gst_officer'];
 
 export interface GstConfigActor {
   userId: string;
