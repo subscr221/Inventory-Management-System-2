@@ -44,6 +44,15 @@
     "label": "Keep open for the sweep",
     "resolution": ""
   },
+  "DW-33": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "3",
+    "label": "Keep open",
+    "resolution": ""
+  },
   "DW-5": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
