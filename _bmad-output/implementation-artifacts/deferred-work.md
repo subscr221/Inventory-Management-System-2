@@ -1735,6 +1735,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-bre
 location: n/a
 reason: No breach acceptance or disposition action exists after Story 3.3: the breach is a notification, not a durable task row, so nothing records that the unloading supervisor accepted, rejected or re-weighed the load.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-137: Breach notifications emitted before this fix on staging targeted `receiving_supervisor`, a role with no holder; the dispatcher claimed them with zero recipients, and they are not re-emitted. They are rehearsal data only; production starts clean.
 origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
