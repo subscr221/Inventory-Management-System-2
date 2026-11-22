@@ -93,6 +93,7 @@
   "errors.CREDIT_NOTE_MISSING": "No acknowledged service invoice exists to cite for this acquisition. An office action, not a retry.",
   "errors.CREDIT_NOTE_UNCITABLE": "The credit note cited does not belong to this order's service invoice. Check the reference with the office.",
   "errors.CREDIT_NOTE_SUPERSEDED": "This credit note has been superseded by a revaluation; the current document carries the value. Re-post against the latest document.",
+  "errors.REVALUATION_VALUE_MISMATCH": "The value on this revaluation proposal no longer matches the holding quantity at the proposed rate. It cannot be approved; ask finance to review it.",
   "errors.SOD_VIOLATION": "The same person cannot both post and approve this action. Ask a different authorised person to complete it.",
   "errors.DUPLICATE_LOT": "This lot already exists in the system.",
   "errors.DUPLICATE_SERIAL": "This serial number already exists in the system for this item.",

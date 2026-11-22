@@ -1618,4 +1618,73 @@ describe('Story 9.9 Offcut Revaluation CFO Approval', () => {
     assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
     assert.strictEqual((await creditNotes(orderId)).length, 1);
   });
+
+  it('DW-6: approving a proposal whose frozen value no longer matches quantity x rate is refused and audited', async () => {
+    const { orderId, holdingId } = await acquiredHolding();
+    const proposed = await proposeRevaluation(orderId, holdingId);
+    const proposalId = proposed.body['proposal_id'] as string;
+    const before = await creditNotes(orderId);
+
+    // The Story 9.10 bar keeps quantity immutable in normal flows, so the drift is forced directly.
+    await getAdminPool().query(
+      `UPDATE job_work_offcut_holding SET quantity = quantity + 1 WHERE holding_id = $1`,
+      [holdingId],
+    );
+
+    // MUTATION POINT: the re-derivation guard in applyJobworkOffcutRevaluationApproved. Removing it
+    // executes the frozen proposed_value against a quantity it was not priced for.
+    const approved = await approveProposal(orderId, proposalId);
+    assert.strictEqual(approved.status, 409, JSON.stringify(approved.body));
+    assert.strictEqual(approved.body['error_code'], 'REVALUATION_VALUE_MISMATCH');
+    assert.ok(
+      approved.traceId && (await auditedFor('REVALUATION_VALUE_MISMATCH', approved.traceId)),
+    );
+    assert.deepStrictEqual(await creditNotes(orderId), before, 'no delta was posted');
+    const proposal = await proposalRow(proposalId);
+    assert.strictEqual(proposal['status'], 'pending');
+    assert.strictEqual(proposal['decided_by'], null);
+  });
+
+  it('DW-8: a superseded document with a different currency is CREDIT_NOTE_SUPERSEDED, not INVALID_PARAMS', async () => {
+    const { orderId, holdingId } = await acquiredHolding();
+    const proposed = await proposeRevaluation(orderId, holdingId);
+    const proposalId = proposed.body['proposal_id'] as string;
+    const between = await revalue(orderId, { holding_id: holdingId, rate: BELOW_BAND_RATE });
+    assert.strictEqual(between.status, 201, JSON.stringify(between.body));
+    // Both doors enforce one currency down the chain, so the divergence is forced on the frozen row.
+    await getAdminPool().query(
+      `UPDATE job_work_offcut_acquisition_proposal SET currency = 'USD' WHERE proposal_id = $1`,
+      [proposalId],
+    );
+
+    // MUTATION POINT: the order of the supersede id check and the currency assertion in the approve
+    // applier. Currency first hides the stale-document signal behind INVALID_PARAMS and writes no
+    // audit row.
+    const approved = await approveProposal(orderId, proposalId);
+    assert.strictEqual(approved.status, 409, JSON.stringify(approved.body));
+    assert.strictEqual(approved.body['error_code'], 'CREDIT_NOTE_SUPERSEDED');
+    assert.ok(approved.traceId && (await auditedFor('CREDIT_NOTE_SUPERSEDED', approved.traceId)));
+  });
+
+  it('DW-7: the superseded lifecycle leg requires decided_by and decided_at >= created_at', async () => {
+    const { orderId, holdingId } = await acquiredHolding();
+    const proposed = await proposeRevaluation(orderId, holdingId);
+    const proposalId = proposed.body['proposal_id'] as string;
+    const supersede = (decidedBy: string | null, decidedAtSql: string) =>
+      getAdminPool().query(
+        `UPDATE job_work_offcut_acquisition_proposal
+            SET status = 'superseded', decided_by = $2, decided_at = ${decidedAtSql}
+          WHERE proposal_id = $1`,
+        [proposalId, decidedBy],
+      );
+
+    // MUTATION POINT: the superseded leg of chk_job_work_offcut_acq_proposal_lifecycle. Reverting
+    // it to `decided_at IS NOT NULL` alone accepts both rows below.
+    await assert.rejects(supersede(null, 'now()'), { code: '23514' });
+    await assert.rejects(supersede(cfoUserId, `created_at - interval '1 day'`), { code: '23514' });
+    assert.strictEqual((await proposalRow(proposalId))['status'], 'pending');
+
+    await supersede(cfoUserId, 'now()');
+    assert.strictEqual((await proposalRow(proposalId))['status'], 'superseded');
+  });
 });

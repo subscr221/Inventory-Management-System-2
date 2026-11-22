@@ -24,6 +24,7 @@ export interface WorkOrderRow {
   warranty_flagged: boolean;
   status_note: string | null;
   fault_report_id: string | null;
+  completed_at?: string | null;
 }
 
 export interface AssetStatusRow {
@@ -53,7 +54,18 @@ const WORK_ORDER_GROUP: Partial<Record<WorkOrderRow['status'], GroupId>> = {
   on_hold: 'waiting',
 };
 
-/** Done holds completed work orders whose asset is still out of service (breakdown or maintenance). */
+/** null: no override row yet; 'error': the read failed, so the warranty state is unknown. */
+export type OverrideState = OverrideRow | null | 'error';
+
+const completedAfter = (a: WorkOrderRow, b: WorkOrderRow) =>
+  (a.completed_at ?? '') !== (b.completed_at ?? '')
+    ? (a.completed_at ?? '') > (b.completed_at ?? '')
+    : a.work_order_id > b.work_order_id;
+
+/**
+ * Done holds the latest completed work order of an asset that is still out of service (breakdown or
+ * maintenance) and has no open, overdue, in-progress or on-hold work order.
+ */
 export function classifyBoard(
   faults: FaultRow[],
   workOrders: WorkOrderRow[],
@@ -65,6 +77,16 @@ export function classifyBoard(
       .filter((s) => s.status === 'breakdown' || s.status === 'maintenance')
       .map((s) => s.asset_id),
   );
+  const activeAssets = new Set(
+    workOrders.filter((w) => w.status !== 'completed').map((w) => w.asset_id),
+  );
+  const latestDone = new Map<string, WorkOrderRow>();
+  for (const w of workOrders) {
+    const current = latestDone.get(w.asset_id);
+    if (w.status === 'completed' && (!current || completedAfter(w, current))) {
+      latestDone.set(w.asset_id, w);
+    }
+  }
   for (const fault of faults) {
     if (fault.status !== 'reported') continue;
     groups.triage.push({
@@ -78,7 +100,9 @@ export function classifyBoard(
   for (const workOrder of workOrders) {
     const group =
       workOrder.status === 'completed'
-        ? outOfService.has(workOrder.asset_id)
+        ? outOfService.has(workOrder.asset_id) &&
+          !activeAssets.has(workOrder.asset_id) &&
+          latestDone.get(workOrder.asset_id) === workOrder
           ? 'done'
           : undefined
         : WORK_ORDER_GROUP[workOrder.status];
@@ -95,16 +119,28 @@ export function classifyBoard(
 }
 
 /** A warranty pill shows for a flagged work order with no override row (undefined: not read yet). */
-export function isWarrantyOpen(
-  card: DeskCard,
-  overrides: Map<string, OverrideRow | null>,
-): boolean {
+export function isWarrantyOpen(card: DeskCard, overrides: Map<string, OverrideState>): boolean {
   return (
     card.kind === 'work-order' &&
     card.workOrder.warranty_flagged &&
     card.workOrder.status !== 'completed' &&
     overrides.get(card.id) === null
   );
+}
+
+/** The override read failed for a flagged work order: the warranty state is unknown, not open. */
+export function isWarrantyUnknown(card: DeskCard, overrides: Map<string, OverrideState>): boolean {
+  return (
+    card.kind === 'work-order' &&
+    card.workOrder.warranty_flagged &&
+    card.workOrder.status !== 'completed' &&
+    overrides.get(card.id) === 'error'
+  );
+}
+
+/** A count capped by the list limit reads "500+". */
+export function countLabel(n: number): string {
+  return n >= DESK_LIST_LIMIT ? `${DESK_LIST_LIMIT}+` : String(n);
 }
 
 export interface AttentionCounts {
@@ -116,11 +152,14 @@ export interface AttentionCounts {
 export function attentionCounts(
   groups: DeskGroups,
   openConflicts: number,
-  overrides: Map<string, OverrideRow | null>,
+  overrides: Map<string, OverrideState>,
 ): AttentionCounts {
   const all = GROUP_ORDER.flatMap((g) => groups[g]);
   return {
-    awaitingSignature: groups.done.length,
+    // Counts assets, not work orders: one asset needs one signature.
+    awaitingSignature: new Set(
+      groups.done.map((c) => (c.kind === 'work-order' ? c.workOrder.asset_id : c.id)),
+    ).size,
     syncConflicts: openConflicts,
     warrantyFlagged: all.filter((c) => isWarrantyOpen(c, overrides)).length,
   };
@@ -128,7 +167,7 @@ export function attentionCounts(
 
 export function firstWarrantyCard(
   groups: DeskGroups,
-  overrides: Map<string, OverrideRow | null>,
+  overrides: Map<string, OverrideState>,
 ): DeskCard | null {
   return GROUP_ORDER.flatMap((g) => groups[g]).find((c) => isWarrantyOpen(c, overrides)) ?? null;
 }

@@ -302,6 +302,7 @@ const PERMANENT_ERROR_CODES = new Set([
   // 9.9's other two refusals are already permanent above: an above-band revaluation posted as a
   // plain revaluation is APPROVAL_REQUIRED, and a below-band proposal is INVALID_PARAMS.
   'CREDIT_NOTE_SUPERSEDED',
+  'REVALUATION_VALUE_MISMATCH',
   'UNREVERSED_TRANSACTIONS',
   'BOM_REVISION_DRIFT',
   'MATERIAL_REQUIREMENT_SET_TRUNCATED',

@@ -313,6 +313,7 @@ const APPLIER_AUDITED_CODES = new Set([
   'CREDIT_NOTE_MISSING',
   'CREDIT_NOTE_UNCITABLE',
   'CREDIT_NOTE_SUPERSEDED',
+  'REVALUATION_VALUE_MISMATCH',
 ]);
 
 type ApplierAuditCtx = Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>;
@@ -791,10 +792,9 @@ async function resolveAcquisitionBandAudited(
  * document's currency - otherwise the signed difference subtracts one currency from another and the
  * current-value row mixes units.
  */
-async function latestSupersedableCreditNote(
+async function findLatestCreditNote(
   order: ServiceOrderRow,
   holding: JobWorkOffcutHoldingRow,
-  currency: string,
   client: PoolClient,
   auditCtx?: ApplierAuditCtx,
 ): Promise<JobWorkCreditNoteRow> {
@@ -808,6 +808,14 @@ async function latestSupersedableCreditNote(
       409,
     );
   }
+  return latest;
+}
+
+function assertRevaluationCurrency(
+  holding: JobWorkOffcutHoldingRow,
+  latest: JobWorkCreditNoteRow,
+  currency: string,
+): void {
   if (currency !== latest.currency) {
     reject(
       'INVALID_PARAMS',
@@ -821,6 +829,18 @@ async function latestSupersedableCreditNote(
       400,
     );
   }
+}
+
+/** Lookup then currency assertion, in that order. The approve path splits them (DW-8, see there). */
+async function latestSupersedableCreditNote(
+  order: ServiceOrderRow,
+  holding: JobWorkOffcutHoldingRow,
+  currency: string,
+  client: PoolClient,
+  auditCtx?: ApplierAuditCtx,
+): Promise<JobWorkCreditNoteRow> {
+  const latest = await findLatestCreditNote(order, holding, client, auditCtx);
+  assertRevaluationCurrency(holding, latest, currency);
   return latest;
 }
 
@@ -1907,13 +1927,7 @@ export async function applyJobworkOffcutRevalued(
     );
   }
 
-  const latest = await latestSupersedableCreditNote(
-    order,
-    holding,
-    p.currency,
-    client,
-    auditCtx,
-  );
+  const latest = await latestSupersedableCreditNote(order, holding, p.currency, client, auditCtx);
   const newValue = billableValueOf(holding.quantity, p.rate);
 
   // Task 5.5 / open question 5: the band applies to the REVALUED value on the same terms, or a
@@ -2265,13 +2279,10 @@ export async function applyJobworkOffcutRevaluationApproved(
     );
   }
 
-  const latest = await latestSupersedableCreditNote(
-    order,
-    holding,
-    proposal.currency,
-    client,
-    auditCtx,
-  );
+  // DW-8: lookup, then the supersede id check, THEN the currency assertion. A superseded document
+  // whose later revaluation used another currency must report CREDIT_NOTE_SUPERSEDED (the stale
+  // signal a finance controller needs), not the shape error INVALID_PARAMS.
+  const latest = await findLatestCreditNote(order, holding, client, auditCtx);
   // AC 5, THE REASON THE PROPOSAL FREEZES THE DOCUMENT. A below-band revaluation needs no signature
   // and can land between propose and approve, so the document the delta would chain off can move.
   // Raising the proposed delta against a stale document would silently corrupt the running
@@ -2294,6 +2305,27 @@ export async function applyJobworkOffcutRevaluationApproved(
         holding_id: holding.holding_id,
         proposed_against_credit_note_id: proposal.supersedes_credit_note_id,
         latest_credit_note_id: latest.credit_note_id,
+      },
+      409,
+    );
+  }
+
+  assertRevaluationCurrency(holding, latest, proposal.currency);
+
+  // DW-6: the frozen proposed_value is executed below, so re-derive it from the live holding. The
+  // Story 9.10 bar keeps quantity immutable in normal flows; this refuses before any write if the
+  // frozen value and quantity x rate ever disagree.
+  const expectedValue = billableValueOf(holding.quantity, proposal.rate);
+  if (proposal.proposed_value !== expectedValue) {
+    await auditedRefusal(
+      auditCtx,
+      'REVALUATION_VALUE_MISMATCH',
+      'The value frozen on this revaluation proposal no longer matches the holding quantity at the proposed rate, so it cannot be approved',
+      {
+        proposal_id: proposal.proposal_id,
+        holding_id: holding.holding_id,
+        proposed_value: proposal.proposed_value,
+        expected_value: expectedValue,
       },
       409,
     );

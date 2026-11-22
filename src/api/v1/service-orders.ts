@@ -157,6 +157,8 @@ const AUDITED_REJECTIONS = new Set([
   // Chunk C code review (2026-09-06): registered here as well as in the applier's self-audit set so
   // the route-level backstop exists for it too. The skip set excludes it, so nothing double-audits.
   'CREDIT_NOTE_SUPERSEDED',
+  // DW-6: approve-time re-derivation of the frozen revaluation value; self-audited by the applier.
+  'REVALUATION_VALUE_MISMATCH',
 ]);
 
 /**
@@ -176,6 +178,7 @@ const APPLIER_SELF_AUDITED_CODES = new Set([
   'CREDIT_NOTE_MISSING',
   'CREDIT_NOTE_UNCITABLE',
   'CREDIT_NOTE_SUPERSEDED',
+  'REVALUATION_VALUE_MISMATCH',
 ]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

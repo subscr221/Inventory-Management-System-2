@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS job_work_offcut_acquisition_proposal (
       AND ((kind = 'acquisition' AND disposal_event_id IS NOT NULL AND revaluation_event_id IS NULL)
         OR (kind = 'revaluation' AND revaluation_event_id IS NOT NULL
           AND disposal_event_id IS NULL)))
-    OR (status = 'superseded' AND decided_at IS NOT NULL AND disposal_event_id IS NULL
+    OR (status = 'superseded' AND decided_at IS NOT NULL AND decided_by IS NOT NULL
+      AND decided_at >= created_at AND disposal_event_id IS NULL
       AND revaluation_event_id IS NULL)
   ),
   -- BSD-5: zero is the free-retention floor, so an acquisition money leg is never negative. A free
@@ -146,7 +147,8 @@ BEGIN
             AND revaluation_event_id IS NULL)
           OR (kind = 'revaluation' AND revaluation_event_id IS NOT NULL
             AND disposal_event_id IS NULL)))
-      OR (status = 'superseded' AND decided_at IS NOT NULL AND disposal_event_id IS NULL
+      OR (status = 'superseded' AND decided_at IS NOT NULL AND decided_by IS NOT NULL
+        AND decided_at >= created_at AND disposal_event_id IS NULL
         AND revaluation_event_id IS NULL)
     );
   ALTER TABLE job_work_offcut_acquisition_proposal

@@ -549,6 +549,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
       // Story 7.8: Offline Technician Workflow and Closure Codes
       'GET /api/v1/maintenance/closure-codes',
+      // Story 7.11: the warranty override reason codes the supervisor desk renders as tiles.
+      'GET /api/v1/maintenance/warranty-override-reason-codes',
       'GET /api/v1/maintenance/sync-conflicts',
       'GET /api/v1/maintenance/sync-conflicts/:conflictId',
       'POST /api/v1/maintenance/sync-conflicts/:conflictId/resolve',

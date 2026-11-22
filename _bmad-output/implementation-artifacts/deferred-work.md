@@ -637,19 +637,25 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-9-9 (2026-09-09)"), 2026-11-22
 location: n/a
 reason: 9.9R-2 The approve applier executes the frozen `proposed_value` with no invariant re-derivation against the live holding at approve time (src/compliance/jobwork-offcut-disposal.ts:2305-2318). A below-band revaluation can land between propose and approve (AC 5 is precisely that case), and while the AC 5 document check catches a superseded document, no guard verifies `proposed_value === billableValueOf(current_quantity, rate)`. Latent while Story 9.10's bar keeps offcut quantity immutable; a future quantity path would silently mint a delta whose value disagrees with quantity x rate.
-status: open
+status: done 2026-11-22
+resolution: resolved by sweep bundle dw-s0-offcut-9-9-hardening
+resolution-undo: 4921f1c49d244f86a45711bf5497bbb60933f6ffa061795b29f7e813728460a8 2026-11-22 7374617475733a206f70656e
 
 ### DW-7: 9.9R-3 The `superseded` lifecycle leg of `chk_job_work_offcut_acq_proposal_lifecycle`
 origin: migrated from legacy ledger ("Deferred from: code review of story-9-9 (2026-09-09)"), 2026-11-22
 location: n/a
 reason: 9.9R-3 The `superseded` lifecycle leg of `chk_job_work_offcut_acq_proposal_lifecycle` (read/projections/job_work_offcut_acquisition_proposal.sql:89-90) allows `decided_at` present with `decided_by` NULL and imposes no `decided_at >= created_at` bound. Reserved for the future withdrawal path; with AC 5 now creating real dead proposals (9.9-1), rows that should later be `superseded` are indistinguishable from ones still genuinely awaiting signature.
-status: open
+status: done 2026-11-22
+resolution: resolved by sweep bundle dw-s0-offcut-9-9-hardening
+resolution-undo: 4921f1c49d244f86a45711bf5497bbb60933f6ffa061795b29f7e813728460a8 2026-11-22 7374617475733a206f70656e
 
 ### DW-8: 9.9R-4 AC 5's superseded-document signal is shadowed when the intervening below-band revaluation
 origin: migrated from legacy ledger ("Deferred from: code review of story-9-9 (2026-09-09)"), 2026-11-22
 location: n/a
 reason: 9.9R-4 AC 5's superseded-document signal is shadowed when the intervening below-band revaluation used a different currency (src/compliance/jobwork-offcut-disposal.ts:2268-2274): the currency check in `latestSupersedableCreditNote` rejects INVALID_PARAMS before the id comparison at :2287 runs, so the CREDIT_NOTE_SUPERSEDED audit row a CFO would expect is never produced.
-status: open
+status: done 2026-11-22
+resolution: resolved by sweep bundle dw-s0-offcut-9-9-hardening
+resolution-undo: 4921f1c49d244f86a45711bf5497bbb60933f6ffa061795b29f7e813728460a8 2026-11-22 7374617475733a206f70656e
 
 
 ## Deferred from: development of story-9-9 (2026-09-09)

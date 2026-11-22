@@ -302,6 +302,7 @@ const PERMANENT_ERROR_CODES = new Set([
   'CREDIT_NOTE_MISSING',
   'CREDIT_NOTE_UNCITABLE',
   'CREDIT_NOTE_SUPERSEDED',
+  'REVALUATION_VALUE_MISMATCH',
   // Story 8.9: damage capture (and the linked replacement indent, and any stock leaving
   // quarantine) refusals an offline retry can never clear.
   'DAMAGE_REASON_INVALID',

@@ -2,7 +2,7 @@
 title: 'Story 7.11 Maintenance Supervisor Desk'
 type: 'feature'
 created: '2026-11-22'
-status: 'in-progress'
+status: 'in-review'
 baseline_revision: '5ecf7e0'
 review_loop_iteration: 0
 followup_review_recommended: false

@@ -14,15 +14,19 @@ import {
   canResolveConflict,
   canSign,
   classifyBoard,
+  countLabel,
   disabledReason,
   firstWarrantyCard,
   hitListLimit,
   isWarrantyOpen,
+  isWarrantyUnknown,
   priorityLabel,
   type AssetStatusRow,
   type DeskCard,
   type FaultRow,
+  type GroupId,
   type OverrideRow,
+  type OverrideState,
   type WorkOrderRow,
 } from './maintenance-desk-model';
 
@@ -51,14 +55,24 @@ interface Board {
   statuses: AssetStatusRow[];
   conflicts: ConflictRow[];
   reasonCodes: string[];
-  overrides: Map<string, OverrideRow | null>;
+  overrides: Map<string, OverrideState>;
   limited: boolean;
+  /** Areas whose read failed; the board shows what loaded (or the last good data) beside a notice. */
+  failed: MessageKey[];
+}
+
+interface Notice {
+  text: string;
+  /** The card's group when the action ran; the notice is dropped once the card leaves it. */
+  group?: GroupId;
 }
 
 type LoadState =
   { kind: 'loading' } | { kind: 'ready' } | { kind: 'needs-connection' } | { kind: 'no-access' };
 
-const WORK_ORDER_STATUSES = ['open', 'overdue', 'in_progress', 'on_hold', 'completed'] as const;
+// Completed work orders are read per out-of-service asset (the list is ordered by due date and
+// capped, so one global read could cut off the newest completions).
+const WORK_ORDER_STATUSES = ['open', 'overdue', 'in_progress', 'on_hold'] as const;
 const RESOLUTION_CODES = ['discarded', 'reapplied_centrally'] as const;
 const DESK_ERRORS: Record<string, MessageKey> = {
   APPROVAL_UNRESOLVED: 'maintenanceDesk.errors.APPROVAL_UNRESOLVED',
@@ -69,9 +83,18 @@ const DESK_ERRORS: Record<string, MessageKey> = {
 async function getJson(
   path: string,
 ): Promise<{ status: number; body: Record<string, unknown> | null }> {
-  const response = await authorizedFetch(path);
-  if (!response.ok) return { status: response.status, body: null };
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  try {
+    const response = await authorizedFetch(path);
+    if (!response.ok) return { status: response.status, body: null };
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  } catch {
+    return { status: 0, body: null };
+  }
+}
+
+async function readOverride(workOrderId: string): Promise<OverrideState> {
+  const res = await getJson(`/api/v1/maintenance/work-orders/${workOrderId}/warranty-overrides`);
+  return res.body ? ((res.body['override'] as OverrideRow | null) ?? null) : 'error';
 }
 
 async function readError(response: Response): Promise<string> {

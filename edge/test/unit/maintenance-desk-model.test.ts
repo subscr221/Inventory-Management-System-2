@@ -6,13 +6,17 @@ import {
   canResolveConflict,
   canSign,
   classifyBoard,
+  countLabel,
   disabledReason,
   firstWarrantyCard,
   hitListLimit,
+  isWarrantyOpen,
+  isWarrantyUnknown,
   priorityLabel,
   type AssetStatusRow,
   type FaultRow,
   type OverrideRow,
+  type OverrideState,
   type WorkOrderRow,
 } from '../../src/components/maintenance-desk-model';
 
@@ -121,7 +125,48 @@ describe('Story 7.11 desk model', () => {
     assert.equal(canResolveConflict('discarded', 'a'.repeat(1001)), false);
   });
 
+  it('Done holds only the latest completed work order per asset, counted once', () => {
+    const asset = { asset_id: 'a-x', asset_tag: 'X' };
+    const g = classifyBoard(
+      [],
+      [
+        wo('old', 'completed', { ...asset, completed_at: '2026-11-01T00:00:00Z' }),
+        wo('new', 'completed', { ...asset, completed_at: '2026-11-20T00:00:00Z' }),
+      ],
+      [{ asset_id: 'a-x', status: 'breakdown' }],
+    );
+    assert.deepEqual(
+      g.done.map((c) => c.id),
+      ['new'],
+    );
+    assert.equal(attentionCounts(g, 0, new Map()).awaitingSignature, 1);
+  });
+
+  it('an asset with a new open work order has no Done card', () => {
+    const asset = { asset_id: 'a-x', asset_tag: 'X' };
+    const g = classifyBoard(
+      [],
+      [wo('done', 'completed', asset), wo('again', 'open', asset)],
+      [{ asset_id: 'a-x', status: 'breakdown' }],
+    );
+    assert.deepEqual(g.done, []);
+    assert.deepEqual(
+      g.assigned.map((c) => c.id),
+      ['again'],
+    );
+  });
+
+  it('a failed override read is unknown, not warranty-open', () => {
+    const g = classifyBoard([], [wo('w1', 'open', { warranty_flagged: true })], []);
+    const overrides = new Map<string, OverrideState>([['w1', 'error']]);
+    assert.equal(isWarrantyOpen(g.assigned[0]!, overrides), false);
+    assert.equal(isWarrantyUnknown(g.assigned[0]!, overrides), true);
+    assert.equal(attentionCounts(g, 0, overrides).warrantyFlagged, 0);
+  });
+
   it('flags a full list and formats priority', () => {
+    assert.equal(countLabel(499), '499');
+    assert.equal(countLabel(500), '500+');
     assert.equal(hitListLimit([499, 500]), true);
     assert.equal(hitListLimit([10]), false);
     assert.equal(priorityLabel('p2'), 'P2');
