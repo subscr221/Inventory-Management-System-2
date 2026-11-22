@@ -1628,6 +1628,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-mi
 location: n/a
 reason: `POST /api/v1/maintenance/spares/amend` has no per-location write check on `location_id`, like every other maintenance write route; a storekeeper scoped to one site can amend another site's levels.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-122: A same-key replay of an amendment with a different body returns the original event and silently drops the new levels (existing platform-wide idempotency gap).
 origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
