@@ -2863,7 +2863,9 @@ origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 
 location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
 source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
 reason: summary: No cap on the number of questions per approver per indent; only the newest is shown. evidence: `indent_info_request` inserts are unbounded and `info_requests[0]` is rendered.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 ### DW-298: `listIndents` info_requested join is not cleared when the requisition is decided or withdrawn, so the chip stays on closed requisitions.
 origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
