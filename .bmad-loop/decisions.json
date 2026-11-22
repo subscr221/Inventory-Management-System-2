@@ -62,6 +62,15 @@
     "label": "Keep open for Epic 3 ruling",
     "resolution": ""
   },
+  "DW-40": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "1",
+    "label": "Keep open until a mapping table exists",
+    "resolution": ""
+  },
   "DW-5": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
