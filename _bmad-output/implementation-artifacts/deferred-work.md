@@ -1378,6 +1378,7 @@ origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-
 location: router.ts
 reason: Refusals emitted before the route handler are never recorded centrally: `withRefusedCaptureRecord` wraps only the handler, but 413 `PAYLOAD_TOO_LARGE` and 400 `INVALID_JSON` come from the body stage in `router.ts`, and the device settles every non-transient 4xx as a permanent refusal. Also unrecorded: every tail capture parked locally behind a STREAM_CONFLICT head (`connector.ts:484` retains without a POST). Retention holds on the device; the central queue has gaps. Deferred 2026-09-17 by user decision.
 status: open
+decision: 2026-11-22 Keep open per prior decision
 
 ### DW-86: `src/api/v1/refused-captures.ts` re-implements the RBAC grant match (`scopesOf`, `grantLocation`, `grants`) instead of `permittedLocationsForModuleScope` in `middleware/rbac.ts`, and lower-cases `location_id` where `rbac.ts:114` compares raw, so `requireRole` and the refused-captures list can disagree on mixed-case assignments. Normalise once where assignments load and reuse the middleware helpers. Same handler hand-rolls the actor and audit context instead of `actorContext(req)` and `auditCtxFor` from `quality.ts`. Deferred 2026-09-17 by user decision.
 origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
