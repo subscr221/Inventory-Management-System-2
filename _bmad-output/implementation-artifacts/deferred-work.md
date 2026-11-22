@@ -2832,6 +2832,7 @@ location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-in
 source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
 reason: summary: The `indent_info_requested` notification is stored and returned by `GET /notifications` but no edge notifications bell or in-app display shows it. evidence: `src/compliance/indent.ts` `applyIndentInfoRequested` emits it; the edge shell has no notifications surface.
 status: open
+decision: 2026-11-22 Build it now — Render indent_info_requested in an edge in-app notifications surface.
 
 ### DW-294: A question always covers every line the approver currently holds; there is no line-scoped question picker.
 origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
