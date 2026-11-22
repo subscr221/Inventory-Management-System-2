@@ -1820,6 +1820,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-r
 location: n/a
 reason: Bootstrap `navigation` is not cached offline: an offline start shows the two-entry placeholder menu, so the base entries appear only once the device reaches the API. Deep links still work; the no-access card is shown only after a live bootstrap (`navigationConfirmed`).
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-149: `assertSiteReadAccess` and the new `assertIndentReadAccess` in `src/api/v1/indents.ts` repeat the procurement scope computation; the duplicated RBAC matcher in `src/api/v1/refused-captures.ts` versus `src/middleware/rbac.ts` (Story 1.14 deferral) is still open, and the bootstrap now filters the employee module out before calling `hasRefusedCaptureReadScope`, a third place that knows the matcher's shape.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
