@@ -2256,7 +2256,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-2-10, pass 2 (2026-10-06)"), 2026-11-22
 location: src/api/v1/items.ts
 reason: `src/api/v1/items.ts` attributes `item.updated` and the item group notification to the gate-authorized assignment, so a caller holding both `warehouse_manager` and `inventory_controller` is recorded as `warehouse_manager` when assigning an item group. Deferred because the item event is an inventory write and the attribution is defensible; the item actor handling is pre-existing. Revisit if audit review wants the group change attributed to `inventory_controller`.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted: gate-authorized assignment attribution is sufficient.
+decision: 2026-11-22 Accept current attribution — Accepted: gate-authorized assignment attribution is sufficient.
 
 ### DW-212: `putRightsBase` reads the existing rights without a row lock before its no-op comparison. Two CEO or Finance Head users changing rights for the same grantee at the same instant can let a real revoke be treated as a no-op and skip its event and notification. Deferred because it needs two grantors racing on one grantee.
 origin: migrated from legacy ledger ("Deferred from: code review of story-2-10, pass 2 (2026-10-06)"), 2026-11-22
