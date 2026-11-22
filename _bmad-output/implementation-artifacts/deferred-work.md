@@ -959,7 +959,8 @@ decision: 2026-11-22 Keep open
 origin: migrated from legacy ledger ("Deferred from: code review of story-13-1 (2026-09-10)"), 2026-11-22
 location: src/adapters/erp/sync.ts
 reason: ERP `snapshot_at` accepts future dates - `applyStockBalance` at `src/adapters/erp/sync.ts` validates `snapshot_at` for ISO-8601 parseability only, not whether the timestamp is in the future. A future-dated snapshot from the ERP adapter would become the "latest" in the variance SQL's `max(snapshot_at)` query, making all current snapshots stale until a later-dated sync arrives. The ERP adapter is a trusted boundary and the condition self-corrects on the next correct sync.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/adapters/erp/sync.ts:496 rejects snapshot_at beyond SNAPSHOT_AT_FUTURE_SKEW_MS
 
 
 ## Deferred from: story-13-2 (2026-09-10)
@@ -968,14 +969,16 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
 location: src/compliance/receiving.ts
 reason: Receiving ignores legacy-received quantity - `src/compliance/receiving.ts:410-430` computes over-receipt from the cumulative `grn_line` sum against `ordered_qty` and never reads `erp_purchase_order_line.open_qty`, so a line partly received in the legacy system before cutover can be over-received post-cutover by the legacy amount. Story 13.2 reports the fact on the open-PO domain report (`received_qty` mismatch between the manifest and `ordered_qty - open_qty`) and does not change receiving. Ruling belongs to Epic 3 (Story 3.4).
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/compliance/receiving.ts:826-836 band adds erp_purchase_order_line.legacy_received_qty to cumulative
 decision: 2026-11-22 Keep open for Epic 3 ruling
 
 ### DW-36: Enterprise-wide `missing_in_source` for BOMs and ERP POs - `bom` and `erp_purchase_order` carry no `site_id`, so `computeDomainFindings` (`src/read/projections/migration_domain_verification.ts`) reports platform documents absent from the manifest across the enterprise for `active_boms` and `open_pos` unless the run body names a `document_ref_prefix` (Story 13.2 Open Question 1). A multi-site wave should scope the manifest, not add a site column to the projections.
 origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
 location: src/read/projections/migration_domain_verification.ts
 reason: Enterprise-wide `missing_in_source` for BOMs and ERP POs - `bom` and `erp_purchase_order` carry no `site_id`, so `computeDomainFindings` (`src/read/projections/migration_domain_verification.ts`) reports platform documents absent from the manifest across the enterprise for `active_boms` and `open_pos` unless the run body names a `document_ref_prefix` (Story 13.2 Open Question 1). A multi-site wave should scope the manifest, not add a site column to the projections.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/api/v1/migration.ts:1549-1556 document_ref_prefix required for bom and erp_purchase_order domains
 
 ### DW-37: Epic 10 loan registers are a second source kind for `custody_registers` - the pilot verifies job-work custody ledgers only (`custody_ledger_entry`, `ownership = 'customer'`). When Epic 10 ships, `computeCustodyRegisters` gains a second platform query behind the same domain name and template; no new domain, event or sign-off flow.
 origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
@@ -1154,7 +1157,8 @@ resolution: already resolved: Entry text states inactive-delegate half closed; f
 origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
 location: n/a
 reason: Rows 326 and 343: Stories 7.9 and 7.10 created (`backlog`, PRE-PILOT). 343 CLOSED 2026-11-21 by Story 7.10.
-status: open
+status: done 2026-11-22
+resolution: already resolved: sprint-status.yaml 7-9 and 7-10 status done
 
 
 ## Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285
@@ -2052,7 +2056,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
 location: n/a
 reason: `CasePhoto`'s object-URL cleanup has a narrow unmount-timing race that can leak one blob URL.
-status: open
+status: done 2026-11-22
+resolution: already resolved: edge/src/components/damage-cases.tsx:1014-1023 cancelled flag checked synchronously before createObjectURL and cleanup revokes; no leak window
 
 ### DW-183: `DamageCases.loadList` collapses any non-403 failure into "needs-connection," obscuring real backend errors.
 origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
@@ -2087,7 +2092,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)"), 2026-11-22
 location: deploy/provision/staging-doa-bands.sh
 reason: `deploy/provision/staging-doa-bands.sh`'s comment for the three new damage bands is a garbled run-on sentence.
-status: open
+status: done 2026-11-22
+resolution: already resolved: deploy/provision/staging-doa-bands.sh:6-7 damage-bands comment now reads as a coherent sentence; bands at lines 51-55
 
 ### DW-188: Runbook row 2.10g packs five distinct actions into one evidence cell with no intermediate checkpoint.
 origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)"), 2026-11-22
@@ -2105,7 +2111,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)"), 2026-11-22
 location: ops-lib.ts
 reason: `ops-lib.ts`/`rehearse.ts`'s remote-request Buffer-body handling for a photo upload wasn't confirmed to match the local-request path's Content-Type care.
-status: open
+status: done 2026-11-22
+resolution: already resolved: deploy/rehearsal/mock/ops-lib.ts:171-183,395-399 default Content-Type then caller headers spread last; operations-smoke.ts:734 passes image/jpeg on both paths
 
 
 ## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)
@@ -2264,7 +2271,8 @@ decision: 2026-11-22 Accept current attribution — Accepted: gate-authorized as
 origin: migrated from legacy ledger ("Deferred from: code review of story-2-10, pass 2 (2026-10-06)"), 2026-11-22
 location: n/a
 reason: `putRightsBase` reads the existing rights without a row lock before its no-op comparison. Two CEO or Finance Head users changing rights for the same grantee at the same instant can let a real revoke be treated as a no-op and skip its event and notification. Deferred because it needs two grantors racing on one grantee.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/api/v1/item-groups.ts:455 getItemGroupRights(userId, client, { forUpdate: true }) locks before the no-op comparison
 
 ### DW-213: `PATCH /api/v1/items/:sku` reads the item with no lock, so two concurrent PATCHes of one SKU can both see the same current group and one can skip `markEverAssigned`. Deferred because `fk_item_master_item_group ON DELETE RESTRICT` is the backstop and `deleteGroupBase` maps its 23503 to 409 `ITEM_GROUP_IN_USE`.
 origin: migrated from legacy ledger ("Deferred from: code review of story-2-10, pass 2 (2026-10-06)"), 2026-11-22
@@ -2313,7 +2321,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-11 (2026-10-21)"), 2026-11-22
 location: n/a
 reason: The stores issue page is reached by URL (`/stores/issue`) and by the `Stores issue` nav entry only when the server bootstrap advertises that name; the bootstrap navigation list is not extended here.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/api/v1/edge.ts:442 bootstrap advertises Stores issue; edge/src/components/navigation/nav-model.ts:28 maps it to /stores/issue
 
 ### DW-220: Slip quantities print as the NUMERIC text the storekeeper typed (`2` or `2.500`); no unit-aware formatting.
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-11 (2026-10-21)"), 2026-11-22
@@ -2334,7 +2343,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
 location: n/a
 reason: Per-line `getLocationByCode` lookups in the issue route loop (N+1); bounded once the lines[] cap lands.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/compliance/indent-issue.ts:58,200 MAX_ISSUE_LINES = 50 cap landed, N+1 lookup now bounded
 
 ### DW-223: Issue audit entry hard-codes `http_status` and logs `indent.line_issued` in `error_code`; matches the existing audit precedent.
 origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
@@ -2380,7 +2390,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
 location: n/a
 reason: Screens for the grant lifecycle (assign, the finance approver's inbox entry, revoke, my grants, the pruning list) are not built; Story 4.8 D14 puts edge UI out of scope. The API and the notifications carry everything a screen needs. The stores issue page shows the grant sentence under a covered line; nothing else changed in the edge app.
-status: open
+status: done 2026-11-22
+resolution: already resolved: edge/src/components/standing-grants.tsx and standing-grants-model.ts exist; sprint-status 4-8 ruling C2 kept the edge grants screen
 
 ### DW-230: Web push of the pruning list follows the platform rule that push is opt-in per event type (`standing_grant_review`, default off) and needs a push subscription; in-app delivery is unconditional. If the pilot wants push by default, seed the preference at provisioning.
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
@@ -2501,7 +2512,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-10-22)"), 2026-11-22
 location: n/a
 reason: Offline putaway.completed: the edge door accepted the event with completed_by unstamped from the device payload and no execute-role gate. Story 3.15 refuses putaway.completed and location.override at the edge door with 403 CENTRAL_ONLY_OPERATION; an offline putaway path needs actor stamping and an execute-role gate before it can ship.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/api/v1/edge.ts:703 refuses putaway.completed and location.override at the edge door with CENTRAL_ONLY_OPERATION
 
 ### DW-248: Alternative-rack list on the putaway detail: the screen offers the suggested bin and scan-or-type; ranked alternatives are deferred.
 origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-10-22)"), 2026-11-22
@@ -2739,13 +2751,15 @@ decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the
 origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
 location: n/a
 reason: Q33 (a receipt item has no released BOM and therefore no inspection plan): ruled that the receipt still posts, the putaway stays held, and `hold_reason = no_inspection_plan` records the gap. Receipts never fail for a plan absence.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/compliance/receiving.ts:1568 sets qcHoldReason no_inspection_plan, receipt still posts
 
 ### DW-281: Q34 (who may disposition a lot): ruled that every accept, reject and split requires a role in `config.quality.qcHeadRoles` (default `qc_head`), enforced in the HTTP handlers and again at the seam. The existing segregation-of-duties check is unchanged and additive.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
 location: n/a
 reason: Q34 (who may disposition a lot): ruled that every accept, reject and split requires a role in `config.quality.qcHeadRoles` (default `qc_head`), enforced in the HTTP handlers and again at the seam. The existing segregation-of-duties check is unchanged and additive.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/api/v1/quality.ts:1562 enforces config.quality.qcHeadRoles in the HTTP handlers
 
 ### DW-282: Q35 (should `inspection_plan.bom_revision_id` become nullable for receipts): ruled closed by D3. A receipt resolves against the item's current released revision, so the column stays NOT NULL and no receipt-specific plan row is created.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
@@ -2757,7 +2771,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
 location: n/a
 reason: Q36 (a held receipt with no lot): ruled that it posts, stays held, and records `hold_reason = no_lot`; no inspection task is opened because there is no lot to govern.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/compliance/receiving.ts:1555 sets qcHoldReason no_lot, receipt posts and stays held
 
 
 ## Deferred from: code review of story-3.18 (2026-11-21)
@@ -2960,7 +2975,8 @@ origin: story-7.11 (2026-11-22)
 location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 reason: Story 7.11: the desk shows a 500+ marker only; the edge worklist total is not wired in.
-status: open
+status: done 2026-11-22
+resolution: already resolved: edge/src/components/maintenance-desk.tsx:248,391 hitListLimit sets board.limited and renders maintenanceDesk.limit notice; countLabel shows 500+
 
 ### DW-311: sync-conflicts location filter applied after LIMIT, so a page can be emptied for location-scoped holders.
 origin: story-7.11 review (2026-11-22)
