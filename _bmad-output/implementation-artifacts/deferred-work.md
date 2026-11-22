@@ -953,6 +953,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-13-1 (
 location: src/read/projections/migration_variance.ts
 reason: Variance key pipe ambiguity - `computeOpeningStockVariances` at `src/read/projections/migration_variance.ts:208` builds the variance key with `|` as separator and no escaping. A `location_code`, `sku`, `lot_number`, or `serial_number` containing a literal `|` could produce an ambiguous key that collides two distinct variances under the partial unique index on `(site_id, variance_key)`. Master-data validation on `item_master` and `location_register` makes pipe characters in these fields unlikely in practice. Fix requires changing the separator across the variance SQL, the TypeScript key builder, and the explanation table's partial unique index.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-34: ERP `snapshot_at` accepts future dates - `applyStockBalance` at `src/adapters/erp/sync.ts` validates `snapshot_at` for ISO-8601 parseability only, not whether the timestamp is in the future. A future-dated snapshot from the ERP adapter would become the "latest" in the variance SQL's `max(snapshot_at)` query, making all current snapshots stale until a later-dated sync arrives. The ERP adapter is a trusted boundary and the condition self-corrects on the next correct sync.
 origin: migrated from legacy ledger ("Deferred from: code review of story-13-1 (2026-09-10)"), 2026-11-22
