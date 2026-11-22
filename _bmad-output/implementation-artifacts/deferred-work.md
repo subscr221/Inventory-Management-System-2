@@ -819,6 +819,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 c
 location: n/a
 reason: 11.5R-13 `GET /api/v1/transfer-requests` has no pagination: no `limit`, no cursor, and the underlying query has neither `LIMIT` nor `ORDER BY`. Review ruling E3 removed the per-row GST fan-out that made this acute, so the route is now a single query returning rows - still unbounded, but no longer a per-row connection storm. Adding `limit` and `cursor` changes an existing route's contract and was ruled out of scope for a review; it belongs to a deliberate pagination sweep across the list routes.
 status: open
+decision: 2026-11-22 Keep open for the sweep
 
 ### DW-30: 11.5R-14 `branch_transfer_valuation` has no column naming the human behind a valuation except on
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
