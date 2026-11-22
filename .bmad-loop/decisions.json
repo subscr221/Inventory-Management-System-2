@@ -178,5 +178,14 @@
     "key": "2",
     "label": "Keep open pending authority ruling",
     "resolution": ""
+  },
+  "DW-96": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "1",
+    "label": "Keep open",
+    "resolution": ""
   }
 }
