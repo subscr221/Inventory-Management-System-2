@@ -2685,7 +2685,9 @@ decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the
 origin: migrated from legacy ledger ("Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)"), 2026-11-22
 location: src/compliance/standing-reroute.ts
 reason: A standing-approval line that lapses at issue and has no resolvable DOA approver stays `standing_approval`; `rerouteLapsedLinesToDoa` reports it in `reroute_failed` and every later issue attempt answers 409 `STANDING_APPROVAL_LAPSED` (`src/compliance/standing-reroute.ts`). Belongs to the no-band fallback of Story 4.9.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 ### DW-274: `getIndent` and the raise response return `line_value` and `unit_price_estimate` to a requester who holds no self-approval limit; only the `mine=true` list withholds `estimated_value` (`src/api/v1/indents.ts`). Pre-existing from Story 4.10 line presentation; check against the Story 1.15 no-number rule.
 origin: migrated from legacy ledger ("Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)"), 2026-11-22
