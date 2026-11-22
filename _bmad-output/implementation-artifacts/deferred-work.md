@@ -600,213 +600,208 @@ Table 10: Deferred from the code review (2026-09-07) of story-9-8
 
 ## Deferred from: code review of story-9-10 (2026-09-08)
 
-- 9.10R-1 Seven byte-identical private copies of `requireUuidParam` exist across
-  `src/api/v1/compliance.ts`, `maintenance.ts`, `production-completions.ts`, `production-material.ts`,
-  `production-orders.ts`, `quality.ts` and `service-orders.ts`. Story 9.10 Task 4 lower-cased all
-  seven and added a near-duplicate rationale comment to each rather than extracting one shared
-  helper. The copies pre-date this story; the duplication is the same divergence hazard Task 1
-  exists to close, one layer up.
-- 9.10R-2 `logRejectionAudit` takes its own pool connection deliberately outside the caller's
-  transaction, and Story 9.10 calls it from inside `applyCycleCountProjection`
-  (`src/compliance/cycle-count.ts:1070`), which runs inside `persistEvent`. Two consequences, both
-  latent while no rebuild harness exists: every retry of the same idempotency key writes another
-  `audit_log` row before the refusal, and any `stock.adjusted` event with `stock_class = 'offcut'`
-  already in `domain_events` can never be re-applied. The connection acquisition also has no
-  timeout, so a refusal storm against a saturated pool waits while holding advisory and row locks.
-  This is the pattern the offcut-domain appliers already use; changing it is a platform decision,
-  not a story-9-10 decision.
-- 9.10R-3 Lower-casing `requireUuidParam` changes retry semantics for any event committed through
-  an upper-case path BEFORE Story 9.10. `src/api/v1/service-orders.ts:2024` compares the stored
-  payload's `service_order_id` against the now-lower-cased path segment, so such a retry answers
-  409 `DUPLICATE_EVENT` instead of replaying. A data check for pre-existing upper-case stream ids
-  would size the exposure; the pilot has no production data yet.
-- 9.10R-4 `test/integration/story-9-10.test.ts:1067` seeds an `owned` and an `offcut` balance at the
-  same lot-less `(sku, location)` grain through the admin pool. The stock-class laundering bar in
-  `cycle-count.ts:1085` and its twin in `stock-balance.ts` exist to prevent exactly that
-  coexistence, so the AC 2 and AC 3 arms assert behaviour on a state the production write paths
-  refuse to create. The refusal they pin is real; the grain it is pinned on is not reachable.
+### DW-1: 9.10R-1 Seven byte-identical private copies of `requireUuidParam` exist across
+origin: migrated from legacy ledger ("Deferred from: code review of story-9-10 (2026-09-08)"), 2026-11-22
+location: src/api/v1/compliance.ts
+reason: 9.10R-1 Seven byte-identical private copies of `requireUuidParam` exist across `src/api/v1/compliance.ts`, `maintenance.ts`, `production-completions.ts`, `production-material.ts`, `production-orders.ts`, `quality.ts` and `service-orders.ts`. Story 9.10 Task 4 lower-cased all seven and added a near-duplicate rationale comment to each rather than extracting one shared helper. The copies pre-date this story; the duplication is the same divergence hazard Task 1 exists to close, one layer up.
+status: open
+
+### DW-2: 9.10R-2 `logRejectionAudit` takes its own pool connection deliberately outside the caller's
+origin: migrated from legacy ledger ("Deferred from: code review of story-9-10 (2026-09-08)"), 2026-11-22
+location: src/compliance/cycle-count.ts
+reason: 9.10R-2 `logRejectionAudit` takes its own pool connection deliberately outside the caller's transaction, and Story 9.10 calls it from inside `applyCycleCountProjection` (`src/compliance/cycle-count.ts:1070`), which runs inside `persistEvent`. Two consequences, both latent while no rebuild harness exists: every retry of the same idempotency key writes another `audit_log` row before the refusal, and any `stock.adjusted` event with `stock_class = 'offcut'` already in `domain_events` can never be re-applied. The connection acquisition also has no timeout, so a refusal storm against a saturated pool waits while holding advisory and row locks. This is the pattern the offcut-domain appliers already use; changing it is a platform decision, not a story-9-10 decision.
+status: open
+
+### DW-3: 9.10R-3 Lower-casing `requireUuidParam` changes retry semantics for any event committed through
+origin: migrated from legacy ledger ("Deferred from: code review of story-9-10 (2026-09-08)"), 2026-11-22
+location: src/api/v1/service-orders.ts
+reason: 9.10R-3 Lower-casing `requireUuidParam` changes retry semantics for any event committed through an upper-case path BEFORE Story 9.10. `src/api/v1/service-orders.ts:2024` compares the stored payload's `service_order_id` against the now-lower-cased path segment, so such a retry answers 409 `DUPLICATE_EVENT` instead of replaying. A data check for pre-existing upper-case stream ids would size the exposure; the pilot has no production data yet.
+status: open
+
+### DW-4: 9.10R-4 `test/integration/story-9-10.test.ts:1067` seeds an `owned` and an `offcut` balance at the
+origin: migrated from legacy ledger ("Deferred from: code review of story-9-10 (2026-09-08)"), 2026-11-22
+location: test/integration/story-9-10.test.ts
+reason: 9.10R-4 `test/integration/story-9-10.test.ts:1067` seeds an `owned` and an `offcut` balance at the same lot-less `(sku, location)` grain through the admin pool. The stock-class laundering bar in `cycle-count.ts:1085` and its twin in `stock-balance.ts` exist to prevent exactly that coexistence, so the AC 2 and AC 3 arms assert behaviour on a state the production write paths refuse to create. The refusal they pin is real; the grain it is pinned on is not reachable.
+status: open
+
 
 ## Deferred from: code review of story-9-9 (2026-09-09)
 
-- 9.9R-1 The holdings read surface (`GET /service-orders/:serviceOrderId/offcut-holdings`,
-  src/api/v1/service-orders.ts:2573-2574) exposes `resolved_approver_actor_id` and `proposed_by`
-  on every pending proposal of both kinds. Pre-existing from Story 9.8; Story 9.9 extends it to
-  revaluation rows. The refusal seams deliberately never name the approver, so the read surface
-  and the refusal message now disagree about what may be disclosed. No release blocker: user ids
-  are not bearer credentials (the story's own position), but the defence-in-depth intent of the
-  anonymous refusals is undermined.
-- 9.9R-2 The approve applier executes the frozen `proposed_value` with no invariant re-derivation
-  against the live holding at approve time (src/compliance/jobwork-offcut-disposal.ts:2305-2318).
-  A below-band revaluation can land between propose and approve (AC 5 is precisely that case), and
-  while the AC 5 document check catches a superseded document, no guard verifies
-  `proposed_value === billableValueOf(current_quantity, rate)`. Latent while Story 9.10's bar
-  keeps offcut quantity immutable; a future quantity path would silently mint a delta whose value
-  disagrees with quantity x rate.
-- 9.9R-3 The `superseded` lifecycle leg of `chk_job_work_offcut_acq_proposal_lifecycle`
-  (read/projections/job_work_offcut_acquisition_proposal.sql:89-90) allows `decided_at` present
-  with `decided_by` NULL and imposes no `decided_at >= created_at` bound. Reserved for the future
-  withdrawal path; with AC 5 now creating real dead proposals (9.9-1), rows that should later be
-  `superseded` are indistinguishable from ones still genuinely awaiting signature.
-- 9.9R-4 AC 5's superseded-document signal is shadowed when the intervening below-band revaluation
-  used a different currency (src/compliance/jobwork-offcut-disposal.ts:2268-2274): the currency
-  check in `latestSupersedableCreditNote` rejects INVALID_PARAMS before the id comparison at :2287
-  runs, so the CREDIT_NOTE_SUPERSEDED audit row a CFO would expect is never produced.
+### DW-5: 9.9R-1 The holdings read surface (`GET /service-orders/:serviceOrderId/offcut-holdings`,
+origin: migrated from legacy ledger ("Deferred from: code review of story-9-9 (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 9.9R-1 The holdings read surface (`GET /service-orders/:serviceOrderId/offcut-holdings`, src/api/v1/service-orders.ts:2573-2574) exposes `resolved_approver_actor_id` and `proposed_by` on every pending proposal of both kinds. Pre-existing from Story 9.8; Story 9.9 extends it to revaluation rows. The refusal seams deliberately never name the approver, so the read surface and the refusal message now disagree about what may be disclosed. No release blocker: user ids are not bearer credentials (the story's own position), but the defence-in-depth intent of the anonymous refusals is undermined.
+status: open
+
+### DW-6: 9.9R-2 The approve applier executes the frozen `proposed_value` with no invariant re-derivation
+origin: migrated from legacy ledger ("Deferred from: code review of story-9-9 (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 9.9R-2 The approve applier executes the frozen `proposed_value` with no invariant re-derivation against the live holding at approve time (src/compliance/jobwork-offcut-disposal.ts:2305-2318). A below-band revaluation can land between propose and approve (AC 5 is precisely that case), and while the AC 5 document check catches a superseded document, no guard verifies `proposed_value === billableValueOf(current_quantity, rate)`. Latent while Story 9.10's bar keeps offcut quantity immutable; a future quantity path would silently mint a delta whose value disagrees with quantity x rate.
+status: open
+
+### DW-7: 9.9R-3 The `superseded` lifecycle leg of `chk_job_work_offcut_acq_proposal_lifecycle`
+origin: migrated from legacy ledger ("Deferred from: code review of story-9-9 (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 9.9R-3 The `superseded` lifecycle leg of `chk_job_work_offcut_acq_proposal_lifecycle` (read/projections/job_work_offcut_acquisition_proposal.sql:89-90) allows `decided_at` present with `decided_by` NULL and imposes no `decided_at >= created_at` bound. Reserved for the future withdrawal path; with AC 5 now creating real dead proposals (9.9-1), rows that should later be `superseded` are indistinguishable from ones still genuinely awaiting signature.
+status: open
+
+### DW-8: 9.9R-4 AC 5's superseded-document signal is shadowed when the intervening below-band revaluation
+origin: migrated from legacy ledger ("Deferred from: code review of story-9-9 (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 9.9R-4 AC 5's superseded-document signal is shadowed when the intervening below-band revaluation used a different currency (src/compliance/jobwork-offcut-disposal.ts:2268-2274): the currency check in `latestSupersedableCreditNote` rejects INVALID_PARAMS before the id comparison at :2287 runs, so the CREDIT_NOTE_SUPERSEDED audit row a CFO would expect is never produced.
+status: open
+
 
 ## Deferred from: development of story-9-9 (2026-09-09)
 
-- 9.9-1 A revaluation proposal that is refused `CREDIT_NOTE_SUPERSEDED` at approve time (AC 5, a
-  below-band revaluation landed between propose and approve) is stale forever, and it still holds
-  the holding's ONE pending slot from
-  `uq_job_work_offcut_acq_proposal_pending`. No further proposal can be raised on that offcut,
-  because Story 9.8 reserved the `superseded` status for a withdrawal path that nothing writes.
-  Story 9.9 deliberately did not invent one: withdrawing a pending signature request is its own
-  authority question (who may withdraw, and is the withdrawal itself a governed decision), and
-  answering it inside a story about forgery would have been a design decision taken by a
-  developer. The refusal message is worded not to promise a re-proposal that would be refused
-  `DUPLICATE_EVENT`, and `test/integration/story-9-9.test.ts` asserts the gap so it cannot change
-  silently.
-- 9.9-2 The edge connector's `PERMANENT_ERROR_CODES` twin
-  (`edge/src/sync/connector.ts`) has drifted from the server's
-  (`src/sync/upload.ts`) again, by nine codes: `BILLING_NOT_READY`, `CREDIT_NOTE_MISSING`,
-  `CREDIT_NOTE_SUPERSEDED`, `CREDIT_NOTE_UNCITABLE`, `KIT_LINE_MISMATCH`,
-  `OFFCUT_ELECTION_MISSING`, `OFFCUT_NOT_RETAINED`, `PROTOTYPE_NOT_SALEABLE` and `SOD_VIOLATION`.
-  All nine pre-date Story 9.9, whose own refusals are already registered server-side; the drift is
-  raised here because Story 9.9 now depends on `CREDIT_NOTE_SUPERSEDED` for an approval refusal,
-  and because the server file's comment asserts the two sets carry the identical block, which is
-  the same invariant the Story 9.5 review found broken. The outcome is currently equivalent for a
-  409, so this is a divergence hazard rather than a live defect. A drift TEST would close the class
-  instead of the instance.
-- 9.9-3 The `GET /service-orders/:serviceOrderId/offcut-holdings` response key
-  `acquisition_proposals` now carries revaluation proposals too, discriminated by each row's
-  `kind`. The key kept its Story 9.8 name because that response shape is already committed and
-  renaming it would break every reader to fix a label. A reader that branches on the key rather
-  than on `kind` will mis-read a revaluation as an acquisition.
+### DW-9: 9.9-1 A revaluation proposal that is refused `CREDIT_NOTE_SUPERSEDED` at approve time (AC 5, a
+origin: migrated from legacy ledger ("Deferred from: development of story-9-9 (2026-09-09)"), 2026-11-22
+location: test/integration/story-9-9.test.ts
+reason: 9.9-1 A revaluation proposal that is refused `CREDIT_NOTE_SUPERSEDED` at approve time (AC 5, a below-band revaluation landed between propose and approve) is stale forever, and it still holds the holding's ONE pending slot from `uq_job_work_offcut_acq_proposal_pending`. No further proposal can be raised on that offcut, because Story 9.8 reserved the `superseded` status for a withdrawal path that nothing writes. Story 9.9 deliberately did not invent one: withdrawing a pending signature request is its own authority question (who may withdraw, and is the withdrawal itself a governed decision), and answering it inside a story about forgery would have been a design decision taken by a developer. The refusal message is worded not to promise a re-proposal that would be refused `DUPLICATE_EVENT`, and `test/integration/story-9-9.test.ts` asserts the gap so it cannot change silently.
+status: open
+
+### DW-10: 9.9-2 The edge connector's `PERMANENT_ERROR_CODES` twin
+origin: migrated from legacy ledger ("Deferred from: development of story-9-9 (2026-09-09)"), 2026-11-22
+location: edge/src/sync/connector.ts
+reason: 9.9-2 The edge connector's `PERMANENT_ERROR_CODES` twin (`edge/src/sync/connector.ts`) has drifted from the server's (`src/sync/upload.ts`) again, by nine codes: `BILLING_NOT_READY`, `CREDIT_NOTE_MISSING`, `CREDIT_NOTE_SUPERSEDED`, `CREDIT_NOTE_UNCITABLE`, `KIT_LINE_MISMATCH`, `OFFCUT_ELECTION_MISSING`, `OFFCUT_NOT_RETAINED`, `PROTOTYPE_NOT_SALEABLE` and `SOD_VIOLATION`. All nine pre-date Story 9.9, whose own refusals are already registered server-side; the drift is raised here because Story 9.9 now depends on `CREDIT_NOTE_SUPERSEDED` for an approval refusal, and because the server file's comment asserts the two sets carry the identical block, which is the same invariant the Story 9.5 review found broken. The outcome is currently equivalent for a 409, so this is a divergence hazard rather than a live defect. A drift TEST would close the class instead of the instance.
+status: open
+
+### DW-11: 9.9-3 The `GET /service-orders/:serviceOrderId/offcut-holdings` response key
+origin: migrated from legacy ledger ("Deferred from: development of story-9-9 (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 9.9-3 The `GET /service-orders/:serviceOrderId/offcut-holdings` response key `acquisition_proposals` now carries revaluation proposals too, discriminated by each row's `kind`. The key kept its Story 9.8 name because that response shape is already committed and renaming it would break every reader to fix a label. A reader that branches on the key rather than on `kind` will mis-read a revaluation as an acquisition.
+status: open
+
 
 ## Deferred from: code review of story-11-2 (2026-09-09)
 
-- 11.2R-1 `POST /api/v1/events` has no frontline-role denial for `dispatch.packed`,
-  `dispatch.shipping_documents_generated` or `dispatch.dispatched`. Only the edge door
-  (`src/api/v1/edge.ts`, `DISPATCH_DENIED_FRONTLINE_ROLES`) refuses `store_assistant` and
-  `warehouse_operator`; the generic events door checks module scope plus
-  `assertPayloadSiteWriteAccess` only, so a `warehouse_operator` with warehouse write scope can
-  post any `dispatch.*` event directly. Pre-existing since Story 3.7; Story 11.2 closes the hole for
-  its own `dispatch.irn_recorded` only. A door-level role gate keyed by event type (the
-  `OFFCUT_VALUATION_EVENT_TYPES` precedent) would close the class.
-- 11.2R-2 IRN applier refusals other than `IRN_MISSING` (`DISPATCH_IRN_CONFLICT`,
-  `DISPATCH_ORDER_SITE_MISMATCH`) leave no `audit_log` row: the store audits only on success and the
-  applier self-audits only the statutory refusal. This matches every sibling applier; raised because
-  a competing-invoice conflict is a compliance-relevant event with no trace.
-- 11.2R-3 `also_covers` on `POST /api/v1/dispatch/:dispatchOrderId/irn` is uncapped: N site
-  resolutions, N ERP-line reads and N advisory locks per request. No list-bearing route in the
-  codebase caps its list today; a shared cap belongs to a sweep, not one route.
-- 11.2R-4 `chk_dispatch_irn_present` uses `btrim` (spaces only), so a tab-only `irn_ext` passes the
-  DB constraint, and there is no CHECK on a blank `so_number_ext`. Both app doors `trim()` before
-  insert, so this is reachable only by direct SQL.
-- 11.2R-5 No uniqueness on `irn_ext` across invoice numbers: the same IRN under two different
-  `invoice_number_ext` values on different orders is accepted. The IRN is ERP-minted and the IRP
-  guarantees uniqueness upstream; the platform records, it does not mint.
+### DW-12: 11.2R-1 `POST /api/v1/events` has no frontline-role denial for `dispatch.packed`,
+origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
+location: src/api/v1/edge.ts
+reason: 11.2R-1 `POST /api/v1/events` has no frontline-role denial for `dispatch.packed`, `dispatch.shipping_documents_generated` or `dispatch.dispatched`. Only the edge door (`src/api/v1/edge.ts`, `DISPATCH_DENIED_FRONTLINE_ROLES`) refuses `store_assistant` and `warehouse_operator`; the generic events door checks module scope plus `assertPayloadSiteWriteAccess` only, so a `warehouse_operator` with warehouse write scope can post any `dispatch.*` event directly. Pre-existing since Story 3.7; Story 11.2 closes the hole for its own `dispatch.irn_recorded` only. A door-level role gate keyed by event type (the `OFFCUT_VALUATION_EVENT_TYPES` precedent) would close the class.
+status: open
+
+### DW-13: 11.2R-2 IRN applier refusals other than `IRN_MISSING` (`DISPATCH_IRN_CONFLICT`,
+origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 11.2R-2 IRN applier refusals other than `IRN_MISSING` (`DISPATCH_IRN_CONFLICT`, `DISPATCH_ORDER_SITE_MISMATCH`) leave no `audit_log` row: the store audits only on success and the applier self-audits only the statutory refusal. This matches every sibling applier; raised because a competing-invoice conflict is a compliance-relevant event with no trace.
+status: open
+
+### DW-14: 11.2R-3 `also_covers` on `POST /api/v1/dispatch/:dispatchOrderId/irn` is uncapped: N site
+origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 11.2R-3 `also_covers` on `POST /api/v1/dispatch/:dispatchOrderId/irn` is uncapped: N site resolutions, N ERP-line reads and N advisory locks per request. No list-bearing route in the codebase caps its list today; a shared cap belongs to a sweep, not one route.
+status: open
+
+### DW-15: 11.2R-4 `chk_dispatch_irn_present` uses `btrim` (spaces only), so a tab-only `irn_ext` passes the
+origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 11.2R-4 `chk_dispatch_irn_present` uses `btrim` (spaces only), so a tab-only `irn_ext` passes the DB constraint, and there is no CHECK on a blank `so_number_ext`. Both app doors `trim()` before insert, so this is reachable only by direct SQL.
+status: open
+
+### DW-16: 11.2R-5 No uniqueness on `irn_ext` across invoice numbers: the same IRN under two different
+origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 11.2R-5 No uniqueness on `irn_ext` across invoice numbers: the same IRN under two different `invoice_number_ext` values on different orders is accepted. The IRN is ERP-minted and the IRP guarantees uniqueness upstream; the platform records, it does not mint.
+status: open
+
 
 
 ## Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)
 
-- 11.5R-1 `metadata.occurred_at` is bounded only in the future (5 minutes, `src/events/store.ts:479`)
-  and has no lower bound, so any gate keyed on `gateBusinessDateOf` can be driven from a
-  caller-supplied backdated instant. Story 11.5 makes this load-bearing for statutory GSTIN
-  classification and dated valuation-config selection, but the contract is repo-wide (every quality,
-  dispatch and jobwork gate reads the same field) and belongs to a sweep, not one story.
-- 11.5R-2 `assertAndApplyTransferRequestCompliance` (`src/compliance/transfer-request.ts:1133`) is
-  dead code: the live dispatch is the hand-maintained applier list in `src/events/store.ts:584` and
-  `:888`. Nothing executes the seam, so the two lists can diverge silently. Story 11.5 doubled the
-  size of the duplicate by extending both in parallel.
-- 11.5R-3 Lock-order inversion: the transfer applier takes the `stock_balance` row
-  (`transfer-request.ts:576`) before `lockInventoryValuation` (`:429`), while
-  `src/compliance/inventory-valuation.ts:323` takes `inventory_valuation` first. A `cost_plus`
-  transfer concurrent with a `stock.issued` on the same SKU can deadlock. The `cost_plus` path is
-  new, but the ordering convention gap is repo-wide.
-- 11.5R-4 No intra-state versus inter-state discriminator, so the CGST and SGST versus IGST split has
-  no input from this platform. `site_gstin.state_code_ext` (`read/projections/site_gstin.sql:32`) is
-  nullable, never validated against the GSTIN's own first two digits, and never read. Outside the
-  Story 11.5 AC set (the ERP computes tax), but the platform presents itself as the system of record
-  for the document register.
-- 11.5R-5 A partial projection rebuild never rebuilds valuations: `applyTransferRequestProjection`
-  (`transfer-request.ts:470`) returns early when the `transfer_request` row already exists, before
-  any classification runs. Truncating `branch_transfer_valuation` alone and replaying leaves every
-  transfer unvalued. Matches the existing rebuild convention for sibling projections.
-- 11.5R-6 The valuation override overwrites `branch_transfer_valuation` in place
-  (`src/read/projections/branch_transfer_gst.ts:179`) including `source_event_id`, with no history
-  table, so a filed statutory figure is mutated and the prior value survives only in the event log.
-  Consistent with every other projection in the codebase; raised because the retention requirement
-  on this record is eight years.
-- 11.5R-7 An out-of-order `transfer_request.gst_document_recorded` or
-  `transfer_request.valuation_overridden` arriving before its `transfer_request.created` gets a 404
-  from `lockBranchTransfer` (`transfer-request.ts:1289`), which `PERMANENT_ERROR_CODES` treats as
-  terminal, so a legitimately early event is dead-lettered rather than retried. Pre-existing store
-  contract shared by every parent-child applier.
+### DW-17: 11.5R-1 `metadata.occurred_at` is bounded only in the future (5 minutes, `src/events/store.ts:479`)
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
+location: src/events/store.ts
+reason: 11.5R-1 `metadata.occurred_at` is bounded only in the future (5 minutes, `src/events/store.ts:479`) and has no lower bound, so any gate keyed on `gateBusinessDateOf` can be driven from a caller-supplied backdated instant. Story 11.5 makes this load-bearing for statutory GSTIN classification and dated valuation-config selection, but the contract is repo-wide (every quality, dispatch and jobwork gate reads the same field) and belongs to a sweep, not one story.
+status: open
+
+### DW-18: 11.5R-2 `assertAndApplyTransferRequestCompliance` (`src/compliance/transfer-request.ts:1133`) is
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
+location: src/compliance/transfer-request.ts
+reason: 11.5R-2 `assertAndApplyTransferRequestCompliance` (`src/compliance/transfer-request.ts:1133`) is dead code: the live dispatch is the hand-maintained applier list in `src/events/store.ts:584` and `:888`. Nothing executes the seam, so the two lists can diverge silently. Story 11.5 doubled the size of the duplicate by extending both in parallel.
+status: open
+
+### DW-19: 11.5R-3 Lock-order inversion: the transfer applier takes the `stock_balance` row
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
+location: transfer-request.ts
+reason: 11.5R-3 Lock-order inversion: the transfer applier takes the `stock_balance` row (`transfer-request.ts:576`) before `lockInventoryValuation` (`:429`), while `src/compliance/inventory-valuation.ts:323` takes `inventory_valuation` first. A `cost_plus` transfer concurrent with a `stock.issued` on the same SKU can deadlock. The `cost_plus` path is new, but the ordering convention gap is repo-wide.
+status: open
+
+### DW-20: 11.5R-4 No intra-state versus inter-state discriminator, so the CGST and SGST versus IGST split has
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
+location: read/projections/site_gstin.sql
+reason: 11.5R-4 No intra-state versus inter-state discriminator, so the CGST and SGST versus IGST split has no input from this platform. `site_gstin.state_code_ext` (`read/projections/site_gstin.sql:32`) is nullable, never validated against the GSTIN's own first two digits, and never read. Outside the Story 11.5 AC set (the ERP computes tax), but the platform presents itself as the system of record for the document register.
+status: open
+
+### DW-21: 11.5R-5 A partial projection rebuild never rebuilds valuations: `applyTransferRequestProjection`
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
+location: transfer-request.ts
+reason: 11.5R-5 A partial projection rebuild never rebuilds valuations: `applyTransferRequestProjection` (`transfer-request.ts:470`) returns early when the `transfer_request` row already exists, before any classification runs. Truncating `branch_transfer_valuation` alone and replaying leaves every transfer unvalued. Matches the existing rebuild convention for sibling projections.
+status: open
+
+### DW-22: 11.5R-6 The valuation override overwrites `branch_transfer_valuation` in place
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
+location: src/read/projections/branch_transfer_gst.ts
+reason: 11.5R-6 The valuation override overwrites `branch_transfer_valuation` in place (`src/read/projections/branch_transfer_gst.ts:179`) including `source_event_id`, with no history table, so a filed statutory figure is mutated and the prior value survives only in the event log. Consistent with every other projection in the codebase; raised because the retention requirement on this record is eight years.
+status: open
+
+### DW-23: 11.5R-7 An out-of-order `transfer_request.gst_document_recorded` or
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
+location: transfer-request.ts
+reason: 11.5R-7 An out-of-order `transfer_request.gst_document_recorded` or `transfer_request.valuation_overridden` arriving before its `transfer_request.created` gets a 404 from `lockBranchTransfer` (`transfer-request.ts:1289`), which `PERMANENT_ERROR_CODES` treats as terminal, so a legitimately early event is dead-lettered rather than retried. Pre-existing store contract shared by every parent-child applier.
+status: open
+
 
 ## Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)
 
-- 11.5R-8 The two `PERMANENT_ERROR_CODES` sets are NOT identical, despite the comment Story 11.5
-  adds to both asserting the twin carries the identical list. Nine Epic 9 codes are in
-  `src/sync/upload.ts` and absent from `edge/src/sync/connector.ts`: `PROTOTYPE_NOT_SALEABLE`,
-  `KIT_LINE_MISMATCH`, `OFFCUT_ELECTION_MISSING`, `BILLING_NOT_READY`, `SOD_VIOLATION`,
-  `OFFCUT_NOT_RETAINED`, `CREDIT_NOTE_MISSING`, `CREDIT_NOTE_UNCITABLE`, `CREDIT_NOTE_SUPERSEDED`
-  (188 versus 179 entries). Edge queues retry those nine forever. Pre-existing Epic 9 drift, not
-  this story, but it is now provable in one command and should be swept before pilot.
-- 11.5R-9 GSTIN check digits are never verified anywhere in the platform. `GSTIN_REGEX`
-  (`src/compliance/supplier.ts:23`) is shape-only, so a transposed character yields a structurally
-  valid but statutorily invalid GSTIN, which then drives branch-transfer classification and supplier
-  three-way match alike. Shared with the supplier side, so it belongs to a sweep.
-- 11.5R-10 `effective_from` on a site GSTIN registration is unbounded in both directions
-  (`src/api/v1/sites.ts:244-262` validates only the calendar date and `to >= from`). A registration
-  dated 1900-01-01 or 2999-01-01 is accepted; the far-future one silently produces a site with no
-  CURRENTLY effective registration while returning 201.
-- 11.5R-11 The `gst` block on `GET /api/v1/transfer-requests/:id` exposes both GSTINs and the
-  taxable value to any inventory reader, while the configuration routes restrict GSTIN reads to
-  `finance_controller` and `gst_officer` (`src/api/v1/sites.ts:352`). The restriction on the
-  configuration route is therefore decorative.
-- 11.5R-12 `getTransferRequestById` is read OUTSIDE the persisting transaction in the valuation
-  override and GST document routes (`src/api/v1/transfer-requests.ts:1299, 1368`), so
-  `business_stream` and the site scope are decided against a snapshot the applier's `FOR UPDATE`
-  lock does not cover. Benign today only because the applier re-locks and re-validates everything
-  that matters.
-- 11.5R-13 `GET /api/v1/transfer-requests` has no pagination: no `limit`, no cursor, and the
-  underlying query has neither `LIMIT` nor `ORDER BY`. Review ruling E3 removed the per-row GST
-  fan-out that made this acute, so the route is now a single query returning rows - still unbounded,
-  but no longer a per-row connection storm. Adding `limit` and `cursor` changes an existing route's
-  contract and was ruled out of scope for a review; it belongs to a deliberate pagination sweep
-  across the list routes.
-- 11.5R-14 `branch_transfer_valuation` has no column naming the human behind a valuation except on
-  the override path. The table's CHECK reserves `overridden_by` for `basis_source = 'override'`, so
-  the GST officer's FIRST valuation of a transfer left unvalued by ruling E1 lands with
-  `basis_source` of `declared` or `config_default` and both attribution columns NULL - at row level
-  indistinguishable from a value the ordinary creator declared at create time. Auditing who set a
-  filed taxable value requires joining out to the event store through `source_event_id`; the table
-  alone cannot answer it. Worse, the `reason_code` that the payload requires and the shape check
-  enforces on `transfer_request.valuation_overridden` is validated and then DISCARDED on the
-  first-valuation path, which is worse than not asking for it.
-  Wanted shape: add `valued_by UUID NOT NULL` populated on EVERY write path from
-  `envelope.metadata.actor.user_id` (at create, at the officer's first valuation, and at override,
-  where it duplicates `overridden_by` - `overridden_by` then means "this row was re-valued, by
-  them" and `valued_by` means "the current value is theirs"), plus `valued_reason_code TEXT NULL`
-  so the reason code stops being dropped. Leave both existing CHECKs untouched; `valued_by` is
-  additive. Cost: one DDL migration, a backfill from `source_event_id` (the pilot has not gone live,
-  so the row count is test data), the mapper, row type and insert input in
-  `src/read/projections/branch_transfer_gst.ts`, both write sites in
-  `src/compliance/transfer-request.ts`, and a schema-drift pin.
-- 11.5R-15 CLOSED 2026-09-09 by the edge-door sweep (see the entry below this list). SECURITY, Story 11.2, found while fixing the Story 11.5 twin. The edge door's gate on
-  `dispatch.irn_recorded` (`src/api/v1/edge.ts`, the block just above the 11.5 gate) has TWO gaps
-  against its events-door twin `assertDispatchIrnFunctionAccess`. (1) It is a DENYLIST, not an
-  allowlist: the events door requires membership of `{dispatch_clerk, warehouse_manager}`, while the
-  edge door admits any role NOT named `store_assistant` or `warehouse_operator` - so `gate_officer`,
-  `qc_inspector` or `gst_officer` can record an IRN over edge sync and lift the statutory
-  IRN-before-dispatch block that the REST route denies them. (2) There is no site check at all, the
-  same cross-site class closed centrally on 2026-09-06 with `assertPayloadSiteWriteAccess`, which
-  appears nowhere in `edge.ts` - an operator at site A can record an IRN for a site-B dispatch. The
-  three older SoD blocks above it (`dispatch.packed`,
-  `dispatch.shipping_documents_generated`, `dispatch.dispatched`) share gap 2; gap 1 is by design
-  for those, since Story 3.7 deliberately shipped a denylist. This was NOT fixed because it is
-  outside Story 11.5, but it is a live privilege-escalation and cross-site hole on a statutory gate
-  and should be swept before pilot, alongside the general edge-door site sweep.
+### DW-24: 11.5R-8 The two `PERMANENT_ERROR_CODES` sets are NOT identical, despite the comment Story 11.5
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
+location: src/sync/upload.ts
+reason: 11.5R-8 The two `PERMANENT_ERROR_CODES` sets are NOT identical, despite the comment Story 11.5 adds to both asserting the twin carries the identical list. Nine Epic 9 codes are in `src/sync/upload.ts` and absent from `edge/src/sync/connector.ts`: `PROTOTYPE_NOT_SALEABLE`, `KIT_LINE_MISMATCH`, `OFFCUT_ELECTION_MISSING`, `BILLING_NOT_READY`, `SOD_VIOLATION`, `OFFCUT_NOT_RETAINED`, `CREDIT_NOTE_MISSING`, `CREDIT_NOTE_UNCITABLE`, `CREDIT_NOTE_SUPERSEDED` (188 versus 179 entries). Edge queues retry those nine forever. Pre-existing Epic 9 drift, not this story, but it is now provable in one command and should be swept before pilot.
+status: open
+
+### DW-25: 11.5R-9 GSTIN check digits are never verified anywhere in the platform. `GSTIN_REGEX`
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
+location: src/compliance/supplier.ts
+reason: 11.5R-9 GSTIN check digits are never verified anywhere in the platform. `GSTIN_REGEX` (`src/compliance/supplier.ts:23`) is shape-only, so a transposed character yields a structurally valid but statutorily invalid GSTIN, which then drives branch-transfer classification and supplier three-way match alike. Shared with the supplier side, so it belongs to a sweep.
+status: open
+
+### DW-26: 11.5R-10 `effective_from` on a site GSTIN registration is unbounded in both directions
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
+location: src/api/v1/sites.ts
+reason: 11.5R-10 `effective_from` on a site GSTIN registration is unbounded in both directions (`src/api/v1/sites.ts:244-262` validates only the calendar date and `to >= from`). A registration dated 1900-01-01 or 2999-01-01 is accepted; the far-future one silently produces a site with no CURRENTLY effective registration while returning 201.
+status: open
+
+### DW-27: 11.5R-11 The `gst` block on `GET /api/v1/transfer-requests/:id` exposes both GSTINs and the
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
+location: src/api/v1/sites.ts
+reason: 11.5R-11 The `gst` block on `GET /api/v1/transfer-requests/:id` exposes both GSTINs and the taxable value to any inventory reader, while the configuration routes restrict GSTIN reads to `finance_controller` and `gst_officer` (`src/api/v1/sites.ts:352`). The restriction on the configuration route is therefore decorative.
+status: open
+
+### DW-28: 11.5R-12 `getTransferRequestById` is read OUTSIDE the persisting transaction in the valuation
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 11.5R-12 `getTransferRequestById` is read OUTSIDE the persisting transaction in the valuation override and GST document routes (`src/api/v1/transfer-requests.ts:1299, 1368`), so `business_stream` and the site scope are decided against a snapshot the applier's `FOR UPDATE` lock does not cover. Benign today only because the applier re-locks and re-validates everything that matters.
+status: open
+
+### DW-29: 11.5R-13 `GET /api/v1/transfer-requests` has no pagination: no `limit`, no cursor, and the
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
+location: n/a
+reason: 11.5R-13 `GET /api/v1/transfer-requests` has no pagination: no `limit`, no cursor, and the underlying query has neither `LIMIT` nor `ORDER BY`. Review ruling E3 removed the per-row GST fan-out that made this acute, so the route is now a single query returning rows - still unbounded, but no longer a per-row connection storm. Adding `limit` and `cursor` changes an existing route's contract and was ruled out of scope for a review; it belongs to a deliberate pagination sweep across the list routes.
+status: open
+
+### DW-30: 11.5R-14 `branch_transfer_valuation` has no column naming the human behind a valuation except on
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
+location: src/read/projections/branch_transfer_gst.ts
+reason: 11.5R-14 `branch_transfer_valuation` has no column naming the human behind a valuation except on the override path. The table's CHECK reserves `overridden_by` for `basis_source = 'override'`, so the GST officer's FIRST valuation of a transfer left unvalued by ruling E1 lands with `basis_source` of `declared` or `config_default` and both attribution columns NULL - at row level indistinguishable from a value the ordinary creator declared at create time. Auditing who set a filed taxable value requires joining out to the event store through `source_event_id`; the table alone cannot answer it. Worse, the `reason_code` that the payload requires and the shape check enforces on `transfer_request.valuation_overridden` is validated and then DISCARDED on the first-valuation path, which is worse than not asking for it. Wanted shape: add `valued_by UUID NOT NULL` populated on EVERY write path from `envelope.metadata.actor.user_id` (at create, at the officer's first valuation, and at override, where it duplicates `overridden_by` - `overridden_by` then means "this row was re-valued, by them" and `valued_by` means "the current value is theirs"), plus `valued_reason_code TEXT NULL` so the reason code stops being dropped. Leave both existing CHECKs untouched; `valued_by` is additive. Cost: one DDL migration, a backfill from `source_event_id` (the pilot has not gone live, so the row count is test data), the mapper, row type and insert input in `src/read/projections/branch_transfer_gst.ts`, both write sites in `src/compliance/transfer-request.ts`, and a schema-drift pin.
+status: open
+
+### DW-31: 11.5R-15 CLOSED 2026-09-09 by the edge-door sweep (see the entry below this list). SECURITY, Story 11.2, found while fixing the Story 11.5 twin. The edge door's gate on
+origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
+location: src/api/v1/edge.ts
+reason: 11.5R-15 CLOSED 2026-09-09 by the edge-door sweep (see the entry below this list). SECURITY, Story 11.2, found while fixing the Story 11.5 twin. The edge door's gate on `dispatch.irn_recorded` (`src/api/v1/edge.ts`, the block just above the 11.5 gate) has TWO gaps against its events-door twin `assertDispatchIrnFunctionAccess`. (1) It is a DENYLIST, not an allowlist: the events door requires membership of `{dispatch_clerk, warehouse_manager}`, while the edge door admits any role NOT named `store_assistant` or `warehouse_operator` - so `gate_officer`, `qc_inspector` or `gst_officer` can record an IRN over edge sync and lift the statutory IRN-before-dispatch block that the REST route denies them. (2) There is no site check at all, the same cross-site class closed centrally on 2026-09-06 with `assertPayloadSiteWriteAccess`, which appears nowhere in `edge.ts` - an operator at site A can record an IRN for a site-B dispatch. The three older SoD blocks above it (`dispatch.packed`, `dispatch.shipping_documents_generated`, `dispatch.dispatched`) share gap 2; gap 1 is by design for those, since Story 3.7 deliberately shipped a denylist. This was NOT fixed because it is outside Story 11.5, but it is a live privilege-escalation and cross-site hole on a statutory gate and should be swept before pilot, alongside the general edge-door site sweep.
+status: open
+
 
 
 ## Edge-door site-scope sweep (2026-09-09) - CLOSES 11.5R-15
@@ -913,40 +908,150 @@ Suite after the sweep and its follow-up: 2111/2111, 0 failures.
 
 ## Deferred from: code review of story-13-1 (2026-09-10)
 
-- Import stage check race - route-level `readMigrationStage` at `src/api/v1/migration.ts:624` runs outside a transaction; a concurrent promotion mid-import could flip the stage to `dry_run` after the check but before row events persist. The applier's locked re-check at `src/compliance/migration-opening-stock.ts:406-407` refuses with STAGE_LOCKED, so the failure is noisy (import aborts), not silent. A transaction-scoped lock on the stage row for the entire import duration (potentially minutes for 10,000 rows) has its own contention problems. Narrow race with acceptable failure mode.
-- Variance key pipe ambiguity - `computeOpeningStockVariances` at `src/read/projections/migration_variance.ts:208` builds the variance key with `|` as separator and no escaping. A `location_code`, `sku`, `lot_number`, or `serial_number` containing a literal `|` could produce an ambiguous key that collides two distinct variances under the partial unique index on `(site_id, variance_key)`. Master-data validation on `item_master` and `location_register` makes pipe characters in these fields unlikely in practice. Fix requires changing the separator across the variance SQL, the TypeScript key builder, and the explanation table's partial unique index.
-- ERP `snapshot_at` accepts future dates - `applyStockBalance` at `src/adapters/erp/sync.ts` validates `snapshot_at` for ISO-8601 parseability only, not whether the timestamp is in the future. A future-dated snapshot from the ERP adapter would become the "latest" in the variance SQL's `max(snapshot_at)` query, making all current snapshots stale until a later-dated sync arrives. The ERP adapter is a trusted boundary and the condition self-corrects on the next correct sync.
+### DW-32: Import stage check race - route-level `readMigrationStage` at `src/api/v1/migration.ts:624` runs outside a transaction; a concurrent promotion mid-import could flip the stage to `dry_run` after the check but before row events persist. The applier's locked re-check at `src/compliance/migration-opening-stock.ts:406-407` refuses with STAGE_LOCKED, so the failure is noisy (import aborts), not silent. A transaction-scoped lock on the stage row for the entire import duration (potentially minutes for 10,000 rows) has its own contention problems. Narrow race with acceptable failure mode.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-1 (2026-09-10)"), 2026-11-22
+location: src/api/v1/migration.ts
+reason: Import stage check race - route-level `readMigrationStage` at `src/api/v1/migration.ts:624` runs outside a transaction; a concurrent promotion mid-import could flip the stage to `dry_run` after the check but before row events persist. The applier's locked re-check at `src/compliance/migration-opening-stock.ts:406-407` refuses with STAGE_LOCKED, so the failure is noisy (import aborts), not silent. A transaction-scoped lock on the stage row for the entire import duration (potentially minutes for 10,000 rows) has its own contention problems. Narrow race with acceptable failure mode.
+status: open
+
+### DW-33: Variance key pipe ambiguity - `computeOpeningStockVariances` at `src/read/projections/migration_variance.ts:208` builds the variance key with `|` as separator and no escaping. A `location_code`, `sku`, `lot_number`, or `serial_number` containing a literal `|` could produce an ambiguous key that collides two distinct variances under the partial unique index on `(site_id, variance_key)`. Master-data validation on `item_master` and `location_register` makes pipe characters in these fields unlikely in practice. Fix requires changing the separator across the variance SQL, the TypeScript key builder, and the explanation table's partial unique index.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-1 (2026-09-10)"), 2026-11-22
+location: src/read/projections/migration_variance.ts
+reason: Variance key pipe ambiguity - `computeOpeningStockVariances` at `src/read/projections/migration_variance.ts:208` builds the variance key with `|` as separator and no escaping. A `location_code`, `sku`, `lot_number`, or `serial_number` containing a literal `|` could produce an ambiguous key that collides two distinct variances under the partial unique index on `(site_id, variance_key)`. Master-data validation on `item_master` and `location_register` makes pipe characters in these fields unlikely in practice. Fix requires changing the separator across the variance SQL, the TypeScript key builder, and the explanation table's partial unique index.
+status: open
+
+### DW-34: ERP `snapshot_at` accepts future dates - `applyStockBalance` at `src/adapters/erp/sync.ts` validates `snapshot_at` for ISO-8601 parseability only, not whether the timestamp is in the future. A future-dated snapshot from the ERP adapter would become the "latest" in the variance SQL's `max(snapshot_at)` query, making all current snapshots stale until a later-dated sync arrives. The ERP adapter is a trusted boundary and the condition self-corrects on the next correct sync.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-1 (2026-09-10)"), 2026-11-22
+location: src/adapters/erp/sync.ts
+reason: ERP `snapshot_at` accepts future dates - `applyStockBalance` at `src/adapters/erp/sync.ts` validates `snapshot_at` for ISO-8601 parseability only, not whether the timestamp is in the future. A future-dated snapshot from the ERP adapter would become the "latest" in the variance SQL's `max(snapshot_at)` query, making all current snapshots stale until a later-dated sync arrives. The ERP adapter is a trusted boundary and the condition self-corrects on the next correct sync.
+status: open
+
 
 ## Deferred from: story-13-2 (2026-09-10)
 
-- Receiving ignores legacy-received quantity - `src/compliance/receiving.ts:410-430` computes over-receipt from the cumulative `grn_line` sum against `ordered_qty` and never reads `erp_purchase_order_line.open_qty`, so a line partly received in the legacy system before cutover can be over-received post-cutover by the legacy amount. Story 13.2 reports the fact on the open-PO domain report (`received_qty` mismatch between the manifest and `ordered_qty - open_qty`) and does not change receiving. Ruling belongs to Epic 3 (Story 3.4).
-- Enterprise-wide `missing_in_source` for BOMs and ERP POs - `bom` and `erp_purchase_order` carry no `site_id`, so `computeDomainFindings` (`src/read/projections/migration_domain_verification.ts`) reports platform documents absent from the manifest across the enterprise for `active_boms` and `open_pos` unless the run body names a `document_ref_prefix` (Story 13.2 Open Question 1). A multi-site wave should scope the manifest, not add a site column to the projections.
-- Epic 10 loan registers are a second source kind for `custody_registers` - the pilot verifies job-work custody ledgers only (`custody_ledger_entry`, `ownership = 'customer'`). When Epic 10 ships, `computeCustodyRegisters` gains a second platform query behind the same domain name and template; no new domain, event or sign-off flow.
-- Verification findings are trusted from the event payload - the `migration.domain.verification_run` applier inserts the findings the route computed (Story 13.2 Binding Decision 4) and does not recompute; a re-run is a new event. A replay of `domain_events` on a database whose platform tables differ reproduces the original report, which is the intended audit semantics, not a live recomputation.
-- `SIGNED_NUMERIC_REGEX` in `src/adapters/erp/sync.ts` was declared by Story 13.1 and never read (`tsc --noEmit` TS6133 on the 13.1 tree); Story 13.2 removed it. The 13.1 record's "tsc 0" figure was taken before that constant landed.
+### DW-35: Receiving ignores legacy-received quantity - `src/compliance/receiving.ts:410-430` computes over-receipt from the cumulative `grn_line` sum against `ordered_qty` and never reads `erp_purchase_order_line.open_qty`, so a line partly received in the legacy system before cutover can be over-received post-cutover by the legacy amount. Story 13.2 reports the fact on the open-PO domain report (`received_qty` mismatch between the manifest and `ordered_qty - open_qty`) and does not change receiving. Ruling belongs to Epic 3 (Story 3.4).
+origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
+location: src/compliance/receiving.ts
+reason: Receiving ignores legacy-received quantity - `src/compliance/receiving.ts:410-430` computes over-receipt from the cumulative `grn_line` sum against `ordered_qty` and never reads `erp_purchase_order_line.open_qty`, so a line partly received in the legacy system before cutover can be over-received post-cutover by the legacy amount. Story 13.2 reports the fact on the open-PO domain report (`received_qty` mismatch between the manifest and `ordered_qty - open_qty`) and does not change receiving. Ruling belongs to Epic 3 (Story 3.4).
+status: open
+
+### DW-36: Enterprise-wide `missing_in_source` for BOMs and ERP POs - `bom` and `erp_purchase_order` carry no `site_id`, so `computeDomainFindings` (`src/read/projections/migration_domain_verification.ts`) reports platform documents absent from the manifest across the enterprise for `active_boms` and `open_pos` unless the run body names a `document_ref_prefix` (Story 13.2 Open Question 1). A multi-site wave should scope the manifest, not add a site column to the projections.
+origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
+location: src/read/projections/migration_domain_verification.ts
+reason: Enterprise-wide `missing_in_source` for BOMs and ERP POs - `bom` and `erp_purchase_order` carry no `site_id`, so `computeDomainFindings` (`src/read/projections/migration_domain_verification.ts`) reports platform documents absent from the manifest across the enterprise for `active_boms` and `open_pos` unless the run body names a `document_ref_prefix` (Story 13.2 Open Question 1). A multi-site wave should scope the manifest, not add a site column to the projections.
+status: open
+
+### DW-37: Epic 10 loan registers are a second source kind for `custody_registers` - the pilot verifies job-work custody ledgers only (`custody_ledger_entry`, `ownership = 'customer'`). When Epic 10 ships, `computeCustodyRegisters` gains a second platform query behind the same domain name and template; no new domain, event or sign-off flow.
+origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
+location: n/a
+reason: Epic 10 loan registers are a second source kind for `custody_registers` - the pilot verifies job-work custody ledgers only (`custody_ledger_entry`, `ownership = 'customer'`). When Epic 10 ships, `computeCustodyRegisters` gains a second platform query behind the same domain name and template; no new domain, event or sign-off flow.
+status: open
+
+### DW-38: Verification findings are trusted from the event payload - the `migration.domain.verification_run` applier inserts the findings the route computed (Story 13.2 Binding Decision 4) and does not recompute; a re-run is a new event. A replay of `domain_events` on a database whose platform tables differ reproduces the original report, which is the intended audit semantics, not a live recomputation.
+origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
+location: n/a
+reason: Verification findings are trusted from the event payload - the `migration.domain.verification_run` applier inserts the findings the route computed (Story 13.2 Binding Decision 4) and does not recompute; a re-run is a new event. A replay of `domain_events` on a database whose platform tables differ reproduces the original report, which is the intended audit semantics, not a live recomputation.
+status: open
+
+### DW-39: `SIGNED_NUMERIC_REGEX` in `src/adapters/erp/sync.ts` was declared by Story 13.1 and never read (`tsc --noEmit` TS6133 on the 13.1 tree); Story 13.2 removed it. The 13.1 record's "tsc 0" figure was taken before that constant landed.
+origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
+location: src/adapters/erp/sync.ts
+reason: `SIGNED_NUMERIC_REGEX` in `src/adapters/erp/sync.ts` was declared by Story 13.1 and never read (`tsc --noEmit` TS6133 on the 13.1 tree); Story 13.2 removed it. The 13.1 record's "tsc 0" figure was taken before that constant landed.
+status: open
+
 
 ## Deferred from: code review of story-13-2 (2026-09-10)
 
-- Supplier references are never resolved in migration verification - `computeOpenPos` (`src/read/projections/migration_domain_verification.ts:388-394`) string-compares the manifest `supplier_ref_ext` against `erp_purchase_order.supplier_ref_ext` and emits a `field_mismatch`; it never resolves either to a governed supplier. The epic's AC 1 clause names supplier alongside item and location. This is the same wall Review 4.5 P12 hit and deferred on 2026-08-06: `erp_purchase_order` carries only the ERP's own supplier code while the governed supplier carries `gstin_ext` and `owner_party_code`, three namespaces with no mapping table, and `src/compliance/three-way-match.ts:226-234` plus `src/compliance/ownership.ts:221-226` explicitly forbid guessing the match. Resolving supplier in migration needs that mapping table first.
-- A verification run producing more than 10,000 findings can never complete - `computeJobworkChallans` and `computeCustodyRegisters` sweep every platform row for the site with no cap, the route builds the full findings array, and `assertMigrationDocumentEventShape` (`src/compliance/migration-documents.ts:141`) then refuses the event with a generic 400 `INVALID_PARAMS`. A site with more unmatched documents than the cap can never verify that domain. Needs a scale decision (cap and flag truncation, bound the platform sweep by manifest scope, or chunk the run) rather than a mechanical fix; pilot volumes are far below the cap.
-- Paged list routes report `total: 0` for an out-of-range offset - the `count(*) OVER ()` window returns no rows when the page is empty, so `GET /migration/documents/rows`, `/verification-runs` and `/verification-runs/:run_id` all tell a paging client the collection is empty instead of giving the true total. Story 13.1's `listOpeningStockRowsBase` has the identical pattern, so this is a pre-existing convention rather than a Story 13.2 regression.
-- A `legacy_kit` BOM whose `current_revision_id` is NULL produces component mismatches with no root cause - the `bom_line` join in `computeActiveBoms` yields nothing, so every manifest component reports `field_mismatch` on `component_sku` with no finding naming the missing revision. Not reachable through the Story 5.2 legacy-kit route, which always sets a revision.
-- The lot and GRN referential arms of `jobwork_challans` have no test coverage - every seeded receipt in `test/integration/story-13-2.test.ts` has `lot_id NULL` and a real `grn_line`, so the `unknown_reference` branches for `reference: 'lot_id'` and `reference: 'grn_line_id'` in `computeJobworkChallans` are exercised by no test. Needs a lot-controlled fixture item and a deliberately-broken `grn_line_id`, which changes shared fixture setup the rest of the suite's file depends on; a dedicated small fixture block should be added rather than mutating the shared one.
+### DW-40: Supplier references are never resolved in migration verification - `computeOpenPos` (`src/read/projections/migration_domain_verification.ts:388-394`) string-compares the manifest `supplier_ref_ext` against `erp_purchase_order.supplier_ref_ext` and emits a `field_mismatch`; it never resolves either to a governed supplier. The epic's AC 1 clause names supplier alongside item and location. This is the same wall Review 4.5 P12 hit and deferred on 2026-08-06: `erp_purchase_order` carries only the ERP's own supplier code while the governed supplier carries `gstin_ext` and `owner_party_code`, three namespaces with no mapping table, and `src/compliance/three-way-match.ts:226-234` plus `src/compliance/ownership.ts:221-226` explicitly forbid guessing the match. Resolving supplier in migration needs that mapping table first.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-10)"), 2026-11-22
+location: src/read/projections/migration_domain_verification.ts
+reason: Supplier references are never resolved in migration verification - `computeOpenPos` (`src/read/projections/migration_domain_verification.ts:388-394`) string-compares the manifest `supplier_ref_ext` against `erp_purchase_order.supplier_ref_ext` and emits a `field_mismatch`; it never resolves either to a governed supplier. The epic's AC 1 clause names supplier alongside item and location. This is the same wall Review 4.5 P12 hit and deferred on 2026-08-06: `erp_purchase_order` carries only the ERP's own supplier code while the governed supplier carries `gstin_ext` and `owner_party_code`, three namespaces with no mapping table, and `src/compliance/three-way-match.ts:226-234` plus `src/compliance/ownership.ts:221-226` explicitly forbid guessing the match. Resolving supplier in migration needs that mapping table first.
+status: open
+
+### DW-41: A verification run producing more than 10,000 findings can never complete - `computeJobworkChallans` and `computeCustodyRegisters` sweep every platform row for the site with no cap, the route builds the full findings array, and `assertMigrationDocumentEventShape` (`src/compliance/migration-documents.ts:141`) then refuses the event with a generic 400 `INVALID_PARAMS`. A site with more unmatched documents than the cap can never verify that domain. Needs a scale decision (cap and flag truncation, bound the platform sweep by manifest scope, or chunk the run) rather than a mechanical fix; pilot volumes are far below the cap.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-10)"), 2026-11-22
+location: src/compliance/migration-documents.ts
+reason: A verification run producing more than 10,000 findings can never complete - `computeJobworkChallans` and `computeCustodyRegisters` sweep every platform row for the site with no cap, the route builds the full findings array, and `assertMigrationDocumentEventShape` (`src/compliance/migration-documents.ts:141`) then refuses the event with a generic 400 `INVALID_PARAMS`. A site with more unmatched documents than the cap can never verify that domain. Needs a scale decision (cap and flag truncation, bound the platform sweep by manifest scope, or chunk the run) rather than a mechanical fix; pilot volumes are far below the cap.
+status: open
+
+### DW-42: Paged list routes report `total: 0` for an out-of-range offset - the `count(*) OVER ()` window returns no rows when the page is empty, so `GET /migration/documents/rows`, `/verification-runs` and `/verification-runs/:run_id` all tell a paging client the collection is empty instead of giving the true total. Story 13.1's `listOpeningStockRowsBase` has the identical pattern, so this is a pre-existing convention rather than a Story 13.2 regression.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-10)"), 2026-11-22
+location: n/a
+reason: Paged list routes report `total: 0` for an out-of-range offset - the `count(*) OVER ()` window returns no rows when the page is empty, so `GET /migration/documents/rows`, `/verification-runs` and `/verification-runs/:run_id` all tell a paging client the collection is empty instead of giving the true total. Story 13.1's `listOpeningStockRowsBase` has the identical pattern, so this is a pre-existing convention rather than a Story 13.2 regression.
+status: open
+
+### DW-43: A `legacy_kit` BOM whose `current_revision_id` is NULL produces component mismatches with no root cause - the `bom_line` join in `computeActiveBoms` yields nothing, so every manifest component reports `field_mismatch` on `component_sku` with no finding naming the missing revision. Not reachable through the Story 5.2 legacy-kit route, which always sets a revision.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-10)"), 2026-11-22
+location: n/a
+reason: A `legacy_kit` BOM whose `current_revision_id` is NULL produces component mismatches with no root cause - the `bom_line` join in `computeActiveBoms` yields nothing, so every manifest component reports `field_mismatch` on `component_sku` with no finding naming the missing revision. Not reachable through the Story 5.2 legacy-kit route, which always sets a revision.
+status: open
+
+### DW-44: The lot and GRN referential arms of `jobwork_challans` have no test coverage - every seeded receipt in `test/integration/story-13-2.test.ts` has `lot_id NULL` and a real `grn_line`, so the `unknown_reference` branches for `reference: 'lot_id'` and `reference: 'grn_line_id'` in `computeJobworkChallans` are exercised by no test. Needs a lot-controlled fixture item and a deliberately-broken `grn_line_id`, which changes shared fixture setup the rest of the suite's file depends on; a dedicated small fixture block should be added rather than mutating the shared one.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-10)"), 2026-11-22
+location: test/integration/story-13-2.test.ts
+reason: The lot and GRN referential arms of `jobwork_challans` have no test coverage - every seeded receipt in `test/integration/story-13-2.test.ts` has `lot_id NULL` and a real `grn_line`, so the `unknown_reference` branches for `reference: 'lot_id'` and `reference: 'grn_line_id'` in `computeJobworkChallans` are exercised by no test. Needs a lot-controlled fixture item and a deliberately-broken `grn_line_id`, which changes shared fixture setup the rest of the suite's file depends on; a dedicated small fixture block should be added rather than mutating the shared one.
+status: open
+
 
 ## Deferred from: code review of story-13-2 (2026-09-11, round 2)
 
-- Platform-exclusion insert is `ON CONFLICT (site_id, domain, platform_ref) DO NOTHING` but the route still returns 201 with the submitted payload [src/compliance/migration-documents.ts:263-286] - a second registration of the same key with a different `reason` silently discards its own reason with no signal to the caller. Tried switching to `DO UPDATE`: reverted, because `read/projections/migration_domain_platform_exclusion.sql`'s own header comment records "No UPDATE, no DELETE... an exclusion is registered once and stands" as a deliberate design choice, and granting `app_user` UPDATE on this table broke that posture (confirmed by a live `permission denied` failure in `story-13-2.test.ts` when tried). Needs a decision: allow update-on-reregister (and grant UPDATE), or keep immutability and have the response merely flag `already_excluded: true` without changing the row.
-- `getExcludedPlatformRefs` loads the entire `migration_domain_platform_exclusion` table for a site+domain on every verification run with no cap comparable to `MAX_EVENT_ARRAY_ENTRIES` [src/read/projections/migration_domain_verification.ts:712-720]. Same class as the already-deferred 10,000-finding cap; pilot volumes are far below any real bound.
-- `POST /api/v1/migration/domains/:domain/platform-exclusions` accepts `platform_ref` with no existence check against the domain's real platform table - a typo'd or wrong-domain reference is silently accepted and downgrades nothing. Consistent with the route's existing trust-the-authenticated-actor design elsewhere in this story, not a regression; would need a per-domain platform-ref lookup to fix.
-- `document_ref_prefix` has no upper-bound length check, unlike waiver narratives (`MAX_WAIVER_NARRATIVE_CHARS`) [src/api/v1/migration.ts:1506-1513]. Low risk: role-gated internal route.
-- The platform-exclusion feature (register â†’ downgrade â†’ sign-off) has only one happy-path integration test - no coverage for registering an exclusion with no matching finding, the duplicate-registration-via-different-idempotency-key no-op, or registering under the wrong domain [test/integration/story-13-2.test.ts]. Same class as the already-deferred lot/GRN coverage gap.
-- A header-only CSV import (0 data rows, 0 rejections) returns 201 with `manifest_loaded: false` and no field explaining why nothing loaded [src/api/v1/migration.ts:1418-1429]. Cosmetic; the caller can infer the cause from `rows.length`/`rejections.length` being both zero.
+### DW-45: Platform-exclusion insert is `ON CONFLICT (site_id, domain, platform_ref) DO NOTHING` but the route still returns 201 with the submitted payload [src/compliance/migration-documents.ts:263-286] - a second registration of the same key with a different `reason` silently discards its own reason with no signal to the caller. Tried switching to `DO UPDATE`: reverted, because `read/projections/migration_domain_platform_exclusion.sql`'s own header comment records "No UPDATE, no DELETE... an exclusion is registered once and stands" as a deliberate design choice, and granting `app_user` UPDATE on this table broke that posture (confirmed by a live `permission denied` failure in `story-13-2.test.ts` when tried). Needs a decision: allow update-on-reregister (and grant UPDATE), or keep immutability and have the response merely flag `already_excluded: true` without changing the row.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-11, round 2)"), 2026-11-22
+location: read/projections/migration_domain_platform_exclusion.sql
+reason: Platform-exclusion insert is `ON CONFLICT (site_id, domain, platform_ref) DO NOTHING` but the route still returns 201 with the submitted payload [src/compliance/migration-documents.ts:263-286] - a second registration of the same key with a different `reason` silently discards its own reason with no signal to the caller. Tried switching to `DO UPDATE`: reverted, because `read/projections/migration_domain_platform_exclusion.sql`'s own header comment records "No UPDATE, no DELETE... an exclusion is registered once and stands" as a deliberate design choice, and granting `app_user` UPDATE on this table broke that posture (confirmed by a live `permission denied` failure in `story-13-2.test.ts` when tried). Needs a decision: allow update-on-reregister (and grant UPDATE), or keep immutability and have the response merely flag `already_excluded: true` without changing the row.
+status: open
+
+### DW-46: `getExcludedPlatformRefs` loads the entire `migration_domain_platform_exclusion` table for a site+domain on every verification run with no cap comparable to `MAX_EVENT_ARRAY_ENTRIES` [src/read/projections/migration_domain_verification.ts:712-720]. Same class as the already-deferred 10,000-finding cap; pilot volumes are far below any real bound.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-11, round 2)"), 2026-11-22
+location: n/a
+reason: `getExcludedPlatformRefs` loads the entire `migration_domain_platform_exclusion` table for a site+domain on every verification run with no cap comparable to `MAX_EVENT_ARRAY_ENTRIES` [src/read/projections/migration_domain_verification.ts:712-720]. Same class as the already-deferred 10,000-finding cap; pilot volumes are far below any real bound.
+status: open
+
+### DW-47: `POST /api/v1/migration/domains/:domain/platform-exclusions` accepts `platform_ref` with no existence check against the domain's real platform table - a typo'd or wrong-domain reference is silently accepted and downgrades nothing. Consistent with the route's existing trust-the-authenticated-actor design elsewhere in this story, not a regression; would need a per-domain platform-ref lookup to fix.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-11, round 2)"), 2026-11-22
+location: n/a
+reason: `POST /api/v1/migration/domains/:domain/platform-exclusions` accepts `platform_ref` with no existence check against the domain's real platform table - a typo'd or wrong-domain reference is silently accepted and downgrades nothing. Consistent with the route's existing trust-the-authenticated-actor design elsewhere in this story, not a regression; would need a per-domain platform-ref lookup to fix.
+status: open
+
+### DW-48: `document_ref_prefix` has no upper-bound length check, unlike waiver narratives (`MAX_WAIVER_NARRATIVE_CHARS`) [src/api/v1/migration.ts:1506-1513]. Low risk: role-gated internal route.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-11, round 2)"), 2026-11-22
+location: n/a
+reason: `document_ref_prefix` has no upper-bound length check, unlike waiver narratives (`MAX_WAIVER_NARRATIVE_CHARS`) [src/api/v1/migration.ts:1506-1513]. Low risk: role-gated internal route.
+status: open
+
+### DW-49: The platform-exclusion feature (register â†’ downgrade â†’ sign-off) has only one happy-path integration test - no coverage for registering an exclusion with no matching finding, the duplicate-registration-via-different-idempotency-key no-op, or registering under the wrong domain [test/integration/story-13-2.test.ts]. Same class as the already-deferred lot/GRN coverage gap.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-11, round 2)"), 2026-11-22
+location: n/a
+reason: The platform-exclusion feature (register â†’ downgrade â†’ sign-off) has only one happy-path integration test - no coverage for registering an exclusion with no matching finding, the duplicate-registration-via-different-idempotency-key no-op, or registering under the wrong domain [test/integration/story-13-2.test.ts]. Same class as the already-deferred lot/GRN coverage gap.
+status: open
+
+### DW-50: A header-only CSV import (0 data rows, 0 rejections) returns 201 with `manifest_loaded: false` and no field explaining why nothing loaded [src/api/v1/migration.ts:1418-1429]. Cosmetic; the caller can infer the cause from `rows.length`/`rejections.length` being both zero.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-11, round 2)"), 2026-11-22
+location: n/a
+reason: A header-only CSV import (0 data rows, 0 rejections) returns 201 with `manifest_loaded: false` and no field explaining why nothing loaded [src/api/v1/migration.ts:1418-1429]. Cosmetic; the caller can infer the cause from `rows.length`/`rejections.length` being both zero.
+status: open
+
 
 ## Deferred from: code review of story-13-3 (2026-09-12)
 
-- `computeGoLiveReconciliationReport`'s `source_count` re-derives Story 13.1's site-match and latest-snapshot CTEs instead of sharing them [src/compliance/migration-golive.ts:580-611]. Low risk today (the variance rule itself is imported, not copied), but if `VARIANCE_SQL` in `migration_variance.ts` changes its site or snapshot selection the report's source count silently describes different rows than the variances beside it. Fix: export the CTE fragment (or a count helper) from `migration_variance.ts` and consume it here.
-- The 20,000-row opening-stock promotion perf figure (item #800, Story 13.1 Task 7.2) is still owed; Story 13.3 measured 10,000 rows locally (import 62.7 s) and no staging figure exists. Pre-existing 13.1 item carried forward unchanged.
-- Story 13.3 test suite does not exercise a `pending_approval` or `stale` variance status blocking the go-live gate [test/integration/story-13-3.test.ts]. Needs a `doa_registry_entries` fixture and a resolvable approver (the 13.1 explanation route freezes one at post time). The gate filters on `status !== 'explained'`, which the 13.1 suite pins per status, so the gap is coverage, not behaviour.
+### DW-51: `computeGoLiveReconciliationReport`'s `source_count` re-derives Story 13.1's site-match and latest-snapshot CTEs instead of sharing them [src/compliance/migration-golive.ts:580-611]. Low risk today (the variance rule itself is imported, not copied), but if `VARIANCE_SQL` in `migration_variance.ts` changes its site or snapshot selection the report's source count silently describes different rows than the variances beside it. Fix: export the CTE fragment (or a count helper) from `migration_variance.ts` and consume it here.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-3 (2026-09-12)"), 2026-11-22
+location: migration_variance.ts
+reason: `computeGoLiveReconciliationReport`'s `source_count` re-derives Story 13.1's site-match and latest-snapshot CTEs instead of sharing them [src/compliance/migration-golive.ts:580-611]. Low risk today (the variance rule itself is imported, not copied), but if `VARIANCE_SQL` in `migration_variance.ts` changes its site or snapshot selection the report's source count silently describes different rows than the variances beside it. Fix: export the CTE fragment (or a count helper) from `migration_variance.ts` and consume it here.
+status: open
+
+### DW-52: The 20,000-row opening-stock promotion perf figure (item #800, Story 13.1 Task 7.2) is still owed; Story 13.3 measured 10,000 rows locally (import 62.7 s) and no staging figure exists. Pre-existing 13.1 item carried forward unchanged.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-3 (2026-09-12)"), 2026-11-22
+location: n/a
+reason: The 20,000-row opening-stock promotion perf figure (item #800, Story 13.1 Task 7.2) is still owed; Story 13.3 measured 10,000 rows locally (import 62.7 s) and no staging figure exists. Pre-existing 13.1 item carried forward unchanged.
+status: open
+
+### DW-53: Story 13.3 test suite does not exercise a `pending_approval` or `stale` variance status blocking the go-live gate [test/integration/story-13-3.test.ts]. Needs a `doa_registry_entries` fixture and a resolvable approver (the 13.1 explanation route freezes one at post time). The gate filters on `status !== 'explained'`, which the 13.1 suite pins per status, so the gap is coverage, not behaviour.
+origin: migrated from legacy ledger ("Deferred from: code review of story-13-3 (2026-09-12)"), 2026-11-22
+location: n/a
+reason: Story 13.3 test suite does not exercise a `pending_approval` or `stale` variance status blocking the go-live gate [test/integration/story-13-3.test.ts]. Needs a `doa_registry_entries` fixture and a resolvable approver (the 13.1 explanation route freezes one at post time). The gate filters on `status !== 'explained'`, which the 13.1 suite pins per status, so the gap is coverage, not behaviour.
+status: open
+
 
 ## Edge permanent-error parity (2026-09-12) - CLOSES 11.5R-8
 
@@ -965,67 +1070,108 @@ both sets together still fails. Edge queues that meet one of these refusals sett
 Pre-pilot sweep item 4, first ruling. Triage document:
 `_bmad-output/implementation-artifacts/pilot-blocking-triage-2026-09-12.md`.
 
-- 761 (9-5): `custody.return_recorded` accepts an optional `challan_class`; `orderClocksForDrain`
-  (`src/compliance/jobwork-return-clock.ts`) drains the declared class first, then the oldest live
-  clock, then breached clocks. The SQL lock order is unchanged. Unit arms plus a 9.5 integration arm.
-- 11.5R-1: `metadata.occurred_at` now has a floor, `EVENT_OCCURRED_AT_MAX_AGE_DAYS` (default 30,
-  maximum 3650; `.env.test` sets 3650 because fixtures carry fixed dates). Pure
-  `occurredAtBoundViolation` in `src/events/store.ts`, unit-tested in
-  `test/unit/event-envelope-age.test.ts`.
-- 13.1 snapshot_at: `applyStockBalance` refuses a `snapshot_at` later than now plus 5 minutes per
-  row (queued as an integration exception like any other malformed row). Since Story 13.3 a future
-  snapshot would have made both final sign-offs permanently `SIGNOFF_STALE`.
-- 11.2R-1: confirmed closed by commit d9fb465 (`DISPATCH_SOD_ROLES` on the events door).
-- 706: the "inactive delegate" half is closed - `findActiveDelegation` joins `users` on
-  `active = true`; single-hop resolution stays by design.
-- Rows 326 and 343: Stories 7.9 and 7.10 created (`backlog`, PRE-PILOT). 343 CLOSED 2026-11-21 by Story 7.10.
+### DW-54: 761 (9-5): `custody.return_recorded` accepts an optional `challan_class`; `orderClocksForDrain`
+origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
+location: src/compliance/jobwork-return-clock.ts
+reason: 761 (9-5): `custody.return_recorded` accepts an optional `challan_class`; `orderClocksForDrain` (`src/compliance/jobwork-return-clock.ts`) drains the declared class first, then the oldest live clock, then breached clocks. The SQL lock order is unchanged. Unit arms plus a 9.5 integration arm.
+status: open
+
+### DW-55: `metadata.occurred_at` now has a floor, `EVENT_OCCURRED_AT_MAX_AGE_DAYS` (default 30,
+origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
+location: src/events/store.ts
+reason: 11.5R-1: `metadata.occurred_at` now has a floor, `EVENT_OCCURRED_AT_MAX_AGE_DAYS` (default 30, maximum 3650; `.env.test` sets 3650 because fixtures carry fixed dates). Pure `occurredAtBoundViolation` in `src/events/store.ts`, unit-tested in `test/unit/event-envelope-age.test.ts`.
+status: open
+
+### DW-56: 13.1 snapshot_at: `applyStockBalance` refuses a `snapshot_at` later than now plus 5 minutes per
+origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
+location: n/a
+reason: 13.1 snapshot_at: `applyStockBalance` refuses a `snapshot_at` later than now plus 5 minutes per row (queued as an integration exception like any other malformed row). Since Story 13.3 a future snapshot would have made both final sign-offs permanently `SIGNOFF_STALE`.
+status: open
+
+### DW-57: confirmed closed by commit d9fb465 (`DISPATCH_SOD_ROLES` on the events door).
+origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
+location: n/a
+reason: 11.2R-1: confirmed closed by commit d9fb465 (`DISPATCH_SOD_ROLES` on the events door).
+status: open
+
+### DW-58: the "inactive delegate" half is closed - `findActiveDelegation` joins `users` on
+origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
+location: n/a
+reason: 706: the "inactive delegate" half is closed - `findActiveDelegation` joins `users` on `active = true`; single-hop resolution stays by design.
+status: open
+
+### DW-59: Rows 326 and 343: Stories 7.9 and 7.10 created (`backlog`, PRE-PILOT). 343 CLOSED 2026-11-21 by Story 7.10.
+origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
+location: n/a
+reason: Rows 326 and 343: Stories 7.9 and 7.10 created (`backlog`, PRE-PILOT). 343 CLOSED 2026-11-21 by Story 7.10.
+status: open
+
 
 ## Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285
 
 Party-mode session on the triage sheet's remaining engineering rows (Winston, Amelia, Murat, John,
 Vex, Yui, Grumbal, Ravi). Two commits, each with its own full-suite run (Murat's clause):
 
-- 215 and 616, the IST pin: `src/config/db.ts` opens every session on both pools with
-  `-c TimeZone=Asia/Kolkata -c DateStyle=ISO` and parses DATE (OID 1082) as its YYYY-MM-DD string,
-  so `CURRENT_DATE` and `now()::date` in SQL agree with `toIstCalendarDate`. The compose postgres
-  and replica services carry `-c timezone=Asia/Kolkata`. `test/integration/db-session-pin.test.ts`
-  pins zone, DateStyle, the string parser and the calendar-date agreement on both pools.
-- 432, the collation pin: `POSTGRES_INITDB_ARGS: --locale=C.UTF-8` on the compose postgres
-  service. initdb reads it on first boot only; an existing volume keeps the locale it was created
-  with (comment inline).
-- 285, narrowed: `assertRegisteredStream` (`src/events/store.ts`) refuses a REGISTERED
-  event_type on any stream_type other than the one SUPPORTED_EVENT_TYPES names, at both doors
-  (`validateEnvelope`) and in the persistEvent pre-transaction chain. Unregistered event types are
-  untouched; that half stays open as the platform decision the row always was.
-- Rank 2 (receiving ignores `erp_purchase_order_line.open_qty`) is PARKED on one floor fact the
-  room could not settle: whether anything on the customer side ever pushes a platform GRN back into
-  the ERP (feed or retyped). No outbound GRN adapter exists today (Yui); head office re-syncs POs by
-  hand (Ravi). The formula differs by the answer. Question handed to the user.
-- Suite oracle for 285 (Murat's clause): the first full run after the stream check failed twice.
-  `test/integration/story-3-10-dispatch.test.ts` persisted the three dispatch.* events on stream
-  `dispatch` while `src/api/v1/dispatch.ts` writes every one on `warehouse` (fixture corrected);
-  `test/integration/story-9-1.test.ts` AC3 now sees `INVALID_EVENT_STREAM` at the door instead of
-  the 9.1 envelope assert's `INVALID_EVENT_ENVELOPE` (pin updated, same refusal). Both suites
-  28/28 after; the two changes are test-only.
+### DW-60: 215 and 616, the IST pin: `src/config/db.ts` opens every session on both pools with
+origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
+location: src/config/db.ts
+reason: 215 and 616, the IST pin: `src/config/db.ts` opens every session on both pools with `-c TimeZone=Asia/Kolkata -c DateStyle=ISO` and parses DATE (OID 1082) as its YYYY-MM-DD string, so `CURRENT_DATE` and `now()::date` in SQL agree with `toIstCalendarDate`. The compose postgres and replica services carry `-c timezone=Asia/Kolkata`. `test/integration/db-session-pin.test.ts` pins zone, DateStyle, the string parser and the calendar-date agreement on both pools.
+status: open
+
+### DW-61: 432, the collation pin: `POSTGRES_INITDB_ARGS: --locale=C.UTF-8` on the compose postgres
+origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
+location: n/a
+reason: 432, the collation pin: `POSTGRES_INITDB_ARGS: --locale=C.UTF-8` on the compose postgres service. initdb reads it on first boot only; an existing volume keeps the locale it was created with (comment inline).
+status: open
+
+### DW-62: 285, narrowed: `assertRegisteredStream` (`src/events/store.ts`) refuses a REGISTERED
+origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
+location: src/events/store.ts
+reason: 285, narrowed: `assertRegisteredStream` (`src/events/store.ts`) refuses a REGISTERED event_type on any stream_type other than the one SUPPORTED_EVENT_TYPES names, at both doors (`validateEnvelope`) and in the persistEvent pre-transaction chain. Unregistered event types are untouched; that half stays open as the platform decision the row always was.
+status: open
+
+### DW-63: Rank 2 (receiving ignores `erp_purchase_order_line.open_qty`) is PARKED on one floor fact the
+origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
+location: n/a
+reason: Rank 2 (receiving ignores `erp_purchase_order_line.open_qty`) is PARKED on one floor fact the room could not settle: whether anything on the customer side ever pushes a platform GRN back into the ERP (feed or retyped). No outbound GRN adapter exists today (Yui); head office re-syncs POs by hand (Ravi). The formula differs by the answer. Question handed to the user.
+status: open
+
+### DW-64: Suite oracle for 285 (Murat's clause): the first full run after the stream check failed twice.
+origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
+location: test/integration/story-3-10-dispatch.test.ts
+reason: Suite oracle for 285 (Murat's clause): the first full run after the stream check failed twice. `test/integration/story-3-10-dispatch.test.ts` persisted the three dispatch.* events on stream `dispatch` while `src/api/v1/dispatch.ts` writes every one on `warehouse` (fixture corrected); `test/integration/story-9-1.test.ts` AC3 now sees `INVALID_EVENT_STREAM` at the door instead of the 9.1 envelope assert's `INVALID_EVENT_ENVELOPE` (pin updated, same refusal). Both suites 28/28 after; the two changes are test-only.
+status: open
+
 
 ## Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2
 
 User's answer to the room's question: the ERP "sometimes" learns a platform GRN (a person retypes
 it). So neither clean formula is safe and the platform trusts the ERP exactly once:
 
-- `erp_purchase_order_line.legacy_received_qty` (canonical and init-db mirror) is stamped on
-  INSERT as `GREATEST(ordered_qty - open_qty, 0)` by `upsertPurchaseOrderLine` and is absent from
-  the DO UPDATE list, so no later sync moves it.
-- `applyGoodsReceivedProjection` counts it in the tolerance band: cumulative = legacy plus the
-  platform's own non-rejected GRN lines plus the receipt in hand. Exact when nobody retypes;
-  fail-closed (blocks a legitimate receipt, never admits a second one) when someone does.
-- When the ERP's current `open_qty` implies more received than the frozen figure, the excess is
-  written to the event payload as `erp_receipt_overlap_qty`, echoed on both GRN responses and
-  logged. Runbook section 4 now tells the site to stop retyping platform GRNs into the ERP from the
-  freeze onward, and names the warning as the paper trail.
-- Arms: story-3-4 (band counts legacy, a later open_qty leaves the freeze alone, overlap echoed on
-  response and stored event), story-2-9 (the sync route freezes 60.250 on PO-2026-0042 line 1 and a
-  re-sync with open_qty 0 keeps it).
+### DW-65: `erp_purchase_order_line.legacy_received_qty` (canonical and init-db mirror) is stamped on
+origin: migrated from legacy ledger ("Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2"), 2026-11-22
+location: n/a
+reason: `erp_purchase_order_line.legacy_received_qty` (canonical and init-db mirror) is stamped on INSERT as `GREATEST(ordered_qty - open_qty, 0)` by `upsertPurchaseOrderLine` and is absent from the DO UPDATE list, so no later sync moves it.
+status: open
+
+### DW-66: `applyGoodsReceivedProjection` counts it in the tolerance band: cumulative = legacy plus the
+origin: migrated from legacy ledger ("Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2"), 2026-11-22
+location: n/a
+reason: `applyGoodsReceivedProjection` counts it in the tolerance band: cumulative = legacy plus the platform's own non-rejected GRN lines plus the receipt in hand. Exact when nobody retypes; fail-closed (blocks a legitimate receipt, never admits a second one) when someone does.
+status: open
+
+### DW-67: When the ERP's current `open_qty` implies more received than the frozen figure, the excess is
+origin: migrated from legacy ledger ("Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2"), 2026-11-22
+location: n/a
+reason: When the ERP's current `open_qty` implies more received than the frozen figure, the excess is written to the event payload as `erp_receipt_overlap_qty`, echoed on both GRN responses and logged. Runbook section 4 now tells the site to stop retyping platform GRNs into the ERP from the freeze onward, and names the warning as the paper trail.
+status: open
+
+### DW-68: Arms: story-3-4 (band counts legacy, a later open_qty leaves the freeze alone, overlap echoed on
+origin: migrated from legacy ledger ("Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2"), 2026-11-22
+location: n/a
+reason: Arms: story-3-4 (band counts legacy, a later open_qty leaves the freeze alone, overlap echoed on response and stored event), story-2-9 (the sync route freezes 60.250 on PO-2026-0042 line 1 and a re-sync with open_qty 0 keeps it).
+status: open
+
 
 ## Site answers 2026-09-13 - RE-RULES 800, ACCEPTS 118, 138, 304, 495 and the 13.2 findings-cap bullet for the pilot
 
@@ -1052,412 +1198,1565 @@ new in `.env.example`.
 
 ## First staging boot on the VPS (2026-09-13) - CLOSES 620, two entrypoint lessons
 
-- 620: `.gitattributes` now pins LF for `*.sh`, `*.template`, `*.conf`, `*.yml`, `*.yaml` and
-  `Dockerfile` (it already pinned `*.sql`). The first boot on the VPS failed at
-  `00-init-wal-archive.sh` with "cannot execute: required file not found": a CRLF shebang. The
-  entrypoint aborted, the container restarted on an initialised but EMPTY volume, and every client
-  then failed authentication against roles that did not exist. Tainted volumes were wiped.
-- Init-script ordering: the postgres image's entrypoint globs `/docker-entrypoint-initdb.d/*` under
-  its en_US locale, which ignores punctuation, so `01b-...` ran BEFORE `01-init-db.sql`. The
-  role-password script is mounted as `01-zz-init-role-passwords.sh`, which sorts after the SQL
-  under every collation. Postgres healthcheck gained `start_period: 120s` because the 14,000-line
-  init outran 10 x 5 s and left dependents created-but-not-started.
+### DW-69: `.gitattributes` now pins LF for `*.sh`, `*.template`, `*.conf`, `*.yml`, `*.yaml` and
+origin: migrated from legacy ledger ("First staging boot on the VPS (2026-09-13) - CLOSES 620, two entrypoint lessons"), 2026-11-22
+location: 00-init-wal-archive.sh
+reason: 620: `.gitattributes` now pins LF for `*.sh`, `*.template`, `*.conf`, `*.yml`, `*.yaml` and `Dockerfile` (it already pinned `*.sql`). The first boot on the VPS failed at `00-init-wal-archive.sh` with "cannot execute: required file not found": a CRLF shebang. The entrypoint aborted, the container restarted on an initialised but EMPTY volume, and every client then failed authentication against roles that did not exist. Tainted volumes were wiped.
+status: open
+
+### DW-70: Init-script ordering: the postgres image's entrypoint globs `/docker-entrypoint-initdb.d/*` under
+origin: migrated from legacy ledger ("First staging boot on the VPS (2026-09-13) - CLOSES 620, two entrypoint lessons"), 2026-11-22
+location: 01-init-db.sql
+reason: Init-script ordering: the postgres image's entrypoint globs `/docker-entrypoint-initdb.d/*` under its en_US locale, which ignores punctuation, so `01b-...` ran BEFORE `01-init-db.sql`. The role-password script is mounted as `01-zz-init-role-passwords.sh`, which sorts after the SQL under every collation. Postgres healthcheck gained `start_period: 120s` because the 14,000-line init outran 10 x 5 s and left dependents created-but-not-started.
+status: open
+
 
 ## Deferred from: code review of 1-12-edge-ui-sign-in-through-keycloak-pkce (2026-09-13)
 
-- Closure codes (`cached_closure_code`) are now read `ORDER BY kind, code` because PowerSync views expose no `rowid`; server-curated fault/cause/remedy order is lost. Needs an explicit position column in the snapshot (edge/src/local-db/worklist.ts:229).
-- After an offline start, `db.connect` never runs until reload (the `online` handler only refreshes local state and the worklist), so the blocked sign-out drain and any queued upload wait for a reload (edge/src/components/edge-client.tsx:327). Pre-existing since Story 7.8.
+### DW-71: Closure codes (`cached_closure_code`) are now read `ORDER BY kind, code` because PowerSync views expose no `rowid`; server-curated fault/cause/remedy order is lost. Needs an explicit position column in the snapshot (edge/src/local-db/worklist.ts:229).
+origin: migrated from legacy ledger ("Deferred from: code review of 1-12-edge-ui-sign-in-through-keycloak-pkce (2026-09-13)"), 2026-11-22
+location: n/a
+reason: Closure codes (`cached_closure_code`) are now read `ORDER BY kind, code` because PowerSync views expose no `rowid`; server-curated fault/cause/remedy order is lost. Needs an explicit position column in the snapshot (edge/src/local-db/worklist.ts:229).
+status: open
+
+### DW-72: After an offline start, `db.connect` never runs until reload (the `online` handler only refreshes local state and the worklist), so the blocked sign-out drain and any queued upload wait for a reload (edge/src/components/edge-client.tsx:327). Pre-existing since Story 7.8.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-12-edge-ui-sign-in-through-keycloak-pkce (2026-09-13)"), 2026-11-22
+location: n/a
+reason: After an offline start, `db.connect` never runs until reload (the `online` handler only refreshes local state and the worklist), so the blocked sign-out drain and any queued upload wait for a reload (edge/src/components/edge-client.tsx:327). Pre-existing since Story 7.8.
+status: open
+
 
 ## Deferred from: dev of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)
 
-- The local-only `sync_failures` table (edge/src/local-db/schema.ts) has never been written and holds no payload or metadata, so it cannot re-queue anything. Superseded by `edge_outbox_retained`; removable in a later story.
-- Retained `refused` rows stay on the device forever: there is no dismiss or clear action. Story 1.14 (supervisor screen) or later decides who may dismiss one and when. CLOSED by Story 1.14 (2026-09-17): a two-tap Dismiss per row in the device's "Sync failed - needs attention" list; `dismissRetainedRow` deletes only `retained_reason = 'refused'` copies, and whoever is signed in on the device may dismiss.
-- `resolveApprover` has no site dimension, so one company-wide approver (or their delegate) resolves refusals for every site through `edge.refused_capture_resolution`. Fine for the single-site pilot; same limitation as Story 7.8.
-- `sync.refused_capture_recorded` events carry the refusal site in `metadata.actor.location_id`, so the `edge_site_events` bucket replicates them to every device at that site (into `ps_untyped`). Story 7.8 raises already do the same. Exposure and device storage growth are accepted for the pilot; excluding the `sync` stream from the bucket needs a sync-rules change.
-- The `edge-sync-real` CI job is not a required check yet: it must be added to branch protection (and `deploy/pipeline/branch-protection.json`) by a repository admin.
+### DW-73: The local-only `sync_failures` table (edge/src/local-db/schema.ts) has never been written and holds no payload or metadata, so it cannot re-queue anything. Superseded by `edge_outbox_retained`; removable in a later story.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: The local-only `sync_failures` table (edge/src/local-db/schema.ts) has never been written and holds no payload or metadata, so it cannot re-queue anything. Superseded by `edge_outbox_retained`; removable in a later story.
+status: open
+
+### DW-74: Retained `refused` rows stay on the device forever: there is no dismiss or clear action. Story 1.14 (supervisor screen) or later decides who may dismiss one and when. CLOSED by Story 1.14 (2026-09-17): a two-tap Dismiss per row in the device's "Sync failed - needs attention" list; `dismissRetainedRow` deletes only `retained_reason = 'refused'` copies, and whoever is signed in on the device may dismiss.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: Retained `refused` rows stay on the device forever: there is no dismiss or clear action. Story 1.14 (supervisor screen) or later decides who may dismiss one and when. CLOSED by Story 1.14 (2026-09-17): a two-tap Dismiss per row in the device's "Sync failed - needs attention" list; `dismissRetainedRow` deletes only `retained_reason = 'refused'` copies, and whoever is signed in on the device may dismiss.
+status: open
+
+### DW-75: `resolveApprover` has no site dimension, so one company-wide approver (or their delegate) resolves refusals for every site through `edge.refused_capture_resolution`. Fine for the single-site pilot; same limitation as Story 7.8.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: `resolveApprover` has no site dimension, so one company-wide approver (or their delegate) resolves refusals for every site through `edge.refused_capture_resolution`. Fine for the single-site pilot; same limitation as Story 7.8.
+status: open
+
+### DW-76: `sync.refused_capture_recorded` events carry the refusal site in `metadata.actor.location_id`, so the `edge_site_events` bucket replicates them to every device at that site (into `ps_untyped`). Story 7.8 raises already do the same. Exposure and device storage growth are accepted for the pilot; excluding the `sync` stream from the bucket needs a sync-rules change.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: `sync.refused_capture_recorded` events carry the refusal site in `metadata.actor.location_id`, so the `edge_site_events` bucket replicates them to every device at that site (into `ps_untyped`). Story 7.8 raises already do the same. Exposure and device storage growth are accepted for the pilot; excluding the `sync` stream from the bucket needs a sync-rules change.
+status: open
+
+### DW-77: The `edge-sync-real` CI job is not a required check yet: it must be added to branch protection (and `deploy/pipeline/branch-protection.json`) by a repository admin.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: deploy/pipeline/branch-protection.json
+reason: The `edge-sync-real` CI job is not a required check yet: it must be added to branch protection (and `deploy/pipeline/branch-protection.json`) by a repository admin.
+status: open
+
 
 ## Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)
 
-- A retained `STREAM_CONFLICT` head parks its stream on the device forever: `hasUpstreamStreamConflict` reads `edge_outbox_retained`, a `refused` retained row is never deleted, and a central resolution changes nothing on the device (Binding Decision 7). Before Story 1.13 the head was deleted at the next checkpoint and the park self-cleared. Deferred 2026-09-16 by user decision: Story 1.14 owns the dismiss action, so the clear path belongs there; this is a reason 1.14 is pilot-blocking. CLOSED by Story 1.14 (2026-09-17) for the head: dismissing it removes the retained row, `hasUpstreamStreamConflict` answers null for the stream, and rows still waiting in the upload queue go out on the next sync. What stays open is in the Story 1.14 section below (settled tails are not replayed).
-- `edge_outbox_retained` grows without bound and has no dismiss path; each row is a full outbox copy including payload and metadata. Story 1.14 or later needs an acknowledge-and-drop or an age cap. Story 1.14 (2026-09-17) adds the dismiss path; growth other than by dismiss (no age cap, no drop on central resolution) stays open.
-- A crud entry whose `edge_outbox` row has vanished retains nothing and still completes the queue entry (`retainOutboxRow` is `INSERT ... SELECT` from a row that is gone). Unreachable today; harden by retaining from `op.opData` or throwing.
-- `recordRefusedCapture` swallows every failure into a `console.warn` (Binding Decision 3 says never throw), so a central-record loss is invisible: no metric, no counter, no dead-letter.
-- No per-device rate limit on refusal records: an authenticated device looping distinct `event_id`s with 64 KB envelopes writes unbounded `domain_events` plus `edge_refused_capture` rows. Same exposure shape as the Story 7.8 raise.
-- A refusal with no resolvable site stamps the record event's `metadata.actor.location_id` with the nil UUID while the payload keeps `location_id: null` (Binding Decisions 5 and 10 name the actor field). Harmless today (the nil site matches no bucket) but undocumented.
-- The `disconnectAndClear({ clearLocal: false })` rule protecting every retained capture is a comment in `edge/src/local-db/database.ts` with no lint rule, wrapper or test behind it.
+### DW-78: A retained `STREAM_CONFLICT` head parks its stream on the device forever: `hasUpstreamStreamConflict` reads `edge_outbox_retained`, a `refused` retained row is never deleted, and a central resolution changes nothing on the device (Binding Decision 7). Before Story 1.13 the head was deleted at the next checkpoint and the park self-cleared. Deferred 2026-09-16 by user decision: Story 1.14 owns the dismiss action, so the clear path belongs there; this is a reason 1.14 is pilot-blocking. CLOSED by Story 1.14 (2026-09-17) for the head: dismissing it removes the retained row, `hasUpstreamStreamConflict` answers null for the stream, and rows still waiting in the upload queue go out on the next sync. What stays open is in the Story 1.14 section below (settled tails are not replayed).
+origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: A retained `STREAM_CONFLICT` head parks its stream on the device forever: `hasUpstreamStreamConflict` reads `edge_outbox_retained`, a `refused` retained row is never deleted, and a central resolution changes nothing on the device (Binding Decision 7). Before Story 1.13 the head was deleted at the next checkpoint and the park self-cleared. Deferred 2026-09-16 by user decision: Story 1.14 owns the dismiss action, so the clear path belongs there; this is a reason 1.14 is pilot-blocking. CLOSED by Story 1.14 (2026-09-17) for the head: dismissing it removes the retained row, `hasUpstreamStreamConflict` answers null for the stream, and rows still waiting in the upload queue go out on the next sync. What stays open is in the Story 1.14 section below (settled tails are not replayed).
+status: open
+
+### DW-79: `edge_outbox_retained` grows without bound and has no dismiss path; each row is a full outbox copy including payload and metadata. Story 1.14 or later needs an acknowledge-and-drop or an age cap. Story 1.14 (2026-09-17) adds the dismiss path; growth other than by dismiss (no age cap, no drop on central resolution) stays open.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: `edge_outbox_retained` grows without bound and has no dismiss path; each row is a full outbox copy including payload and metadata. Story 1.14 or later needs an acknowledge-and-drop or an age cap. Story 1.14 (2026-09-17) adds the dismiss path; growth other than by dismiss (no age cap, no drop on central resolution) stays open.
+status: open
+
+### DW-80: A crud entry whose `edge_outbox` row has vanished retains nothing and still completes the queue entry (`retainOutboxRow` is `INSERT ... SELECT` from a row that is gone). Unreachable today; harden by retaining from `op.opData` or throwing.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: A crud entry whose `edge_outbox` row has vanished retains nothing and still completes the queue entry (`retainOutboxRow` is `INSERT ... SELECT` from a row that is gone). Unreachable today; harden by retaining from `op.opData` or throwing.
+status: open
+
+### DW-81: `recordRefusedCapture` swallows every failure into a `console.warn` (Binding Decision 3 says never throw), so a central-record loss is invisible: no metric, no counter, no dead-letter.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: `recordRefusedCapture` swallows every failure into a `console.warn` (Binding Decision 3 says never throw), so a central-record loss is invisible: no metric, no counter, no dead-letter.
+status: open
+
+### DW-82: No per-device rate limit on refusal records: an authenticated device looping distinct `event_id`s with 64 KB envelopes writes unbounded `domain_events` plus `edge_refused_capture` rows. Same exposure shape as the Story 7.8 raise.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: No per-device rate limit on refusal records: an authenticated device looping distinct `event_id`s with 64 KB envelopes writes unbounded `domain_events` plus `edge_refused_capture` rows. Same exposure shape as the Story 7.8 raise.
+status: open
+
+### DW-83: A refusal with no resolvable site stamps the record event's `metadata.actor.location_id` with the nil UUID while the payload keeps `location_id: null` (Binding Decisions 5 and 10 name the actor field). Harmless today (the nil site matches no bucket) but undocumented.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: n/a
+reason: A refusal with no resolvable site stamps the record event's `metadata.actor.location_id` with the nil UUID while the payload keeps `location_id: null` (Binding Decisions 5 and 10 name the actor field). Harmless today (the nil site matches no bucket) but undocumented.
+status: open
+
+### DW-84: The `disconnectAndClear({ clearLocal: false })` rule protecting every retained capture is a comment in `edge/src/local-db/database.ts` with no lint rule, wrapper or test behind it.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
+location: edge/src/local-db/database.ts
+reason: The `disconnectAndClear({ clearLocal: false })` rule protecting every retained capture is a comment in `edge/src/local-db/database.ts` with no lint rule, wrapper or test behind it.
+status: open
+
 
 ## Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)
 
-- Refusals emitted before the route handler are never recorded centrally: `withRefusedCaptureRecord` wraps only the handler, but 413 `PAYLOAD_TOO_LARGE` and 400 `INVALID_JSON` come from the body stage in `router.ts`, and the device settles every non-transient 4xx as a permanent refusal. Also unrecorded: every tail capture parked locally behind a STREAM_CONFLICT head (`connector.ts:484` retains without a POST). Retention holds on the device; the central queue has gaps. Deferred 2026-09-17 by user decision.
-- `src/api/v1/refused-captures.ts` re-implements the RBAC grant match (`scopesOf`, `grantLocation`, `grants`) instead of `permittedLocationsForModuleScope` in `middleware/rbac.ts`, and lower-cases `location_id` where `rbac.ts:114` compares raw, so `requireRole` and the refused-captures list can disagree on mixed-case assignments. Normalise once where assignments load and reuse the middleware helpers. Same handler hand-rolls the actor and audit context instead of `actorContext(req)` and `auditCtxFor` from `quality.ts`. Deferred 2026-09-17 by user decision.
-- A refusal from `requireRole` before authorization stores the device-declared `metadata.actor.location_id` unverified (`location_source: declared`) and scopes visibility by it; with no UUID there, only a wildcard-location holder can see or resolve the row.
-- A maintenance STREAM_CONFLICT lands in two queues: `maintenance_sync_conflict` (Story 7.8) and `edge_refused_capture` (1.13), with no link between them and two DOA decisions to close.
-- `applyResolved` holds the refusal row `FOR UPDATE` and then `resolveApprover` takes a second pool connection; under pool pressure resolves can deadlock until timeout (same shape as deferred items 369 and 443).
-- `resolveApprover(type, 0)` uses strict `value > value_min`, so a DOA entry seeded with `value_min = 0` never matches; the provisioning script omits the field, but the story doc should warn admins.
-- An `auth_required` row whose metadata has no `actor.user_id` (owner null) halts the queue at `connector.ts:472` forever: `resetAuthRequired` and salvage both skip null owners.
-- `hasAuthRequired` excludes retained ids, so parked rows left retained by a partial `resetAuthRequired` failure are counted by `countUnsettled` (sign-out blocked) but shown nowhere.
-- Retention is enforced at three `settleUnheld` call sites instead of once before `transaction.complete()`; a future settle branch that forgets it re-creates the Story 1.13 loss.
-- Efficiency: no index serves the default refused-captures list (`status`, `refused_at DESC`); the change-trigger `db.watch()` materialises every retained row on every change (use `db.onChange` on the two tables); `withRefusedCaptureRecord` `structuredClone`s every upload body; the refused envelope is JSON-serialised four times; `alreadyPersisted` in the applier repeats a check `persistEvent` already made; `recordRefusedCapture` is awaited before the 4xx is returned.
-- Cleanups: `edge_outbox_retained.retained_reason` is derivable from `local_status`; `settleUnheld` takes a full classification it mostly ignores; `readOutboxCounts.failedCount` duplicates `readFailures`; `limit` validated three times in the list handler; `assertResolvedShape` copies seven lines of `assertRecordedShape`; `REFUSED_CAPTURE_STATUSES` and the `RefusedCapture*Payload` interfaces in `schema.ts` are unused; `inWriteTransaction` duplicated in `worklist.ts`; `WorklistFakeDb` in `outbox.test.ts` should be `SqliteDb`; the rewritten counts test no longer exercises the unretained `needs_attention` fallback arms; central-only stream lists live in four places; each new projection needs five hand edits in `persistEvent`.
+### DW-85: Refusals emitted before the route handler are never recorded centrally: `withRefusedCaptureRecord` wraps only the handler, but 413 `PAYLOAD_TOO_LARGE` and 400 `INVALID_JSON` come from the body stage in `router.ts`, and the device settles every non-transient 4xx as a permanent refusal. Also unrecorded: every tail capture parked locally behind a STREAM_CONFLICT head (`connector.ts:484` retains without a POST). Retention holds on the device; the central queue has gaps. Deferred 2026-09-17 by user decision.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: router.ts
+reason: Refusals emitted before the route handler are never recorded centrally: `withRefusedCaptureRecord` wraps only the handler, but 413 `PAYLOAD_TOO_LARGE` and 400 `INVALID_JSON` come from the body stage in `router.ts`, and the device settles every non-transient 4xx as a permanent refusal. Also unrecorded: every tail capture parked locally behind a STREAM_CONFLICT head (`connector.ts:484` retains without a POST). Retention holds on the device; the central queue has gaps. Deferred 2026-09-17 by user decision.
+status: open
+
+### DW-86: `src/api/v1/refused-captures.ts` re-implements the RBAC grant match (`scopesOf`, `grantLocation`, `grants`) instead of `permittedLocationsForModuleScope` in `middleware/rbac.ts`, and lower-cases `location_id` where `rbac.ts:114` compares raw, so `requireRole` and the refused-captures list can disagree on mixed-case assignments. Normalise once where assignments load and reuse the middleware helpers. Same handler hand-rolls the actor and audit context instead of `actorContext(req)` and `auditCtxFor` from `quality.ts`. Deferred 2026-09-17 by user decision.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: src/api/v1/refused-captures.ts
+reason: `src/api/v1/refused-captures.ts` re-implements the RBAC grant match (`scopesOf`, `grantLocation`, `grants`) instead of `permittedLocationsForModuleScope` in `middleware/rbac.ts`, and lower-cases `location_id` where `rbac.ts:114` compares raw, so `requireRole` and the refused-captures list can disagree on mixed-case assignments. Normalise once where assignments load and reuse the middleware helpers. Same handler hand-rolls the actor and audit context instead of `actorContext(req)` and `auditCtxFor` from `quality.ts`. Deferred 2026-09-17 by user decision.
+status: open
+
+### DW-87: A refusal from `requireRole` before authorization stores the device-declared `metadata.actor.location_id` unverified (`location_source: declared`) and scopes visibility by it; with no UUID there, only a wildcard-location holder can see or resolve the row.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: n/a
+reason: A refusal from `requireRole` before authorization stores the device-declared `metadata.actor.location_id` unverified (`location_source: declared`) and scopes visibility by it; with no UUID there, only a wildcard-location holder can see or resolve the row.
+status: open
+
+### DW-88: A maintenance STREAM_CONFLICT lands in two queues: `maintenance_sync_conflict` (Story 7.8) and `edge_refused_capture` (1.13), with no link between them and two DOA decisions to close.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: n/a
+reason: A maintenance STREAM_CONFLICT lands in two queues: `maintenance_sync_conflict` (Story 7.8) and `edge_refused_capture` (1.13), with no link between them and two DOA decisions to close.
+status: open
+
+### DW-89: `applyResolved` holds the refusal row `FOR UPDATE` and then `resolveApprover` takes a second pool connection; under pool pressure resolves can deadlock until timeout (same shape as deferred items 369 and 443).
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: n/a
+reason: `applyResolved` holds the refusal row `FOR UPDATE` and then `resolveApprover` takes a second pool connection; under pool pressure resolves can deadlock until timeout (same shape as deferred items 369 and 443).
+status: open
+
+### DW-90: `resolveApprover(type, 0)` uses strict `value > value_min`, so a DOA entry seeded with `value_min = 0` never matches; the provisioning script omits the field, but the story doc should warn admins.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: n/a
+reason: `resolveApprover(type, 0)` uses strict `value > value_min`, so a DOA entry seeded with `value_min = 0` never matches; the provisioning script omits the field, but the story doc should warn admins.
+status: open
+
+### DW-91: An `auth_required` row whose metadata has no `actor.user_id` (owner null) halts the queue at `connector.ts:472` forever: `resetAuthRequired` and salvage both skip null owners.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: connector.ts
+reason: An `auth_required` row whose metadata has no `actor.user_id` (owner null) halts the queue at `connector.ts:472` forever: `resetAuthRequired` and salvage both skip null owners.
+status: open
+
+### DW-92: `hasAuthRequired` excludes retained ids, so parked rows left retained by a partial `resetAuthRequired` failure are counted by `countUnsettled` (sign-out blocked) but shown nowhere.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: n/a
+reason: `hasAuthRequired` excludes retained ids, so parked rows left retained by a partial `resetAuthRequired` failure are counted by `countUnsettled` (sign-out blocked) but shown nowhere.
+status: open
+
+### DW-93: Retention is enforced at three `settleUnheld` call sites instead of once before `transaction.complete()`; a future settle branch that forgets it re-creates the Story 1.13 loss.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: n/a
+reason: Retention is enforced at three `settleUnheld` call sites instead of once before `transaction.complete()`; a future settle branch that forgets it re-creates the Story 1.13 loss.
+status: open
+
+### DW-94: Efficiency: no index serves the default refused-captures list (`status`, `refused_at DESC`); the change-trigger `db.watch()` materialises every retained row on every change (use `db.onChange` on the two tables); `withRefusedCaptureRecord` `structuredClone`s every upload body; the refused envelope is JSON-serialised four times; `alreadyPersisted` in the applier repeats a check `persistEvent` already made; `recordRefusedCapture` is awaited before the 4xx is returned.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: n/a
+reason: Efficiency: no index serves the default refused-captures list (`status`, `refused_at DESC`); the change-trigger `db.watch()` materialises every retained row on every change (use `db.onChange` on the two tables); `withRefusedCaptureRecord` `structuredClone`s every upload body; the refused envelope is JSON-serialised four times; `alreadyPersisted` in the applier repeats a check `persistEvent` already made; `recordRefusedCapture` is awaited before the 4xx is returned.
+status: open
+
+### DW-95: Cleanups: `edge_outbox_retained.retained_reason` is derivable from `local_status`; `settleUnheld` takes a full classification it mostly ignores; `readOutboxCounts.failedCount` duplicates `readFailures`; `limit` validated three times in the list handler; `assertResolvedShape` copies seven lines of `assertRecordedShape`; `REFUSED_CAPTURE_STATUSES` and the `RefusedCapture*Payload` interfaces in `schema.ts` are unused; `inWriteTransaction` duplicated in `worklist.ts`; `WorklistFakeDb` in `outbox.test.ts` should be `SqliteDb`; the rewritten counts test no longer exercises the unretained `needs_attention` fallback arms; central-only stream lists live in four places; each new projection needs five hand edits in `persistEvent`.
+origin: migrated from legacy ledger ("Deferred from: second code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-17)"), 2026-11-22
+location: schema.ts
+reason: Cleanups: `edge_outbox_retained.retained_reason` is derivable from `local_status`; `settleUnheld` takes a full classification it mostly ignores; `readOutboxCounts.failedCount` duplicates `readFailures`; `limit` validated three times in the list handler; `assertResolvedShape` copies seven lines of `assertRecordedShape`; `REFUSED_CAPTURE_STATUSES` and the `RefusedCapture*Payload` interfaces in `schema.ts` are unused; `inWriteTransaction` duplicated in `worklist.ts`; `WorklistFakeDb` in `outbox.test.ts` should be `SqliteDb`; the rewritten counts test no longer exercises the unretained `needs_attention` fallback arms; central-only stream lists live in four places; each new projection needs five hand edits in `persistEvent`.
+status: open
+
 
 ## Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)
 
 Story 1.14 Binding Decision 9 items, plus what implementation found.
 
-- Display names for `captured_by` and `resolved_by`: the screen shows the user id the API returns (with `captured_role` beside it). Needs a users lookup that does not exist on the edge.
-- A central resolution never reaches the device and a device dismiss never reaches the centre; the two records are independent by design (AD-18). A resolved refusal stays under "Sync failed - needs attention" on the tablet until someone dismisses it there.
-- Tails the connector already parked behind a STREAM_CONFLICT head are retained `refused` with `STREAM_CONFLICT` and their queue entries are completed (`SETTLED_STATUSES`), so dismissing the head does not replay them: only rows still pending in the upload queue go out. Each parked tail must be dismissed in turn (it is itself a head for later rows on the stream) and its capture re-entered, and none was recorded centrally (second-review item above).
-- Refusals raised before the route handler (413 `PAYLOAD_TOO_LARGE`, 400 `INVALID_JSON`) never reach the central list, so the supervisor screen cannot show them; the device list still does.
-- The duplicated RBAC matcher in `src/api/v1/refused-captures.ts` versus `middleware/rbac.ts` now has a third dependant, `hasRefusedCaptureReadScope` (bootstrap navigation); a future consolidation must move all three together.
-- The navigation entry is unconditional in practice: an edge user's operating site is one of their concrete assignments, and any assignment grants read on its module there, so everyone who bootstraps sees `Refused captures`. The predicate expresses the intended rule and only bites if the scope rule tightens.
-- Site-blind DOA resolution (`resolveApprover` has no site dimension) is unchanged.
-- `edge_outbox_retained` growth is bounded only by manual dismiss; no age cap and no drop on central resolution.
-- An unsalvaged `needs_attention` row (an older build's row on a device that has not bootstrapped online since) appears in the needs-attention list but lives in `edge_outbox`, not the retained table, so Dismiss removes nothing for it until the next online bootstrap salvages it; the list refresh shows it still present and the notice reads as if it were removed.
-- Bootstrap `navigation` is not cached: an offline start renders Dashboard and Frontline only. Harmless because the page is online-only, but the entry disappears from the header offline.
-- On the supervisor page the Dashboard and Frontline links are hash links to sections that are not on that page (pre-existing on `/maintenance` too); a real dashboard route or `aria-current` handling is a shell story.
-- Story 1.14 Task 6.5 (staging check, runbook 2.10d) was not run during dev: it needs the code shipped to the box and the operator's browser session; recorded in the story file as pending.
+### DW-96: Display names for `captured_by` and `resolved_by`: the screen shows the user id the API returns (with `captured_role` beside it). Needs a users lookup that does not exist on the edge.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: Display names for `captured_by` and `resolved_by`: the screen shows the user id the API returns (with `captured_role` beside it). Needs a users lookup that does not exist on the edge.
+status: open
+
+### DW-97: A central resolution never reaches the device and a device dismiss never reaches the centre; the two records are independent by design (AD-18). A resolved refusal stays under "Sync failed - needs attention" on the tablet until someone dismisses it there.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: A central resolution never reaches the device and a device dismiss never reaches the centre; the two records are independent by design (AD-18). A resolved refusal stays under "Sync failed - needs attention" on the tablet until someone dismisses it there.
+status: open
+
+### DW-98: Tails the connector already parked behind a STREAM_CONFLICT head are retained `refused` with `STREAM_CONFLICT` and their queue entries are completed (`SETTLED_STATUSES`), so dismissing the head does not replay them: only rows still pending in the upload queue go out. Each parked tail must be dismissed in turn (it is itself a head for later rows on the stream) and its capture re-entered, and none was recorded centrally (second-review item above).
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: Tails the connector already parked behind a STREAM_CONFLICT head are retained `refused` with `STREAM_CONFLICT` and their queue entries are completed (`SETTLED_STATUSES`), so dismissing the head does not replay them: only rows still pending in the upload queue go out. Each parked tail must be dismissed in turn (it is itself a head for later rows on the stream) and its capture re-entered, and none was recorded centrally (second-review item above).
+status: open
+
+### DW-99: Refusals raised before the route handler (413 `PAYLOAD_TOO_LARGE`, 400 `INVALID_JSON`) never reach the central list, so the supervisor screen cannot show them; the device list still does.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: Refusals raised before the route handler (413 `PAYLOAD_TOO_LARGE`, 400 `INVALID_JSON`) never reach the central list, so the supervisor screen cannot show them; the device list still does.
+status: open
+
+### DW-100: The duplicated RBAC matcher in `src/api/v1/refused-captures.ts` versus `middleware/rbac.ts` now has a third dependant, `hasRefusedCaptureReadScope` (bootstrap navigation); a future consolidation must move all three together.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: src/api/v1/refused-captures.ts
+reason: The duplicated RBAC matcher in `src/api/v1/refused-captures.ts` versus `middleware/rbac.ts` now has a third dependant, `hasRefusedCaptureReadScope` (bootstrap navigation); a future consolidation must move all three together.
+status: open
+
+### DW-101: The navigation entry is unconditional in practice: an edge user's operating site is one of their concrete assignments, and any assignment grants read on its module there, so everyone who bootstraps sees `Refused captures`. The predicate expresses the intended rule and only bites if the scope rule tightens.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: The navigation entry is unconditional in practice: an edge user's operating site is one of their concrete assignments, and any assignment grants read on its module there, so everyone who bootstraps sees `Refused captures`. The predicate expresses the intended rule and only bites if the scope rule tightens.
+status: open
+
+### DW-102: Site-blind DOA resolution (`resolveApprover` has no site dimension) is unchanged.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: Site-blind DOA resolution (`resolveApprover` has no site dimension) is unchanged.
+status: open
+
+### DW-103: `edge_outbox_retained` growth is bounded only by manual dismiss; no age cap and no drop on central resolution.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: `edge_outbox_retained` growth is bounded only by manual dismiss; no age cap and no drop on central resolution.
+status: open
+
+### DW-104: An unsalvaged `needs_attention` row (an older build's row on a device that has not bootstrapped online since) appears in the needs-attention list but lives in `edge_outbox`, not the retained table, so Dismiss removes nothing for it until the next online bootstrap salvages it; the list refresh shows it still present and the notice reads as if it were removed.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: An unsalvaged `needs_attention` row (an older build's row on a device that has not bootstrapped online since) appears in the needs-attention list but lives in `edge_outbox`, not the retained table, so Dismiss removes nothing for it until the next online bootstrap salvages it; the list refresh shows it still present and the notice reads as if it were removed.
+status: open
+
+### DW-105: Bootstrap `navigation` is not cached: an offline start renders Dashboard and Frontline only. Harmless because the page is online-only, but the entry disappears from the header offline.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: Bootstrap `navigation` is not cached: an offline start renders Dashboard and Frontline only. Harmless because the page is online-only, but the entry disappears from the header offline.
+status: open
+
+### DW-106: On the supervisor page the Dashboard and Frontline links are hash links to sections that are not on that page (pre-existing on `/maintenance` too); a real dashboard route or `aria-current` handling is a shell story.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: On the supervisor page the Dashboard and Frontline links are hash links to sections that are not on that page (pre-existing on `/maintenance` too); a real dashboard route or `aria-current` handling is a shell story.
+status: open
+
+### DW-107: Story 1.14 Task 6.5 (staging check, runbook 2.10d) was not run during dev: it needs the code shipped to the box and the operator's browser session; recorded in the story file as pending.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: Story 1.14 Task 6.5 (staging check, runbook 2.10d) was not run during dev: it needs the code shipped to the box and the operator's browser session; recorded in the story file as pending.
+status: open
+
 
 ## Deferred from: code review of 1-14-refused-captures-supervisor-screen (2026-09-17)
 
-- No fetch timeout on uthorizedFetch: a hung request can leave the refused-captures screen stuck in "Loading refused captures..." with no escape except reload. Pre-existing platform-wide: every edge API call shares edge/src/session/api-fetch.ts (no timeout or abort anywhere), and the shell's bootstrap gating plus the online event cover the realistic recovery paths; a shared timeout or abort controller is a platform change, not a Story 1.14 patch.
+### DW-108: No fetch timeout on uthorizedFetch: a hung request can leave the refused-captures screen stuck in "Loading refused captures..." with no escape except reload. Pre-existing platform-wide: every edge API call shares edge/src/session/api-fetch.ts (no timeout or abort anywhere), and the shell's bootstrap gating plus the online event cover the realistic recovery paths; a shared timeout or abort controller is a platform change, not a Story 1.14 patch.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
+location: n/a
+reason: No fetch timeout on uthorizedFetch: a hung request can leave the refused-captures screen stuck in "Loading refused captures..." with no escape except reload. Pre-existing platform-wide: every edge API call shares edge/src/session/api-fetch.ts (no timeout or abort anywhere), and the shell's bootstrap gating plus the online event cover the realistic recovery paths; a shared timeout or abort controller is a platform change, not a Story 1.14 patch.
+status: open
+
 
 ## Deferred from: Pilot Ruling B job-work challan receipt (2026-09-21)
 
-- CLOSED 2026-09-22 (owner ruling): an order with no kit BOM on a `JOBWORK_CHALLAN` receipt (`assertJobworkChallanReceipt` in `src/compliance/receiving.ts`) is now refused 409 `JOBWORK_ORDER_KIT_BOM_REQUIRED` unless the config knob `JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM` is `true` (default `false`; a present-but-invalid value refuses boot). Staging sets it `true` for the pilot's migrated orders, which carry no kit BOM; production keeps the refusal. Read on the seam, so REST and the events door agree.
-- Gate entry and the weighbridge cannot issue a ticket without a purchase-order reference (`weighbridge_event.po_ref_ext` is mandatory), so every supplied ticket on a challan receipt is refused `RECEIVING_TICKET_PO_BOUND` and challan receipts are ticketless. Job-work support at the gate and weighbridge is a separate story.
-- The rehearsal mock pack seeds job-work orders in SQL with no kit BOM, and its operations layer has no job-work actor or step; no smoke step exercises the challan receipt yet.
+### DW-109: an order with no kit BOM on a `JOBWORK_CHALLAN` receipt (`assertJobworkChallanReceipt` in `src/compliance/receiving.ts`) is now refused 409 `JOBWORK_ORDER_KIT_BOM_REQUIRED` unless the config knob `JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM` is `true` (default `false`; a present-but-invalid value refuses boot). Staging sets it `true` for the pilot's migrated orders, which carry no kit BOM; production keeps the refusal. Read on the seam, so REST and the events door agree.
+origin: migrated from legacy ledger ("Deferred from: Pilot Ruling B job-work challan receipt (2026-09-21)"), 2026-11-22
+location: src/compliance/receiving.ts
+reason: CLOSED 2026-09-22 (owner ruling): an order with no kit BOM on a `JOBWORK_CHALLAN` receipt (`assertJobworkChallanReceipt` in `src/compliance/receiving.ts`) is now refused 409 `JOBWORK_ORDER_KIT_BOM_REQUIRED` unless the config knob `JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM` is `true` (default `false`; a present-but-invalid value refuses boot). Staging sets it `true` for the pilot's migrated orders, which carry no kit BOM; production keeps the refusal. Read on the seam, so REST and the events door agree.
+status: done 2026-09-22
+
+### DW-110: Gate entry and the weighbridge cannot issue a ticket without a purchase-order reference (`weighbridge_event.po_ref_ext` is mandatory), so every supplied ticket on a challan receipt is refused `RECEIVING_TICKET_PO_BOUND` and challan receipts are ticketless. Job-work support at the gate and weighbridge is a separate story.
+origin: migrated from legacy ledger ("Deferred from: Pilot Ruling B job-work challan receipt (2026-09-21)"), 2026-11-22
+location: n/a
+reason: Gate entry and the weighbridge cannot issue a ticket without a purchase-order reference (`weighbridge_event.po_ref_ext` is mandatory), so every supplied ticket on a challan receipt is refused `RECEIVING_TICKET_PO_BOUND` and challan receipts are ticketless. Job-work support at the gate and weighbridge is a separate story.
+status: open
+
+### DW-111: The rehearsal mock pack seeds job-work orders in SQL with no kit BOM, and its operations layer has no job-work actor or step; no smoke step exercises the challan receipt yet.
+origin: migrated from legacy ledger ("Deferred from: Pilot Ruling B job-work challan receipt (2026-09-21)"), 2026-11-22
+location: n/a
+reason: The rehearsal mock pack seeds job-work orders in SQL with no kit BOM, and its operations layer has no job-work actor or step; no smoke step exercises the challan receipt yet.
+status: open
+
 
 ## Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)
 
 No earlier row is closed by this batch. Row 192 (no lock on reserve source-bin selection) stays open; the source query now excludes QC-gated and held lots but still takes no lock.
 
-- Replenishment generation still raises a task with `from_location_id` NULL when no reserve bin has enough drainable stock (`src/warehouse/replenishment-job.ts`), the same not-ready task an empty reserve has always produced (`REPLENISHMENT_TASK_NOT_READY` on confirm). Held-only or QC-gated reserve stock now lands here instead of naming a bin that can never be drained. Needs an owner ruling on whether such a check should raise no task at all.
-- The replay-race mapping in `persistEvent` (`src/events/store.ts`) covers only transactions `persistEvent` owns. A caller-owned transaction (receiving, gate, and now the REST pack request) cannot query after the 23505 aborts it, so a projection-key race there still surfaces the projection constraint's own shape. A loser refused by a business `AppError` raised in a projection, rather than by a 23505, also keeps that error's shape instead of `DUPLICATE_EVENT`.
-- Contract note for the same mapping: a submission that reuses an idempotency key or event id with a DIFFERENT payload and collides on a projection key now gets the existing event's identity (the outcome the sequential short-circuit already gave) instead of the projection code such as `DUPLICATE_LOT` or `STREAM_CONFLICT`.
-- No unpack or void path exists for a packing record. `POST /api/v1/dispatch/{id}/pack` is now one transaction per request, so a refused line no longer strands earlier lines, but a record packed in error can only be corrected by SQL. A legacy record whose SKU and lot match no confirmed pick line is refused at dispatch with 409 `DISPATCH_PACKED_LINE_NOT_PICKED` and needs the same manual correction.
-- REST audit-location sweep, five single-location handlers still stamping the site, awaiting an owner ruling on whether each is an act at the location or a site-level duty like count approval: transfer ship (`from_location_id`) and transfer receive (`to_location_id`) in `src/api/v1/transfer-requests.ts`, physical verification completion (`location_id`) in `src/api/v1/physical-verification.ts`, the QC retention sample log (`location_id`) in `src/api/v1/quality.ts`, and planning `params_set` (`location_id`) in `src/api/v1/inventory-planning.ts`. Goods receipt (the purchase-order and the job-work challan door) is fixed; a receipt routed to QC hold stamps the dock the receiver stood at, and a target that is not an active location of the receipt's site keeps the site stamp.
-- Out of scope for that sweep by design, several locations or none: bin move, replenishment confirm, cross-dock confirm, material staging, migration opening stock and ECO stock disposition (two or more locations); putaway release and assignment, pick assignment and completion, count approval and rejection, production issue, return, completion and scrap (plant-level), gate, weighbridge, dispatch, and the maintenance scans (site-level or no location).
-- The story-7-8 lock test polls up to 30 s for both posts to park, but its HTTP helper times a request out at 15 s, so 15 s is the effective bound.
+### DW-112: Replenishment generation still raises a task with `from_location_id` NULL when no reserve bin has enough drainable stock (`src/warehouse/replenishment-job.ts`), the same not-ready task an empty reserve has always produced (`REPLENISHMENT_TASK_NOT_READY` on confirm). Held-only or QC-gated reserve stock now lands here instead of naming a bin that can never be drained. Needs an owner ruling on whether such a check should raise no task at all.
+origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
+location: src/warehouse/replenishment-job.ts
+reason: Replenishment generation still raises a task with `from_location_id` NULL when no reserve bin has enough drainable stock (`src/warehouse/replenishment-job.ts`), the same not-ready task an empty reserve has always produced (`REPLENISHMENT_TASK_NOT_READY` on confirm). Held-only or QC-gated reserve stock now lands here instead of naming a bin that can never be drained. Needs an owner ruling on whether such a check should raise no task at all.
+status: open
+
+### DW-113: The replay-race mapping in `persistEvent` (`src/events/store.ts`) covers only transactions `persistEvent` owns. A caller-owned transaction (receiving, gate, and now the REST pack request) cannot query after the 23505 aborts it, so a projection-key race there still surfaces the projection constraint's own shape. A loser refused by a business `AppError` raised in a projection, rather than by a 23505, also keeps that error's shape instead of `DUPLICATE_EVENT`.
+origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
+location: src/events/store.ts
+reason: The replay-race mapping in `persistEvent` (`src/events/store.ts`) covers only transactions `persistEvent` owns. A caller-owned transaction (receiving, gate, and now the REST pack request) cannot query after the 23505 aborts it, so a projection-key race there still surfaces the projection constraint's own shape. A loser refused by a business `AppError` raised in a projection, rather than by a 23505, also keeps that error's shape instead of `DUPLICATE_EVENT`.
+status: open
+
+### DW-114: Contract note for the same mapping: a submission that reuses an idempotency key or event id with a DIFFERENT payload and collides on a projection key now gets the existing event's identity (the outcome the sequential short-circuit already gave) instead of the projection code such as `DUPLICATE_LOT` or `STREAM_CONFLICT`.
+origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
+location: n/a
+reason: Contract note for the same mapping: a submission that reuses an idempotency key or event id with a DIFFERENT payload and collides on a projection key now gets the existing event's identity (the outcome the sequential short-circuit already gave) instead of the projection code such as `DUPLICATE_LOT` or `STREAM_CONFLICT`.
+status: open
+
+### DW-115: No unpack or void path exists for a packing record. `POST /api/v1/dispatch/{id}/pack` is now one transaction per request, so a refused line no longer strands earlier lines, but a record packed in error can only be corrected by SQL. A legacy record whose SKU and lot match no confirmed pick line is refused at dispatch with 409 `DISPATCH_PACKED_LINE_NOT_PICKED` and needs the same manual correction.
+origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
+location: n/a
+reason: No unpack or void path exists for a packing record. `POST /api/v1/dispatch/{id}/pack` is now one transaction per request, so a refused line no longer strands earlier lines, but a record packed in error can only be corrected by SQL. A legacy record whose SKU and lot match no confirmed pick line is refused at dispatch with 409 `DISPATCH_PACKED_LINE_NOT_PICKED` and needs the same manual correction.
+status: open
+
+### DW-116: REST audit-location sweep, five single-location handlers still stamping the site, awaiting an owner ruling on whether each is an act at the location or a site-level duty like count approval: transfer ship (`from_location_id`) and transfer receive (`to_location_id`) in `src/api/v1/transfer-requests.ts`, physical verification completion (`location_id`) in `src/api/v1/physical-verification.ts`, the QC retention sample log (`location_id`) in `src/api/v1/quality.ts`, and planning `params_set` (`location_id`) in `src/api/v1/inventory-planning.ts`. Goods receipt (the purchase-order and the job-work challan door) is fixed; a receipt routed to QC hold stamps the dock the receiver stood at, and a target that is not an active location of the receipt's site keeps the site stamp.
+origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
+location: src/api/v1/transfer-requests.ts
+reason: REST audit-location sweep, five single-location handlers still stamping the site, awaiting an owner ruling on whether each is an act at the location or a site-level duty like count approval: transfer ship (`from_location_id`) and transfer receive (`to_location_id`) in `src/api/v1/transfer-requests.ts`, physical verification completion (`location_id`) in `src/api/v1/physical-verification.ts`, the QC retention sample log (`location_id`) in `src/api/v1/quality.ts`, and planning `params_set` (`location_id`) in `src/api/v1/inventory-planning.ts`. Goods receipt (the purchase-order and the job-work challan door) is fixed; a receipt routed to QC hold stamps the dock the receiver stood at, and a target that is not an active location of the receipt's site keeps the site stamp.
+status: open
+
+### DW-117: Out of scope for that sweep by design, several locations or none: bin move, replenishment confirm, cross-dock confirm, material staging, migration opening stock and ECO stock disposition (two or more locations); putaway release and assignment, pick assignment and completion, count approval and rejection, production issue, return, completion and scrap (plant-level), gate, weighbridge, dispatch, and the maintenance scans (site-level or no location).
+origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
+location: n/a
+reason: Out of scope for that sweep by design, several locations or none: bin move, replenishment confirm, cross-dock confirm, material staging, migration opening stock and ECO stock disposition (two or more locations); putaway release and assignment, pick assignment and completion, count approval and rejection, production issue, return, completion and scrap (plant-level), gate, weighbridge, dispatch, and the maintenance scans (site-level or no location).
+status: open
+
+### DW-118: The story-7-8 lock test polls up to 30 s for both posts to park, but its HTTP helper times a request out at 15 s, so 15 s is the effective bound.
+origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
+location: n/a
+reason: The story-7-8 lock test polls up to 30 s for both posts to park, but its HTTP helper times a request out at 15 s, so 15 s is the effective bound.
+status: open
+
 
 ## Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)
 
-- The `maintenance.spare_catalogue_amended` applier does not cross-check `envelope.stream_id` against the locked `catalogue_id`, so a direct event can land on an unrelated stream. No Story 7.4 spare applier checks `stream_id` either; fix platform-wide.
-- The amend handler reads the grain unlocked and uses that `catalogue_id` as `stream_id`; if a delete or re-catalogue path is ever added, the stream and the seam-written `catalogue_id` can diverge. Same root as the item above.
-- `POST /api/v1/maintenance/spares/amend` has no per-location write check on `location_id`, like every other maintenance write route; a storekeeper scoped to one site can amend another site's levels.
-- A same-key replay of an amendment with a different body returns the original event and silently drops the new levels (existing platform-wide idempotency gap).
-- An amendment replay returns the current catalogue row, not the levels that event set, following the `createSpareBase` read-back pattern.
-- The seam compares `max_level >= min_level` with JS `Number`, not NUMERIC, mirroring the Story 7.4 create assert; values differing past float precision fall through to the DB CHECK as a 500.
-- Story 7.9 scope: partial amendment (sending only `min_level` or only `max_level`) is not supported; the amend route replaces both levels together and an omitted level becomes null, matching the create route's paired shape.
-- Story 7.9 scope: toggling `is_critical` on an existing catalogue row is not amendable; it is a re-cataloguing decision with no acceptance criterion yet.
+### DW-119: The `maintenance.spare_catalogue_amended` applier does not cross-check `envelope.stream_id` against the locked `catalogue_id`, so a direct event can land on an unrelated stream. No Story 7.4 spare applier checks `stream_id` either; fix platform-wide.
+origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
+location: n/a
+reason: The `maintenance.spare_catalogue_amended` applier does not cross-check `envelope.stream_id` against the locked `catalogue_id`, so a direct event can land on an unrelated stream. No Story 7.4 spare applier checks `stream_id` either; fix platform-wide.
+status: open
+
+### DW-120: The amend handler reads the grain unlocked and uses that `catalogue_id` as `stream_id`; if a delete or re-catalogue path is ever added, the stream and the seam-written `catalogue_id` can diverge. Same root as the item above.
+origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
+location: n/a
+reason: The amend handler reads the grain unlocked and uses that `catalogue_id` as `stream_id`; if a delete or re-catalogue path is ever added, the stream and the seam-written `catalogue_id` can diverge. Same root as the item above.
+status: open
+
+### DW-121: `POST /api/v1/maintenance/spares/amend` has no per-location write check on `location_id`, like every other maintenance write route; a storekeeper scoped to one site can amend another site's levels.
+origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
+location: n/a
+reason: `POST /api/v1/maintenance/spares/amend` has no per-location write check on `location_id`, like every other maintenance write route; a storekeeper scoped to one site can amend another site's levels.
+status: open
+
+### DW-122: A same-key replay of an amendment with a different body returns the original event and silently drops the new levels (existing platform-wide idempotency gap).
+origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
+location: n/a
+reason: A same-key replay of an amendment with a different body returns the original event and silently drops the new levels (existing platform-wide idempotency gap).
+status: open
+
+### DW-123: An amendment replay returns the current catalogue row, not the levels that event set, following the `createSpareBase` read-back pattern.
+origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
+location: n/a
+reason: An amendment replay returns the current catalogue row, not the levels that event set, following the `createSpareBase` read-back pattern.
+status: open
+
+### DW-124: The seam compares `max_level >= min_level` with JS `Number`, not NUMERIC, mirroring the Story 7.4 create assert; values differing past float precision fall through to the DB CHECK as a 500.
+origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
+location: n/a
+reason: The seam compares `max_level >= min_level` with JS `Number`, not NUMERIC, mirroring the Story 7.4 create assert; values differing past float precision fall through to the DB CHECK as a 500.
+status: open
+
+### DW-125: Story 7.9 scope: partial amendment (sending only `min_level` or only `max_level`) is not supported; the amend route replaces both levels together and an omitted level becomes null, matching the create route's paired shape.
+origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
+location: n/a
+reason: Story 7.9 scope: partial amendment (sending only `min_level` or only `max_level`) is not supported; the amend route replaces both levels together and an omitted level becomes null, matching the create route's paired shape.
+status: open
+
+### DW-126: Story 7.9 scope: toggling `is_critical` on an existing catalogue row is not amendable; it is a re-cataloguing decision with no acceptance criterion yet.
+origin: migrated from legacy ledger ("Deferred from: code review of 7-9-spare-min-max-level-amendment (2026-09-26)"), 2026-11-22
+location: n/a
+reason: Story 7.9 scope: toggling `is_critical` on an existing catalogue row is not amendable; it is a re-cataloguing decision with no acceptance criterion yet.
+status: open
+
 
 ## Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)
 
-- Job-work condition capture is out of scope: any `job_work` line (a `JOBWORK_CHALLAN` receipt or customer material on a PO line) refuses `line_condition` other than GOOD and every reason field with `RECEIVING_REASON_INVALID`, and is exempt from the short-line reason rule. Its quantity control is the Story 9.2 challan variance. Damaged customer material at receipt has no capture path yet.
-- The SHORT rule depends on capture order on a split receipt: the PO band is cumulative, so a GOOD line posted before the DAMAGED line of the same delivery looks short and needs a SHORT or OTHER reason. The client must post non-clean lines first; the server enforces the rule on whatever order arrives. A per-delivery reconciliation would remove the dependence.
-- A held DAMAGED or REJECTED putaway task can still be released to a shelf through `goods.putaway_released` (DOA `receiving.putaway_release`) with no QC disposition record. Story 8.9 owns the disposition and should gate that release.
-- EXPERIENCE.md L146 (every receipt lands in the inspection bay first, putaway only after inspection clearance) and L83 (capped excess recorded as "Excess - returned with vehicle", not posted) are not built; receiving still posts GOOD lines straight to the target and over-tolerance quantity as a rejected line.
-- The "Inspect on opening" flag (EXPERIENCE.md L84, observation plus photo travelling to the inspector) is not built; the stores mock uses it instead of a DAMAGED tile.
-- `reason_photo_ref` is an opaque key with no upload endpoint or blob store behind it (the Story 3.2 `challan_photo_ref` precedent); nothing verifies that the referenced photo exists.
-- Site-configurable reason labels are parked post-pilot (UX Q14); the catalogue is fixed in `src/compliance/receiving-reasons.ts`.
+### DW-127: Job-work condition capture is out of scope: any `job_work` line (a `JOBWORK_CHALLAN` receipt or customer material on a PO line) refuses `line_condition` other than GOOD and every reason field with `RECEIVING_REASON_INVALID`, and is exempt from the short-line reason rule. Its quantity control is the Story 9.2 challan variance. Damaged customer material at receipt has no capture path yet.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
+location: n/a
+reason: Job-work condition capture is out of scope: any `job_work` line (a `JOBWORK_CHALLAN` receipt or customer material on a PO line) refuses `line_condition` other than GOOD and every reason field with `RECEIVING_REASON_INVALID`, and is exempt from the short-line reason rule. Its quantity control is the Story 9.2 challan variance. Damaged customer material at receipt has no capture path yet.
+status: open
+
+### DW-128: The SHORT rule depends on capture order on a split receipt: the PO band is cumulative, so a GOOD line posted before the DAMAGED line of the same delivery looks short and needs a SHORT or OTHER reason. The client must post non-clean lines first; the server enforces the rule on whatever order arrives. A per-delivery reconciliation would remove the dependence.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
+location: n/a
+reason: The SHORT rule depends on capture order on a split receipt: the PO band is cumulative, so a GOOD line posted before the DAMAGED line of the same delivery looks short and needs a SHORT or OTHER reason. The client must post non-clean lines first; the server enforces the rule on whatever order arrives. A per-delivery reconciliation would remove the dependence.
+status: open
+
+### DW-129: A held DAMAGED or REJECTED putaway task can still be released to a shelf through `goods.putaway_released` (DOA `receiving.putaway_release`) with no QC disposition record. Story 8.9 owns the disposition and should gate that release.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
+location: n/a
+reason: A held DAMAGED or REJECTED putaway task can still be released to a shelf through `goods.putaway_released` (DOA `receiving.putaway_release`) with no QC disposition record. Story 8.9 owns the disposition and should gate that release.
+status: open
+
+### DW-130: EXPERIENCE.md L146 (every receipt lands in the inspection bay first, putaway only after inspection clearance) and L83 (capped excess recorded as "Excess - returned with vehicle", not posted) are not built; receiving still posts GOOD lines straight to the target and over-tolerance quantity as a rejected line.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
+location: n/a
+reason: EXPERIENCE.md L146 (every receipt lands in the inspection bay first, putaway only after inspection clearance) and L83 (capped excess recorded as "Excess - returned with vehicle", not posted) are not built; receiving still posts GOOD lines straight to the target and over-tolerance quantity as a rejected line.
+status: open
+
+### DW-131: The "Inspect on opening" flag (EXPERIENCE.md L84, observation plus photo travelling to the inspector) is not built; the stores mock uses it instead of a DAMAGED tile.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
+location: n/a
+reason: The "Inspect on opening" flag (EXPERIENCE.md L84, observation plus photo travelling to the inspector) is not built; the stores mock uses it instead of a DAMAGED tile.
+status: open
+
+### DW-132: `reason_photo_ref` is an opaque key with no upload endpoint or blob store behind it (the Story 3.2 `challan_photo_ref` precedent); nothing verifies that the referenced photo exists.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
+location: n/a
+reason: `reason_photo_ref` is an opaque key with no upload endpoint or blob store behind it (the Story 3.2 `challan_photo_ref` precedent); nothing verifies that the referenced photo exists.
+status: open
+
+### DW-133: Site-configurable reason labels are parked post-pilot (UX Q14); the catalogue is fixed in `src/compliance/receiving-reasons.ts`.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
+location: src/compliance/receiving-reasons.ts
+reason: Site-configurable reason labels are parked post-pilot (UX Q14); the catalogue is fixed in `src/compliance/receiving-reasons.ts`.
+status: open
+
 
 ## Deferred from: code review of 3-11-grn-line-condition-and-reason-codes (2026-09-27)
 
-- `schema-drift.test.ts` grn_line position check is vacuous: it lowercases the normalized init-db before searching, then reuses an older lowercase `indexOf` comparison that always returns -1, so the assertion always passes regardless of the actual column position. Pre-existing (predates Story 3.11), admitted in this story's Dev Agent Record but not fixed there.
+### DW-134: `schema-drift.test.ts` grn_line position check is vacuous: it lowercases the normalized init-db before searching, then reuses an older lowercase `indexOf` comparison that always returns -1, so the assertion always passes regardless of the actual column position. Pre-existing (predates Story 3.11), admitted in this story's Dev Agent Record but not fixed there.
+origin: migrated from legacy ledger ("Deferred from: code review of 3-11-grn-line-condition-and-reason-codes (2026-09-27)"), 2026-11-22
+location: schema-drift.test.ts
+reason: `schema-drift.test.ts` grn_line position check is vacuous: it lowercases the normalized init-db before searching, then reuses an older lowercase `indexOf` comparison that always returns -1, so the assertion always passes regardless of the actual column position. Pre-existing (predates Story 3.11), admitted in this story's Dev Agent Record but not fixed there.
+status: open
+
 
 ## Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)
 
-- Escalation to `warehouse_manager` per the DOA "Tolerance-breach acceptance band" (primary `unloading_supervisor`, escalation `warehouse_manager`) is not built. Corrected 2026-09-27 code review: the band is not timeout-based â€” it conditions the *initial* routing itself on breach magnitude (`unloading_supervisor` accepts up to 5 percent over tolerance; above 5 percent, or if unavailable, `warehouse_manager` is the approver). `applyWeighbridgeProjection` routes every `tolerance_breach` unconditionally to `unloading_supervisor` regardless of size or availability, and the `notification.created` payload carries no `escalation` field, so no escalation path exists for either condition. Deferred: pilot is single-site/single-holder with no greater-than-5-percent breach traffic yet; implementing the magnitude/availability check (DOA delegation lookup, payload shape, dispatch routing) is scoped to a follow-up story before scaling past pilot.
-- No breach acceptance or disposition action exists after Story 3.3: the breach is a notification, not a durable task row, so nothing records that the unloading supervisor accepted, rejected or re-weighed the load.
-- Breach notifications emitted before this fix on staging targeted `receiving_supervisor`, a role with no holder; the dispatcher claimed them with zero recipients, and they are not re-emitted. They are rehearsal data only; production starts clean.
-- The edge app has no notification inbox screen (`git grep api/v1/notifications -- edge/src` is empty), so a supervisor sees a breach only through `GET /api/v1/notifications` or web push until one is built.
-- The pilot roles file had to gain a `notification` read grant for `unload1@ancorlabs.org` so the holder can read the inbox; `requireRole` on the notifications routes checks the `notification` module, which no frontline role in the pack held. Whether every routed role should carry that grant by construction (a derived grant or a module-agnostic self-inbox route) is an access-matrix question for the role review.
+### DW-135: Escalation to `warehouse_manager` per the DOA "Tolerance-breach acceptance band" (primary `unloading_supervisor`, escalation `warehouse_manager`) is not built. Corrected 2026-09-27 code review: the band is not timeout-based â€” it conditions the *initial* routing itself on breach magnitude (`unloading_supervisor` accepts up to 5 percent over tolerance; above 5 percent, or if unavailable, `warehouse_manager` is the approver). `applyWeighbridgeProjection` routes every `tolerance_breach` unconditionally to `unloading_supervisor` regardless of size or availability, and the `notification.created` payload carries no `escalation` field, so no escalation path exists for either condition. Deferred: pilot is single-site/single-holder with no greater-than-5-percent breach traffic yet; implementing the magnitude/availability check (DOA delegation lookup, payload shape, dispatch routing) is scoped to a follow-up story before scaling past pilot.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Escalation to `warehouse_manager` per the DOA "Tolerance-breach acceptance band" (primary `unloading_supervisor`, escalation `warehouse_manager`) is not built. Corrected 2026-09-27 code review: the band is not timeout-based â€” it conditions the *initial* routing itself on breach magnitude (`unloading_supervisor` accepts up to 5 percent over tolerance; above 5 percent, or if unavailable, `warehouse_manager` is the approver). `applyWeighbridgeProjection` routes every `tolerance_breach` unconditionally to `unloading_supervisor` regardless of size or availability, and the `notification.created` payload carries no `escalation` field, so no escalation path exists for either condition. Deferred: pilot is single-site/single-holder with no greater-than-5-percent breach traffic yet; implementing the magnitude/availability check (DOA delegation lookup, payload shape, dispatch routing) is scoped to a follow-up story before scaling past pilot.
+status: open
+
+### DW-136: No breach acceptance or disposition action exists after Story 3.3: the breach is a notification, not a durable task row, so nothing records that the unloading supervisor accepted, rejected or re-weighed the load.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
+location: n/a
+reason: No breach acceptance or disposition action exists after Story 3.3: the breach is a notification, not a durable task row, so nothing records that the unloading supervisor accepted, rejected or re-weighed the load.
+status: open
+
+### DW-137: Breach notifications emitted before this fix on staging targeted `receiving_supervisor`, a role with no holder; the dispatcher claimed them with zero recipients, and they are not re-emitted. They are rehearsal data only; production starts clean.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Breach notifications emitted before this fix on staging targeted `receiving_supervisor`, a role with no holder; the dispatcher claimed them with zero recipients, and they are not re-emitted. They are rehearsal data only; production starts clean.
+status: open
+
+### DW-138: The edge app has no notification inbox screen (`git grep api/v1/notifications -- edge/src` is empty), so a supervisor sees a breach only through `GET /api/v1/notifications` or web push until one is built.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
+location: n/a
+reason: The edge app has no notification inbox screen (`git grep api/v1/notifications -- edge/src` is empty), so a supervisor sees a breach only through `GET /api/v1/notifications` or web push until one is built.
+status: open
+
+### DW-139: The pilot roles file had to gain a `notification` read grant for `unload1@ancorlabs.org` so the holder can read the inbox; `requireRole` on the notifications routes checks the `notification` module, which no frontline role in the pack held. Whether every routed role should carry that grant by construction (a derived grant or a module-agnostic self-inbox route) is an access-matrix question for the role review.
+origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
+location: n/a
+reason: The pilot roles file had to gain a `notification` read grant for `unload1@ancorlabs.org` so the holder can read the inbox; `requireRole` on the notifications routes checks the `notification` module, which no frontline role in the pack held. Whether every routed role should carry that grant by construction (a derived grant or a module-agnostic self-inbox route) is an access-matrix question for the role review.
+status: open
+
 
 ## Deferred from: code review of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)
 
-- Pilot pack (`docs/migration/pilot-mock-extract/roles.json`, `world.json`) hand-edited rather than regenerated from `deploy/rehearsal/mock/generate.mjs`, with no test asserting the generator's grant tuple and the hand-added fixture entry stay in shape/value sync. Established pattern for this pack (predates this story); a future regeneration could silently diverge.
-- The integration test's site-B negative control (`test/integration/story-3-12.test.ts:116-135`) is a synthetic user, not drawn from the fixture, and `pilotHolderGrants()` accepts `location_id === '*'` as an equally valid match to `'site'`. A future fixture edit widening `unload1`'s grant to `'*'` would keep the suite green without anyone noticing the scope change.
+### DW-140: Pilot pack (`docs/migration/pilot-mock-extract/roles.json`, `world.json`) hand-edited rather than regenerated from `deploy/rehearsal/mock/generate.mjs`, with no test asserting the generator's grant tuple and the hand-added fixture entry stay in shape/value sync. Established pattern for this pack (predates this story); a future regeneration could silently diverge.
+origin: migrated from legacy ledger ("Deferred from: code review of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
+location: docs/migration/pilot-mock-extract/roles.json
+reason: Pilot pack (`docs/migration/pilot-mock-extract/roles.json`, `world.json`) hand-edited rather than regenerated from `deploy/rehearsal/mock/generate.mjs`, with no test asserting the generator's grant tuple and the hand-added fixture entry stay in shape/value sync. Established pattern for this pack (predates this story); a future regeneration could silently diverge.
+status: open
+
+### DW-141: The integration test's site-B negative control (`test/integration/story-3-12.test.ts:116-135`) is a synthetic user, not drawn from the fixture, and `pilotHolderGrants()` accepts `location_id === '*'` as an equally valid match to `'site'`. A future fixture edit widening `unload1`'s grant to `'*'` would keep the suite green without anyone noticing the scope change.
+origin: migrated from legacy ledger ("Deferred from: code review of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
+location: test/integration/story-3-12.test.ts
+reason: The integration test's site-B negative control (`test/integration/story-3-12.test.ts:116-135`) is a synthetic user, not drawn from the fixture, and `pilotHolderGrants()` accepts `location_id === '*'` as an equally valid match to `'site'`. A future fixture edit widening `unload1`'s grant to `'*'` would keep the suite green without anyone noticing the scope change.
+status: open
+
 
 ## Deferred from: dev of 1-15-employee-base-role (2026-09-27)
 
-- Withdrawing or confirming one's own requisition from the base role (D3): confirm, withdraw, approve, reject and cancel stay procurement write, so an employee-only person who raises a duplicate-held requisition cannot confirm or withdraw it without help. Reasonable next step; needs an access-matrix row first. Annotated 2026-11-19: Story 4.12 takes the approve, reject and detail-read half (gate widened to the employee hat with per-line identity); confirm, withdraw and cancel remain deferred.
-- Availability "Low" state, "expected <date>" and "Collect at <counter>" chips (D5): need min-max levels, open PO data and a counter register. `mockups/key-requisitions.html` still shows "In stock - 12 available" and "Low - N available"; the UX owner is to amend the mock to the no-number rule.
-- Availability omits `item_name` (Table 2 lists it): `item_master` has no name or description column anywhere in the schema, and adding one is a schema change outside this story (AD-14, schema-drift). The response carries `sku`, `uom`, `in_stock`, `locations`; add the name when the item master gains one.
-- My requests cards show no line count: `GET /api/v1/indents` returns indent headers only, and fetching lines per card is one call per row. Add a `line_count` to the list projection if the count is wanted.
-- The `Report damage` nav entry and the `damage_reports` section of My requests belong to Story 8.9, which appends its (stream, event) pair to `EMPLOYEE_EDGE_EVENTS` and its section to `SECTIONS` in `edge/src/components/my-requests.tsx`.
-- No users lookup for display names on the edge: My requests says "Routed for approval" instead of naming the approver.
-- Bootstrap `navigation` is not cached offline: an offline start shows the two-entry placeholder menu, so the base entries appear only once the device reaches the API. Deep links still work; the no-access card is shown only after a live bootstrap (`navigationConfirmed`).
-- `assertSiteReadAccess` and the new `assertIndentReadAccess` in `src/api/v1/indents.ts` repeat the procurement scope computation; the duplicated RBAC matcher in `src/api/v1/refused-captures.ts` versus `src/middleware/rbac.ts` (Story 1.14 deferral) is still open, and the bootstrap now filters the employee module out before calling `hasRefusedCaptureReadScope`, a third place that knows the matcher's shape.
-- An employee-only person cannot see the refusal of their own offline requisition: refused captures are scoped by the stream module (`procurement`), which the base hat does not grant. The refusal is visible to a procurement or site supervisor.
+### DW-142: Withdrawing or confirming one's own requisition from the base role (D3): confirm, withdraw, approve, reject and cancel stay procurement write, so an employee-only person who raises a duplicate-held requisition cannot confirm or withdraw it without help. Reasonable next step; needs an access-matrix row first. Annotated 2026-11-19: Story 4.12 takes the approve, reject and detail-read half (gate widened to the employee hat with per-line identity); confirm, withdraw and cancel remain deferred.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Withdrawing or confirming one's own requisition from the base role (D3): confirm, withdraw, approve, reject and cancel stay procurement write, so an employee-only person who raises a duplicate-held requisition cannot confirm or withdraw it without help. Reasonable next step; needs an access-matrix row first. Annotated 2026-11-19: Story 4.12 takes the approve, reject and detail-read half (gate widened to the employee hat with per-line identity); confirm, withdraw and cancel remain deferred.
+status: open
+
+### DW-143: Availability "Low" state, "expected <date>" and "Collect at <counter>" chips (D5): need min-max levels, open PO data and a counter register. `mockups/key-requisitions.html` still shows "In stock - 12 available" and "Low - N available"; the UX owner is to amend the mock to the no-number rule.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
+location: mockups/key-requisitions.html
+reason: Availability "Low" state, "expected <date>" and "Collect at <counter>" chips (D5): need min-max levels, open PO data and a counter register. `mockups/key-requisitions.html` still shows "In stock - 12 available" and "Low - N available"; the UX owner is to amend the mock to the no-number rule.
+status: open
+
+### DW-144: Availability omits `item_name` (Table 2 lists it): `item_master` has no name or description column anywhere in the schema, and adding one is a schema change outside this story (AD-14, schema-drift). The response carries `sku`, `uom`, `in_stock`, `locations`; add the name when the item master gains one.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Availability omits `item_name` (Table 2 lists it): `item_master` has no name or description column anywhere in the schema, and adding one is a schema change outside this story (AD-14, schema-drift). The response carries `sku`, `uom`, `in_stock`, `locations`; add the name when the item master gains one.
+status: open
+
+### DW-145: My requests cards show no line count: `GET /api/v1/indents` returns indent headers only, and fetching lines per card is one call per row. Add a `line_count` to the list projection if the count is wanted.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
+location: n/a
+reason: My requests cards show no line count: `GET /api/v1/indents` returns indent headers only, and fetching lines per card is one call per row. Add a `line_count` to the list projection if the count is wanted.
+status: open
+
+### DW-146: The `Report damage` nav entry and the `damage_reports` section of My requests belong to Story 8.9, which appends its (stream, event) pair to `EMPLOYEE_EDGE_EVENTS` and its section to `SECTIONS` in `edge/src/components/my-requests.tsx`.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
+location: edge/src/components/my-requests.tsx
+reason: The `Report damage` nav entry and the `damage_reports` section of My requests belong to Story 8.9, which appends its (stream, event) pair to `EMPLOYEE_EDGE_EVENTS` and its section to `SECTIONS` in `edge/src/components/my-requests.tsx`.
+status: open
+
+### DW-147: No users lookup for display names on the edge: My requests says "Routed for approval" instead of naming the approver.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
+location: n/a
+reason: No users lookup for display names on the edge: My requests says "Routed for approval" instead of naming the approver.
+status: open
+
+### DW-148: Bootstrap `navigation` is not cached offline: an offline start shows the two-entry placeholder menu, so the base entries appear only once the device reaches the API. Deep links still work; the no-access card is shown only after a live bootstrap (`navigationConfirmed`).
+origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Bootstrap `navigation` is not cached offline: an offline start shows the two-entry placeholder menu, so the base entries appear only once the device reaches the API. Deep links still work; the no-access card is shown only after a live bootstrap (`navigationConfirmed`).
+status: open
+
+### DW-149: `assertSiteReadAccess` and the new `assertIndentReadAccess` in `src/api/v1/indents.ts` repeat the procurement scope computation; the duplicated RBAC matcher in `src/api/v1/refused-captures.ts` versus `src/middleware/rbac.ts` (Story 1.14 deferral) is still open, and the bootstrap now filters the employee module out before calling `hasRefusedCaptureReadScope`, a third place that knows the matcher's shape.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
+location: src/api/v1/indents.ts
+reason: `assertSiteReadAccess` and the new `assertIndentReadAccess` in `src/api/v1/indents.ts` repeat the procurement scope computation; the duplicated RBAC matcher in `src/api/v1/refused-captures.ts` versus `src/middleware/rbac.ts` (Story 1.14 deferral) is still open, and the bootstrap now filters the employee module out before calling `hasRefusedCaptureReadScope`, a third place that knows the matcher's shape.
+status: open
+
+### DW-150: An employee-only person cannot see the refusal of their own offline requisition: refused captures are scoped by the stream module (`procurement`), which the base hat does not grant. The refusal is visible to a procurement or site supervisor.
+origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
+location: n/a
+reason: An employee-only person cannot see the refusal of their own offline requisition: refused captures are scoped by the stream module (`procurement`), which the base hat does not grant. The refusal is visible to a procurement or site supervisor.
+status: open
+
 
 ## Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)
 
-- Disposing of held units after a debit note, return for replacement or write-off: the units stay booked in `ZONE-QC-HOLD` and held by the D5 guard after the case closes. The physical return and its returnable gate pass wait for Epic 20 (AD-13); write-off destruction and ITC reversal wait for FR-SC-20 (Phase 2).
-- Transmitting the commercial outcome to ERP (D13): finance executes the debit note, return or write-off in ERP and records only the document number (`erp_document_ref_ext`). Outbound ERP stays limited to BOM structure (ARCHITECTURE-SPINE.md L66).
-- Returning issued (`in_use`) units to the stock ledger: an in-use report marked arrived becomes `in_qc_hold` with no stock posting; bringing issued material back to stock is a material return, not built.
-- Partial release of unconfirmed units on a receipt putaway task: the held putaway of a DAMAGED or REJECTED line releases whole, only after the case is cleared or closed accepted as-is. Stores moves unconfirmed units with a bin move, which the D5 guard allows once the case holds fewer units.
-- Reporter screen: "or pick from material issued to me (last 7 days)" and "of N issued" (no issued-material read exists); serial-level reporting (a serial-controlled report records `serial_controlled` and holds nothing); damaged job-work or customer material (deferred-work L1155).
-- Correcting a locked case: after both keys or an escalation the case is locked; a correction as a linked new case is not built.
-- A scheduled sweep for overdue external checks (Table 8 last row): no existing sweep was reusable, so none runs; the workbench lists overdue external checks first instead.
-- An employee-only reporter cannot see the central refusal of their own offline damage capture (deferred-work L1187): refused captures are scoped by the stream module, and no one holds a `damage` module. The device still shows "Needs attention" with the code.
-- Standing approvals and self-approval limits for the replacement requisition (Story 4.8) and the `NOT_RESOLVED_APPROVER` fallback (Story 4.9): the replacement is an ordinary requisition under today's rules.
-- Deviation recorded: `hold_note` gained a sixth value, `no_qc_hold_zone`, for a site with no active `ZONE-QC-HOLD` quarantine location (Table 9 lists five). The report is still never refused; it records with the note, as D4 requires for every other stock reason.
-- Location codes are globally unique (`uq_location_register_code`), so the literal `ZONE-QC-HOLD` serves one site per database - the same limit receiving has had since Story 3.4. A second pilot site needs a per-site QC hold lookup in both places.
-- Notification inbox reach: `qc_inspector`, `qc_head`, `store_assistant`, `finance_controller` and `ceo` hold no `notification` module grant in the pilot pack, so the damage notifications reach them through the dispatcher and web push but not through `GET /api/v1/notifications` (the Story 3.12 finding, which added the grant for `unload1@` only). The Damage cases workbench is their inbox for now.
-- DOA authority is the single oldest active holder of the governing role (`findRoleHolder`, platform-wide Phase-1 simplification): a second QC head or finance controller cannot turn a damage key unless the first is on vacation delegation.
-- The workbench's authority branch scans up to 2,000 recent cases per request (`listOpenDamageReports`) to find those the caller is the pending authority for; fine at pilot volume, needs an indexed pending-step view at scale.
-- The report-time relocation into `ZONE-QC-HOLD` writes no `lot_trace` entry (the bin-move precedent); a lot's trace shows the damage case only through the case itself.
+### DW-151: Disposing of held units after a debit note, return for replacement or write-off: the units stay booked in `ZONE-QC-HOLD` and held by the D5 guard after the case closes. The physical return and its returnable gate pass wait for Epic 20 (AD-13); write-off destruction and ITC reversal wait for FR-SC-20 (Phase 2).
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Disposing of held units after a debit note, return for replacement or write-off: the units stay booked in `ZONE-QC-HOLD` and held by the D5 guard after the case closes. The physical return and its returnable gate pass wait for Epic 20 (AD-13); write-off destruction and ITC reversal wait for FR-SC-20 (Phase 2).
+status: open
+
+### DW-152: Transmitting the commercial outcome to ERP (D13): finance executes the debit note, return or write-off in ERP and records only the document number (`erp_document_ref_ext`). Outbound ERP stays limited to BOM structure (ARCHITECTURE-SPINE.md L66).
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Transmitting the commercial outcome to ERP (D13): finance executes the debit note, return or write-off in ERP and records only the document number (`erp_document_ref_ext`). Outbound ERP stays limited to BOM structure (ARCHITECTURE-SPINE.md L66).
+status: open
+
+### DW-153: Returning issued (`in_use`) units to the stock ledger: an in-use report marked arrived becomes `in_qc_hold` with no stock posting; bringing issued material back to stock is a material return, not built.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Returning issued (`in_use`) units to the stock ledger: an in-use report marked arrived becomes `in_qc_hold` with no stock posting; bringing issued material back to stock is a material return, not built.
+status: open
+
+### DW-154: Partial release of unconfirmed units on a receipt putaway task: the held putaway of a DAMAGED or REJECTED line releases whole, only after the case is cleared or closed accepted as-is. Stores moves unconfirmed units with a bin move, which the D5 guard allows once the case holds fewer units.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Partial release of unconfirmed units on a receipt putaway task: the held putaway of a DAMAGED or REJECTED line releases whole, only after the case is cleared or closed accepted as-is. Stores moves unconfirmed units with a bin move, which the D5 guard allows once the case holds fewer units.
+status: open
+
+### DW-155: Reporter screen: "or pick from material issued to me (last 7 days)" and "of N issued" (no issued-material read exists); serial-level reporting (a serial-controlled report records `serial_controlled` and holds nothing); damaged job-work or customer material (deferred-work L1155).
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Reporter screen: "or pick from material issued to me (last 7 days)" and "of N issued" (no issued-material read exists); serial-level reporting (a serial-controlled report records `serial_controlled` and holds nothing); damaged job-work or customer material (deferred-work L1155).
+status: open
+
+### DW-156: Correcting a locked case: after both keys or an escalation the case is locked; a correction as a linked new case is not built.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Correcting a locked case: after both keys or an escalation the case is locked; a correction as a linked new case is not built.
+status: open
+
+### DW-157: A scheduled sweep for overdue external checks (Table 8 last row): no existing sweep was reusable, so none runs; the workbench lists overdue external checks first instead.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: A scheduled sweep for overdue external checks (Table 8 last row): no existing sweep was reusable, so none runs; the workbench lists overdue external checks first instead.
+status: open
+
+### DW-158: An employee-only reporter cannot see the central refusal of their own offline damage capture (deferred-work L1187): refused captures are scoped by the stream module, and no one holds a `damage` module. The device still shows "Needs attention" with the code.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: An employee-only reporter cannot see the central refusal of their own offline damage capture (deferred-work L1187): refused captures are scoped by the stream module, and no one holds a `damage` module. The device still shows "Needs attention" with the code.
+status: open
+
+### DW-159: Standing approvals and self-approval limits for the replacement requisition (Story 4.8) and the `NOT_RESOLVED_APPROVER` fallback (Story 4.9): the replacement is an ordinary requisition under today's rules.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Standing approvals and self-approval limits for the replacement requisition (Story 4.8) and the `NOT_RESOLVED_APPROVER` fallback (Story 4.9): the replacement is an ordinary requisition under today's rules.
+status: open
+
+### DW-160: Deviation recorded: `hold_note` gained a sixth value, `no_qc_hold_zone`, for a site with no active `ZONE-QC-HOLD` quarantine location (Table 9 lists five). The report is still never refused; it records with the note, as D4 requires for every other stock reason.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Deviation recorded: `hold_note` gained a sixth value, `no_qc_hold_zone`, for a site with no active `ZONE-QC-HOLD` quarantine location (Table 9 lists five). The report is still never refused; it records with the note, as D4 requires for every other stock reason.
+status: open
+
+### DW-161: Location codes are globally unique (`uq_location_register_code`), so the literal `ZONE-QC-HOLD` serves one site per database - the same limit receiving has had since Story 3.4. A second pilot site needs a per-site QC hold lookup in both places.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Location codes are globally unique (`uq_location_register_code`), so the literal `ZONE-QC-HOLD` serves one site per database - the same limit receiving has had since Story 3.4. A second pilot site needs a per-site QC hold lookup in both places.
+status: open
+
+### DW-162: Notification inbox reach: `qc_inspector`, `qc_head`, `store_assistant`, `finance_controller` and `ceo` hold no `notification` module grant in the pilot pack, so the damage notifications reach them through the dispatcher and web push but not through `GET /api/v1/notifications` (the Story 3.12 finding, which added the grant for `unload1@` only). The Damage cases workbench is their inbox for now.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: Notification inbox reach: `qc_inspector`, `qc_head`, `store_assistant`, `finance_controller` and `ceo` hold no `notification` module grant in the pilot pack, so the damage notifications reach them through the dispatcher and web push but not through `GET /api/v1/notifications` (the Story 3.12 finding, which added the grant for `unload1@` only). The Damage cases workbench is their inbox for now.
+status: open
+
+### DW-163: DOA authority is the single oldest active holder of the governing role (`findRoleHolder`, platform-wide Phase-1 simplification): a second QC head or finance controller cannot turn a damage key unless the first is on vacation delegation.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: DOA authority is the single oldest active holder of the governing role (`findRoleHolder`, platform-wide Phase-1 simplification): a second QC head or finance controller cannot turn a damage key unless the first is on vacation delegation.
+status: open
+
+### DW-164: The workbench's authority branch scans up to 2,000 recent cases per request (`listOpenDamageReports`) to find those the caller is the pending authority for; fine at pilot volume, needs an indexed pending-step view at scale.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: The workbench's authority branch scans up to 2,000 recent cases per request (`listOpenDamageReports`) to find those the caller is the pending authority for; fine at pilot volume, needs an indexed pending-step view at scale.
+status: open
+
+### DW-165: The report-time relocation into `ZONE-QC-HOLD` writes no `lot_trace` entry (the bin-move precedent); a lot's trace shows the damage case only through the case itself.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: n/a
+reason: The report-time relocation into `ZONE-QC-HOLD` writes no `lot_trace` entry (the bin-move precedent); a lot's trace shows the damage case only through the case itself.
+status: open
+
 
 ## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)
 
 Backend-core chunk only (group 1 of 5; diff `2731fa5..857da7e`). The workbench full-scan/N+1 finding from this pass duplicates the already-recorded "scans up to 2,000 recent cases" entry above and is not re-listed here.
 
-- `resolveDamageAuthority`'s escalate-to-next-available-band DOA fallback and its wall-clock (not `occurred_at`) delegation check were initially triaged as Story 8.9 bugs, but both are pre-existing, already-reviewed, platform-wide conventions (`listActiveDoaEntries`'s docstring names the fallback "Story 2.5 review"; every `findActiveDelegation` call site in the codebase uses wall-clock `today`). Fixing only `damage.ts` would make it inconsistent with every other approver/delegation resolver. Deferred to a cross-cutting DOA/delegation review if the platform owner wants either behavior changed.
-- `RAW_BODY_PATH_PREFIX` in `src/api/router.ts:24` is a blanket string-prefix match over the whole `/api/v1/attachments/` namespace rather than the specific upload route; any future PUT endpoint added under that prefix silently receives a raw Buffer instead of parsed JSON, with no compile-time signal. Pre-existing router style in this codebase, not a regression.
-- Concurrent-PUT idempotent retry on attachments (`putAttachmentBase`, `src/api/v1/attachments.ts`) compares only `sha256` against the stored row, not `content_type` - a retry that mislabels content_type is silently accepted. The narrower check-then-insert race on duplicate `report_id`/`indent_id` (`src/compliance/damage.ts` applyDamageReported ~2208, `src/compliance/indent.ts` applyIndentRaised) is the same class of gap, backstopped in practice by the generic 23505 handler in `src/events/store.ts`.
-- `expected_return_date` on a damage custody record (`src/compliance/damage.ts` ~1824-1836) is validated as a calendar date but never checked against being in the past; not tied to any AC, minor data-quality nicety.
+### DW-166: `resolveDamageAuthority`'s escalate-to-next-available-band DOA fallback and its wall-clock (not `occurred_at`) delegation check were initially triaged as Story 8.9 bugs, but both are pre-existing, already-reviewed, platform-wide conventions (`listActiveDoaEntries`'s docstring names the fallback "Story 2.5 review"; every `findActiveDelegation` call site in the codebase uses wall-clock `today`). Fixing only `damage.ts` would make it inconsistent with every other approver/delegation resolver. Deferred to a cross-cutting DOA/delegation review if the platform owner wants either behavior changed.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: damage.ts
+reason: `resolveDamageAuthority`'s escalate-to-next-available-band DOA fallback and its wall-clock (not `occurred_at`) delegation check were initially triaged as Story 8.9 bugs, but both are pre-existing, already-reviewed, platform-wide conventions (`listActiveDoaEntries`'s docstring names the fallback "Story 2.5 review"; every `findActiveDelegation` call site in the codebase uses wall-clock `today`). Fixing only `damage.ts` would make it inconsistent with every other approver/delegation resolver. Deferred to a cross-cutting DOA/delegation review if the platform owner wants either behavior changed.
+status: open
+
+### DW-167: `RAW_BODY_PATH_PREFIX` in `src/api/router.ts:24` is a blanket string-prefix match over the whole `/api/v1/attachments/` namespace rather than the specific upload route; any future PUT endpoint added under that prefix silently receives a raw Buffer instead of parsed JSON, with no compile-time signal. Pre-existing router style in this codebase, not a regression.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: src/api/router.ts
+reason: `RAW_BODY_PATH_PREFIX` in `src/api/router.ts:24` is a blanket string-prefix match over the whole `/api/v1/attachments/` namespace rather than the specific upload route; any future PUT endpoint added under that prefix silently receives a raw Buffer instead of parsed JSON, with no compile-time signal. Pre-existing router style in this codebase, not a regression.
+status: open
+
+### DW-168: Concurrent-PUT idempotent retry on attachments (`putAttachmentBase`, `src/api/v1/attachments.ts`) compares only `sha256` against the stored row, not `content_type` - a retry that mislabels content_type is silently accepted. The narrower check-then-insert race on duplicate `report_id`/`indent_id` (`src/compliance/damage.ts` applyDamageReported ~2208, `src/compliance/indent.ts` applyIndentRaised) is the same class of gap, backstopped in practice by the generic 23505 handler in `src/events/store.ts`.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: src/api/v1/attachments.ts
+reason: Concurrent-PUT idempotent retry on attachments (`putAttachmentBase`, `src/api/v1/attachments.ts`) compares only `sha256` against the stored row, not `content_type` - a retry that mislabels content_type is silently accepted. The narrower check-then-insert race on duplicate `report_id`/`indent_id` (`src/compliance/damage.ts` applyDamageReported ~2208, `src/compliance/indent.ts` applyIndentRaised) is the same class of gap, backstopped in practice by the generic 23505 handler in `src/events/store.ts`.
+status: open
+
+### DW-169: `expected_return_date` on a damage custody record (`src/compliance/damage.ts` ~1824-1836) is validated as a calendar date but never checked against being in the past; not tied to any AC, minor data-quality nicety.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
+location: src/compliance/damage.ts
+reason: `expected_return_date` on a damage custody record (`src/compliance/damage.ts` ~1824-1836) is validated as a calendar date but never checked against being in the past; not tied to any AC, minor data-quality nicety.
+status: open
+
 
 ## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 2 (2026-09-28)
 
 Read/events/infra chunk (group 2 of 5). The recursive quarantine-pool CTE finding below is real but requires a location hierarchy deeper than any pilot site has; the fail-open finding is defensive dead code today.
 
-- The recursive quarantine-pool CTE in `assertDamageHeldQuantity` (`src/read/projections/damage_report.ts`) caps at `depth < 10` with no warning if a site's location hierarchy under a quarantine flag is deeper - bins below it would silently drop out of the pool the D5 guard sums against.
-- `assertDamageHeldQuantity` fails open (skips the guard entirely) if `sourceLocationId` doesn't resolve to a row in `location_register` - can't currently occur since `stock_balance.location_id` is FK-constrained there, but the function doesn't rely on that invariant explicitly.
-- Undocumented `hold_note` value `no_qc_hold_zone` (`read/projections/damage_report.sql`) isn't in the story's Table 9 catalogue of five hold-note reasons - a sensible fallback for a site missing `ZONE-QC-HOLD`, just not spec'd.
-- Undocumented `whole_lot_already_held` column isn't in the story's Table 9 column list for the whole-lot group, though the event payload's `lot_already_held` needs somewhere to persist and this is where it lands.
-- `readRawBody` (`src/middleware/body.ts`) throws on an oversized body without draining or destroying the request socket - mirrors the pre-existing `readJsonBody` in the same file exactly, not a Story 8.9 regression; a fix belongs to both together.
+### DW-170: The recursive quarantine-pool CTE in `assertDamageHeldQuantity` (`src/read/projections/damage_report.ts`) caps at `depth < 10` with no warning if a site's location hierarchy under a quarantine flag is deeper - bins below it would silently drop out of the pool the D5 guard sums against.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 2 (2026-09-28)"), 2026-11-22
+location: src/read/projections/damage_report.ts
+reason: The recursive quarantine-pool CTE in `assertDamageHeldQuantity` (`src/read/projections/damage_report.ts`) caps at `depth < 10` with no warning if a site's location hierarchy under a quarantine flag is deeper - bins below it would silently drop out of the pool the D5 guard sums against.
+status: open
+
+### DW-171: `assertDamageHeldQuantity` fails open (skips the guard entirely) if `sourceLocationId` doesn't resolve to a row in `location_register` - can't currently occur since `stock_balance.location_id` is FK-constrained there, but the function doesn't rely on that invariant explicitly.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 2 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: `assertDamageHeldQuantity` fails open (skips the guard entirely) if `sourceLocationId` doesn't resolve to a row in `location_register` - can't currently occur since `stock_balance.location_id` is FK-constrained there, but the function doesn't rely on that invariant explicitly.
+status: open
+
+### DW-172: Undocumented `hold_note` value `no_qc_hold_zone` (`read/projections/damage_report.sql`) isn't in the story's Table 9 catalogue of five hold-note reasons - a sensible fallback for a site missing `ZONE-QC-HOLD`, just not spec'd.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 2 (2026-09-28)"), 2026-11-22
+location: read/projections/damage_report.sql
+reason: Undocumented `hold_note` value `no_qc_hold_zone` (`read/projections/damage_report.sql`) isn't in the story's Table 9 catalogue of five hold-note reasons - a sensible fallback for a site missing `ZONE-QC-HOLD`, just not spec'd.
+status: open
+
+### DW-173: Undocumented `whole_lot_already_held` column isn't in the story's Table 9 column list for the whole-lot group, though the event payload's `lot_already_held` needs somewhere to persist and this is where it lands.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 2 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: Undocumented `whole_lot_already_held` column isn't in the story's Table 9 column list for the whole-lot group, though the event payload's `lot_already_held` needs somewhere to persist and this is where it lands.
+status: open
+
+### DW-174: `readRawBody` (`src/middleware/body.ts`) throws on an oversized body without draining or destroying the request socket - mirrors the pre-existing `readJsonBody` in the same file exactly, not a Story 8.9 regression; a fix belongs to both together.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 2 (2026-09-28)"), 2026-11-22
+location: src/middleware/body.ts
+reason: `readRawBody` (`src/middleware/body.ts`) throws on an oversized body without draining or destroying the request socket - mirrors the pre-existing `readJsonBody` in the same file exactly, not a Story 8.9 regression; a fix belongs to both together.
+status: open
+
 
 ## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)
 
 Edge-app chunk (group 3 of 5). Needs a product decision on photo retention before the first two items are actionable.
 
-- `edge/src/local-db/pending-photos.ts` has no cap, eviction, or retention policy - an orphaned or departed-user's photo blob sits in IndexedDB indefinitely.
-- `reencodeAsJpeg`/`uploadOne` (`edge/src/sync/attachment-uploader.ts`) silently degrade a photo to fit the 10MB cap with no signal to the reporter or QC, and retry a doomed re-encode indefinitely if the server rejects it for a non-size reason.
-- `classifyUploadResponse` treats `ATTACHMENT_CONFLICT` as unconditionally "stored" on an unverified assumption about why the conflict occurred.
-- `DamageCases`'s per-slot idempotency key (`edge/src/components/damage-cases.tsx`) is reused across a retry even if the form body changed between attempts.
-- `InspectionCard`'s client-side quantity check uses `Number()` comparison instead of decimal-string comparison; the server is authoritative and re-validates.
-- `groupWorkbench` (`edge/src/components/damage-case-view.ts`) has no `default` case on `report.status`.
-- `WORKBENCH_LIMIT = 200` (`edge/src/components/damage-cases.tsx`) truncates with no "there are more" indicator.
-- `CasePhoto`'s object-URL cleanup has a narrow unmount-timing race that can leak one blob URL.
-- `DamageCases.loadList` collapses any non-403 failure into "needs-connection," obscuring real backend errors.
-- `missingDamageParts`'s focus target always lands on the same radio regardless of context.
+### DW-175: `edge/src/local-db/pending-photos.ts` has no cap, eviction, or retention policy - an orphaned or departed-user's photo blob sits in IndexedDB indefinitely.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: edge/src/local-db/pending-photos.ts
+reason: `edge/src/local-db/pending-photos.ts` has no cap, eviction, or retention policy - an orphaned or departed-user's photo blob sits in IndexedDB indefinitely.
+status: open
+
+### DW-176: `reencodeAsJpeg`/`uploadOne` (`edge/src/sync/attachment-uploader.ts`) silently degrade a photo to fit the 10MB cap with no signal to the reporter or QC, and retry a doomed re-encode indefinitely if the server rejects it for a non-size reason.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: edge/src/sync/attachment-uploader.ts
+reason: `reencodeAsJpeg`/`uploadOne` (`edge/src/sync/attachment-uploader.ts`) silently degrade a photo to fit the 10MB cap with no signal to the reporter or QC, and retry a doomed re-encode indefinitely if the server rejects it for a non-size reason.
+status: open
+
+### DW-177: `classifyUploadResponse` treats `ATTACHMENT_CONFLICT` as unconditionally "stored" on an unverified assumption about why the conflict occurred.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: `classifyUploadResponse` treats `ATTACHMENT_CONFLICT` as unconditionally "stored" on an unverified assumption about why the conflict occurred.
+status: open
+
+### DW-178: `DamageCases`'s per-slot idempotency key (`edge/src/components/damage-cases.tsx`) is reused across a retry even if the form body changed between attempts.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: edge/src/components/damage-cases.tsx
+reason: `DamageCases`'s per-slot idempotency key (`edge/src/components/damage-cases.tsx`) is reused across a retry even if the form body changed between attempts.
+status: open
+
+### DW-179: `InspectionCard`'s client-side quantity check uses `Number()` comparison instead of decimal-string comparison; the server is authoritative and re-validates.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: `InspectionCard`'s client-side quantity check uses `Number()` comparison instead of decimal-string comparison; the server is authoritative and re-validates.
+status: open
+
+### DW-180: `groupWorkbench` (`edge/src/components/damage-case-view.ts`) has no `default` case on `report.status`.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: edge/src/components/damage-case-view.ts
+reason: `groupWorkbench` (`edge/src/components/damage-case-view.ts`) has no `default` case on `report.status`.
+status: open
+
+### DW-181: `WORKBENCH_LIMIT = 200` (`edge/src/components/damage-cases.tsx`) truncates with no "there are more" indicator.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: edge/src/components/damage-cases.tsx
+reason: `WORKBENCH_LIMIT = 200` (`edge/src/components/damage-cases.tsx`) truncates with no "there are more" indicator.
+status: open
+
+### DW-182: `CasePhoto`'s object-URL cleanup has a narrow unmount-timing race that can leak one blob URL.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: `CasePhoto`'s object-URL cleanup has a narrow unmount-timing race that can leak one blob URL.
+status: open
+
+### DW-183: `DamageCases.loadList` collapses any non-403 failure into "needs-connection," obscuring real backend errors.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: `DamageCases.loadList` collapses any non-403 failure into "needs-connection," obscuring real backend errors.
+status: open
+
+### DW-184: `missingDamageParts`'s focus target always lands on the same radio regardless of context.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: `missingDamageParts`'s focus target always lands on the same radio regardless of context.
+status: open
+
 
 ## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)
 
 Deploy/docs/misc chunk (group 5 of 5, the last one - the full diff has now been reviewed end to end).
 
-- The escalation flow's second damage case in `deploy/rehearsal/mock/operations-smoke.ts` references a photo attachment id that's never uploaded - allowed by the offline-pending schema design, but undocumented as deliberate in the script.
-- Repeated staging runs of `damageReport()` permanently consume 2 units of `BRG-6204` with no reclaim path; eventual stock exhaustion would silently turn future PASS runs into SKIP with nothing flagging it.
-- `deploy/provision/staging-doa-bands.sh`'s comment for the three new damage bands is a garbled run-on sentence.
-- Runbook row 2.10g packs five distinct actions into one evidence cell with no intermediate checkpoint.
-- `operations-smoke.ts`'s `report_id`/QC-key-turn steps don't assert response shape before building follow-up URLs.
-- `ops-lib.ts`/`rehearse.ts`'s remote-request Buffer-body handling for a photo upload wasn't confirmed to match the local-request path's Content-Type care.
+### DW-185: The escalation flow's second damage case in `deploy/rehearsal/mock/operations-smoke.ts` references a photo attachment id that's never uploaded - allowed by the offline-pending schema design, but undocumented as deliberate in the script.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)"), 2026-11-22
+location: deploy/rehearsal/mock/operations-smoke.ts
+reason: The escalation flow's second damage case in `deploy/rehearsal/mock/operations-smoke.ts` references a photo attachment id that's never uploaded - allowed by the offline-pending schema design, but undocumented as deliberate in the script.
+status: open
+
+### DW-186: Repeated staging runs of `damageReport()` permanently consume 2 units of `BRG-6204` with no reclaim path; eventual stock exhaustion would silently turn future PASS runs into SKIP with nothing flagging it.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: Repeated staging runs of `damageReport()` permanently consume 2 units of `BRG-6204` with no reclaim path; eventual stock exhaustion would silently turn future PASS runs into SKIP with nothing flagging it.
+status: open
+
+### DW-187: `deploy/provision/staging-doa-bands.sh`'s comment for the three new damage bands is a garbled run-on sentence.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)"), 2026-11-22
+location: deploy/provision/staging-doa-bands.sh
+reason: `deploy/provision/staging-doa-bands.sh`'s comment for the three new damage bands is a garbled run-on sentence.
+status: open
+
+### DW-188: Runbook row 2.10g packs five distinct actions into one evidence cell with no intermediate checkpoint.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: Runbook row 2.10g packs five distinct actions into one evidence cell with no intermediate checkpoint.
+status: open
+
+### DW-189: `operations-smoke.ts`'s `report_id`/QC-key-turn steps don't assert response shape before building follow-up URLs.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)"), 2026-11-22
+location: operations-smoke.ts
+reason: `operations-smoke.ts`'s `report_id`/QC-key-turn steps don't assert response shape before building follow-up URLs.
+status: open
+
+### DW-190: `ops-lib.ts`/`rehearse.ts`'s remote-request Buffer-body handling for a photo upload wasn't confirmed to match the local-request path's Content-Type care.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)"), 2026-11-22
+location: ops-lib.ts
+reason: `ops-lib.ts`/`rehearse.ts`'s remote-request Buffer-body handling for a photo upload wasn't confirmed to match the local-request path's Content-Type care.
+status: open
+
 
 ## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)
 
 Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items below are additive test-coverage suggestions, not defects - the chunk's one real bug (the mock stub missing the newest action) was fixed directly, see the story file.
 
-- The finance-workbench test doesn't assert the returned case set has no unexpected extra members of an allowed status - weaker than the story's "exactly" wording.
-- `damage-stub.ts`'s `allowed()` independently reimplements server authorization rules with no shared source of truth - a structural drift risk for future changes.
-- No integration test drives `return_for_replacement`/`keep_local`/CEO-decided `debit_note` or `return_for_replacement` through the full HTTP flow end-to-end.
-- Only finance-key turns have a concurrency race test; QC-key turns, inspections, whole-lot decisions, and custody actions have none.
-- Several validation boundaries (413 exact size, missing `send_external` fields, non-bin `bin_code`, over-precision `confirmed_quantity`) are unit-tested but not proven through the live route.
-- `report-damage.spec.ts`'s offline-upload assertion is tautological (the stub can't upload offline regardless of what the app does).
-- `damage-cases.spec.ts`'s "every sibling action is disabled" test checks only two of the panel's buttons.
-- `damage-capture.test.ts`'s `need_by_date` IST-boundary test is a single hardcoded snapshot, not a property test.
+### DW-191: The finance-workbench test doesn't assert the returned case set has no unexpected extra members of an allowed status - weaker than the story's "exactly" wording.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: The finance-workbench test doesn't assert the returned case set has no unexpected extra members of an allowed status - weaker than the story's "exactly" wording.
+status: open
+
+### DW-192: `damage-stub.ts`'s `allowed()` independently reimplements server authorization rules with no shared source of truth - a structural drift risk for future changes.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)"), 2026-11-22
+location: damage-stub.ts
+reason: `damage-stub.ts`'s `allowed()` independently reimplements server authorization rules with no shared source of truth - a structural drift risk for future changes.
+status: open
+
+### DW-193: No integration test drives `return_for_replacement`/`keep_local`/CEO-decided `debit_note` or `return_for_replacement` through the full HTTP flow end-to-end.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: No integration test drives `return_for_replacement`/`keep_local`/CEO-decided `debit_note` or `return_for_replacement` through the full HTTP flow end-to-end.
+status: open
+
+### DW-194: Only finance-key turns have a concurrency race test; QC-key turns, inspections, whole-lot decisions, and custody actions have none.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: Only finance-key turns have a concurrency race test; QC-key turns, inspections, whole-lot decisions, and custody actions have none.
+status: open
+
+### DW-195: Several validation boundaries (413 exact size, missing `send_external` fields, non-bin `bin_code`, over-precision `confirmed_quantity`) are unit-tested but not proven through the live route.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)"), 2026-11-22
+location: n/a
+reason: Several validation boundaries (413 exact size, missing `send_external` fields, non-bin `bin_code`, over-precision `confirmed_quantity`) are unit-tested but not proven through the live route.
+status: open
+
+### DW-196: `report-damage.spec.ts`'s offline-upload assertion is tautological (the stub can't upload offline regardless of what the app does).
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)"), 2026-11-22
+location: report-damage.spec.ts
+reason: `report-damage.spec.ts`'s offline-upload assertion is tautological (the stub can't upload offline regardless of what the app does).
+status: open
+
+### DW-197: `damage-cases.spec.ts`'s "every sibling action is disabled" test checks only two of the panel's buttons.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)"), 2026-11-22
+location: damage-cases.spec.ts
+reason: `damage-cases.spec.ts`'s "every sibling action is disabled" test checks only two of the panel's buttons.
+status: open
+
+### DW-198: `damage-capture.test.ts`'s `need_by_date` IST-boundary test is a single hardcoded snapshot, not a property test.
+origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)"), 2026-11-22
+location: damage-capture.test.ts
+reason: `damage-capture.test.ts`'s `need_by_date` IST-boundary test is a single hardcoded snapshot, not a property test.
+status: open
+
 
 ## Deferred from: user rulings on Story 4.8 open questions (2026-09-29)
 
-- Email delivery of standing-grant pruning lists (Story 4.8 AC 6 says in-app plus email). DEFERRED PILOT GAP by user ruling 2026-09-29: pilot delivers in_app and web_push only; `chk_notification_deliveries_channel` has no email channel. Trigger: an email notification channel story.
+### DW-199: Email delivery of standing-grant pruning lists (Story 4.8 AC 6 says in-app plus email). DEFERRED PILOT GAP by user ruling 2026-09-29: pilot delivers in_app and web_push only; `chk_notification_deliveries_channel` has no email channel. Trigger: an email notification channel story.
+origin: migrated from legacy ledger ("Deferred from: user rulings on Story 4.8 open questions (2026-09-29)"), 2026-11-22
+location: n/a
+reason: Email delivery of standing-grant pruning lists (Story 4.8 AC 6 says in-app plus email). DEFERRED PILOT GAP by user ruling 2026-09-29: pilot delivers in_app and web_push only; `chk_notification_deliveries_channel` has no email channel. Trigger: an email notification channel story.
+status: open
+
 
 ## Deferred from: code review of 1-16-site-head-role (2026-09-30)
 
-- Forbidden pairs (`EXTRA_FORBIDDEN_PAIRS`, including the two `site_head` and finance pairs) are refused only by the roles-file planner (`src/cli/provision-roles-core.ts`). A pair assigned through SCIM directly, or already in the database, is not refused and `verify:roles` does not report it. Same enforcement model as the Story 13.3 pair. A shared-holder check in `verify:roles` would close it.
-- `findRoleHolder` with a location returns the oldest assignment among the site's own holders and the holders at `'*'`, so an older wildcard holder outranks the site's own. Task 2.1 of Story 1.16 kept the ordering on purpose. Story 4.8 (its D3) is the first caller and should decide whether the site's own holder must win, and add the mixed-case test.
-- `docs/migration/pilot-mock-extract/world.json` `people[].roles` omits `employee`, which `deploy/rehearsal/mock/generate.mjs` has written since Story 1.15. `test/unit/site-head-role-pack.test.ts` pins the committed form, so a regeneration of the pack breaks that test until both are aligned.
+### DW-200: Forbidden pairs (`EXTRA_FORBIDDEN_PAIRS`, including the two `site_head` and finance pairs) are refused only by the roles-file planner (`src/cli/provision-roles-core.ts`). A pair assigned through SCIM directly, or already in the database, is not refused and `verify:roles` does not report it. Same enforcement model as the Story 13.3 pair. A shared-holder check in `verify:roles` would close it.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-16-site-head-role (2026-09-30)"), 2026-11-22
+location: src/cli/provision-roles-core.ts
+reason: Forbidden pairs (`EXTRA_FORBIDDEN_PAIRS`, including the two `site_head` and finance pairs) are refused only by the roles-file planner (`src/cli/provision-roles-core.ts`). A pair assigned through SCIM directly, or already in the database, is not refused and `verify:roles` does not report it. Same enforcement model as the Story 13.3 pair. A shared-holder check in `verify:roles` would close it.
+status: open
+
+### DW-201: `findRoleHolder` with a location returns the oldest assignment among the site's own holders and the holders at `'*'`, so an older wildcard holder outranks the site's own. Task 2.1 of Story 1.16 kept the ordering on purpose. Story 4.8 (its D3) is the first caller and should decide whether the site's own holder must win, and add the mixed-case test.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-16-site-head-role (2026-09-30)"), 2026-11-22
+location: n/a
+reason: `findRoleHolder` with a location returns the oldest assignment among the site's own holders and the holders at `'*'`, so an older wildcard holder outranks the site's own. Task 2.1 of Story 1.16 kept the ordering on purpose. Story 4.8 (its D3) is the first caller and should decide whether the site's own holder must win, and add the mixed-case test.
+status: open
+
+### DW-202: `docs/migration/pilot-mock-extract/world.json` `people[].roles` omits `employee`, which `deploy/rehearsal/mock/generate.mjs` has written since Story 1.15. `test/unit/site-head-role-pack.test.ts` pins the committed form, so a regeneration of the pack breaks that test until both are aligned.
+origin: migrated from legacy ledger ("Deferred from: code review of 1-16-site-head-role (2026-09-30)"), 2026-11-22
+location: docs/migration/pilot-mock-extract/world.json
+reason: `docs/migration/pilot-mock-extract/world.json` `people[].roles` omits `employee`, which `deploy/rehearsal/mock/generate.mjs` has written since Story 1.15. `test/unit/site-head-role-pack.test.ts` pins the committed form, so a regeneration of the pack breaks that test until both are aligned.
+status: open
+
 
 ## Deferred from: owner rulings on Story 2.10 (2026-10-02)
 
-- Indent and purchase-order lines still carry a free-text `item_category` (`src/compliance/indent.ts`, `src/compliance/purchase-order.ts`). Story 2.10 leaves it untouched: those lines are live pilot documents, and replacing the field needs a migration of existing rows plus every item grouped first. Follow-up: once the ungrouped-items report reads zero, derive the line category from `item_master.item_group_id` and retire the free-text field.
+### DW-203: Indent and purchase-order lines still carry a free-text `item_category` (`src/compliance/indent.ts`, `src/compliance/purchase-order.ts`). Story 2.10 leaves it untouched: those lines are live pilot documents, and replacing the field needs a migration of existing rows plus every item grouped first. Follow-up: once the ungrouped-items report reads zero, derive the line category from `item_master.item_group_id` and retire the free-text field.
+origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
+location: src/compliance/indent.ts
+reason: Indent and purchase-order lines still carry a free-text `item_category` (`src/compliance/indent.ts`, `src/compliance/purchase-order.ts`). Story 2.10 leaves it untouched: those lines are live pilot documents, and replacing the field needs a migration of existing rows plus every item grouped first. Follow-up: once the ungrouped-items report reads zero, derive the line category from `item_master.item_group_id` and retire the free-text field.
+status: open
 
-- `store_controller` (owner ruling 2026-10-02, round 2) was added by Story 2.10 only as a provisioned, notified role. Its duties (physical tracking of inventory, responsibility for stores and warehouses), its capability rows in access matrix section 3.3, its place in `REQUIRED_SITE_ROLES`, any forbidden pairs, and how it divides work with `warehouse_manager` and `store_assistant` need a correct-course and a new story.
 
-- Found during Story 2.10 dev (2026-10-02): item group notifications are delivered as in-app rows to every Table 2 holder, but in the pilot roles pack only `cmf_supervisor@ancorlabs.org` holds `notification` read, so `ceo1@`, `accounts@`, `anupam@` and `invctl1@` cannot open the inbox (`GET /api/v1/notifications` answers 403 `MODULE_ACCESS_DENIED`). Runbook row 2.10i checks their rows by SQL. Follow-up: an owner ruling on whether those hats (or the `employee` base hat) gain `notification` read, then a roles-pack change.
+### DW-204: `store_controller` (owner ruling 2026-10-02, round 2) was added by Story 2.10 only as a provisioned, notified role. Its duties (physical tracking of inventory, responsibility for stores and warehouses), its capability rows in access matrix section 3.3, its place in `REQUIRED_SITE_ROLES`, any forbidden pairs, and how it divides work with `warehouse_manager` and `store_assistant` need a correct-course and a new story.
+origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
+location: n/a
+reason: `store_controller` (owner ruling 2026-10-02, round 2) was added by Story 2.10 only as a provisioned, notified role. Its duties (physical tracking of inventory, responsibility for stores and warehouses), its capability rows in access matrix section 3.3, its place in `REQUIRED_SITE_ROLES`, any forbidden pairs, and how it divides work with `warehouse_manager` and `store_assistant` need a correct-course and a new story.
+status: open
 
-- Found during Story 2.10 dev (2026-10-02): `test/integration/story-2-3.test.ts` AC1 (FEFO) and AC4 (lot trace) fail on the baseline `fd6c5c8` as well. AC1 hardcodes lot expiry `2026-09-30`, so from 2026-10-01 `LOT-2026-001` is expired and FEFO picks `LOT-2026-002`; AC4 depends on the same lots. Follow-up: derive the expiry dates from today (for example today plus 30 and plus 90 days) instead of fixed dates.`n`n## Deferred from: code review of story-2-10 (2026-10-05)
 
-- Undeclared verbs on the literal item group sub-paths (`DELETE /api/v1/item-groups/rights`, `PATCH /api/v1/item-groups/recipients`) fall through to the `/:code` handlers and answer 403 or 404 instead of 405. Pre-existing first-match router behaviour in `src/api/router.ts`, not introduced by Story 2.10. The collision stays latent only because `ITEM_GROUP_CODE_REGEX` is uppercase-only; relaxing that regex would make a group coded `RIGHTS` unreachable.
-- No pagination, `LIMIT` or offset on any item group list route (`listItemGroups`, `listActiveItemsByGroup`, `listUngroupedActiveItems`, `listItemGroupRights`, `listItemGroupRecipients`). D10 explicitly placed pagination out of scope for Story 2.10; revisit when the item master grows past a few thousand active SKUs.
-- The access matrix carries 38 pre-existing permission rows that use em dashes for "not permitted", against the `NO-EMDASH` rule in `FORMATTING_RULES.md`. The six rows Story 2.10 adds correctly use hyphens, which makes the table internally inconsistent until the older rows are converted in a formatting pass.
-- Items assigned to a deactivated item group are invisible in every working report: `listUngroupedActiveItems` filters `item_group_id IS NULL` so they are not ungrouped, and re-sending their existing group on a PATCH is refused 400 `ITEM_GROUP_INACTIVE`. Owner ruling 2026-10-06: deferred, because the pilot holds no item groups yet so no item is stranded today. The follow-up story that defines the store controller's duties should add an items-in-inactive-groups report or force reassignment before deactivation.
+### DW-205: Found during Story 2.10 dev (2026-10-02): item group notifications are delivered as in-app rows to every Table 2 holder, but in the pilot roles pack only `cmf_supervisor@ancorlabs.org` holds `notification` read, so `ceo1@`, `accounts@`, `anupam@` and `invctl1@` cannot open the inbox (`GET /api/v1/notifications` answers 403 `MODULE_ACCESS_DENIED`). Runbook row 2.10i checks their rows by SQL. Follow-up: an owner ruling on whether those hats (or the `employee` base hat) gain `notification` read, then a roles-pack change.
+origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
+location: n/a
+reason: Found during Story 2.10 dev (2026-10-02): item group notifications are delivered as in-app rows to every Table 2 holder, but in the pilot roles pack only `cmf_supervisor@ancorlabs.org` holds `notification` read, so `ceo1@`, `accounts@`, `anupam@` and `invctl1@` cannot open the inbox (`GET /api/v1/notifications` answers 403 `MODULE_ACCESS_DENIED`). Runbook row 2.10i checks their rows by SQL. Follow-up: an owner ruling on whether those hats (or the `employee` base hat) gain `notification` read, then a roles-pack change.
+status: open
+
+
+### DW-206: Found during Story 2.10 dev (2026-10-02): `test/integration/story-2-3.test.ts` AC1 (FEFO) and AC4 (lot trace) fail on the baseline `fd6c5c8` as well. AC1 hardcodes lot expiry `2026-09-30`, so from 2026-10-01 `LOT-2026-001` is expired and FEFO picks `LOT-2026-002`; AC4 depends on the same lots. Follow-up: derive the expiry dates from today (for example today plus 30 and plus 90 days) instead of fixed dates.`n`n## Deferred from: code review of story-2-10 (2026-10-05)
+origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
+location: test/integration/story-2-3.test.ts
+reason: Found during Story 2.10 dev (2026-10-02): `test/integration/story-2-3.test.ts` AC1 (FEFO) and AC4 (lot trace) fail on the baseline `fd6c5c8` as well. AC1 hardcodes lot expiry `2026-09-30`, so from 2026-10-01 `LOT-2026-001` is expired and FEFO picks `LOT-2026-002`; AC4 depends on the same lots. Follow-up: derive the expiry dates from today (for example today plus 30 and plus 90 days) instead of fixed dates.`n`n## Deferred from: code review of story-2-10 (2026-10-05)
+status: open
+
+
+### DW-207: Undeclared verbs on the literal item group sub-paths (`DELETE /api/v1/item-groups/rights`, `PATCH /api/v1/item-groups/recipients`) fall through to the `/:code` handlers and answer 403 or 404 instead of 405. Pre-existing first-match router behaviour in `src/api/router.ts`, not introduced by Story 2.10. The collision stays latent only because `ITEM_GROUP_CODE_REGEX` is uppercase-only; relaxing that regex would make a group coded `RIGHTS` unreachable.
+origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
+location: src/api/router.ts
+reason: Undeclared verbs on the literal item group sub-paths (`DELETE /api/v1/item-groups/rights`, `PATCH /api/v1/item-groups/recipients`) fall through to the `/:code` handlers and answer 403 or 404 instead of 405. Pre-existing first-match router behaviour in `src/api/router.ts`, not introduced by Story 2.10. The collision stays latent only because `ITEM_GROUP_CODE_REGEX` is uppercase-only; relaxing that regex would make a group coded `RIGHTS` unreachable.
+status: open
+
+### DW-208: No pagination, `LIMIT` or offset on any item group list route (`listItemGroups`, `listActiveItemsByGroup`, `listUngroupedActiveItems`, `listItemGroupRights`, `listItemGroupRecipients`). D10 explicitly placed pagination out of scope for Story 2.10; revisit when the item master grows past a few thousand active SKUs.
+origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
+location: n/a
+reason: No pagination, `LIMIT` or offset on any item group list route (`listItemGroups`, `listActiveItemsByGroup`, `listUngroupedActiveItems`, `listItemGroupRights`, `listItemGroupRecipients`). D10 explicitly placed pagination out of scope for Story 2.10; revisit when the item master grows past a few thousand active SKUs.
+status: open
+
+### DW-209: The access matrix carries 38 pre-existing permission rows that use em dashes for "not permitted", against the `NO-EMDASH` rule in `FORMATTING_RULES.md`. The six rows Story 2.10 adds correctly use hyphens, which makes the table internally inconsistent until the older rows are converted in a formatting pass.
+origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
+location: FORMATTING_RULES.md
+reason: The access matrix carries 38 pre-existing permission rows that use em dashes for "not permitted", against the `NO-EMDASH` rule in `FORMATTING_RULES.md`. The six rows Story 2.10 adds correctly use hyphens, which makes the table internally inconsistent until the older rows are converted in a formatting pass.
+status: open
+
+### DW-210: Items assigned to a deactivated item group are invisible in every working report: `listUngroupedActiveItems` filters `item_group_id IS NULL` so they are not ungrouped, and re-sending their existing group on a PATCH is refused 400 `ITEM_GROUP_INACTIVE`. Owner ruling 2026-10-06: deferred, because the pilot holds no item groups yet so no item is stranded today. The follow-up story that defines the store controller's duties should add an items-in-inactive-groups report or force reassignment before deactivation.
+origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
+location: n/a
+reason: Items assigned to a deactivated item group are invisible in every working report: `listUngroupedActiveItems` filters `item_group_id IS NULL` so they are not ungrouped, and re-sending their existing group on a PATCH is refused 400 `ITEM_GROUP_INACTIVE`. Owner ruling 2026-10-06: deferred, because the pilot holds no item groups yet so no item is stranded today. The follow-up story that defines the store controller's duties should add an items-in-inactive-groups report or force reassignment before deactivation.
+status: open
+
 
 ## Deferred from: code review of story-2-10, pass 2 (2026-10-06)
 
-- `src/api/v1/items.ts` attributes `item.updated` and the item group notification to the gate-authorized assignment, so a caller holding both `warehouse_manager` and `inventory_controller` is recorded as `warehouse_manager` when assigning an item group. Deferred because the item event is an inventory write and the attribution is defensible; the item actor handling is pre-existing. Revisit if audit review wants the group change attributed to `inventory_controller`.
-- `putRightsBase` reads the existing rights without a row lock before its no-op comparison. Two CEO or Finance Head users changing rights for the same grantee at the same instant can let a real revoke be treated as a no-op and skip its event and notification. Deferred because it needs two grantors racing on one grantee.
-- `PATCH /api/v1/items/:sku` reads the item with no lock, so two concurrent PATCHes of one SKU can both see the same current group and one can skip `markEverAssigned`. Deferred because `fk_item_master_item_group ON DELETE RESTRICT` is the backstop and `deleteGroupBase` maps its 23503 to 409 `ITEM_GROUP_IN_USE`.
+### DW-211: `src/api/v1/items.ts` attributes `item.updated` and the item group notification to the gate-authorized assignment, so a caller holding both `warehouse_manager` and `inventory_controller` is recorded as `warehouse_manager` when assigning an item group. Deferred because the item event is an inventory write and the attribution is defensible; the item actor handling is pre-existing. Revisit if audit review wants the group change attributed to `inventory_controller`.
+origin: migrated from legacy ledger ("Deferred from: code review of story-2-10, pass 2 (2026-10-06)"), 2026-11-22
+location: src/api/v1/items.ts
+reason: `src/api/v1/items.ts` attributes `item.updated` and the item group notification to the gate-authorized assignment, so a caller holding both `warehouse_manager` and `inventory_controller` is recorded as `warehouse_manager` when assigning an item group. Deferred because the item event is an inventory write and the attribution is defensible; the item actor handling is pre-existing. Revisit if audit review wants the group change attributed to `inventory_controller`.
+status: open
+
+### DW-212: `putRightsBase` reads the existing rights without a row lock before its no-op comparison. Two CEO or Finance Head users changing rights for the same grantee at the same instant can let a real revoke be treated as a no-op and skip its event and notification. Deferred because it needs two grantors racing on one grantee.
+origin: migrated from legacy ledger ("Deferred from: code review of story-2-10, pass 2 (2026-10-06)"), 2026-11-22
+location: n/a
+reason: `putRightsBase` reads the existing rights without a row lock before its no-op comparison. Two CEO or Finance Head users changing rights for the same grantee at the same instant can let a real revoke be treated as a no-op and skip its event and notification. Deferred because it needs two grantors racing on one grantee.
+status: open
+
+### DW-213: `PATCH /api/v1/items/:sku` reads the item with no lock, so two concurrent PATCHes of one SKU can both see the same current group and one can skip `markEverAssigned`. Deferred because `fk_item_master_item_group ON DELETE RESTRICT` is the backstop and `deleteGroupBase` maps its 23503 to 409 `ITEM_GROUP_IN_USE`.
+origin: migrated from legacy ledger ("Deferred from: code review of story-2-10, pass 2 (2026-10-06)"), 2026-11-22
+location: n/a
+reason: `PATCH /api/v1/items/:sku` reads the item with no lock, so two concurrent PATCHes of one SKU can both see the same current group and one can skip `markEverAssigned`. Deferred because `fk_item_master_item_group ON DELETE RESTRICT` is the backstop and `deleteGroupBase` maps its 23503 to 409 `ITEM_GROUP_IN_USE`.
+status: open
+
 
 ## Deferred from: code review of story-4-10 (2026-10-21)
 
-- Pre-approved (non-doa) lines write no audit entry and no notification at raise. Story 4.8 owns the grant path. RESOLVED in Story 4.8 (2026-10-21): a grant-approved line writes an `indent.line_standing_approved` audit entry and tells the stores role once.
-- A line whose band role is held by the requester is frozen with the requester as approver and SOD-01 blocks it permanently. Pre-existing; Story 4.9.
-- The role-holder fallback ignores value bands, so a large line can reach a smaller band's holder. Moved verbatim from `resolveApprover`; Story 4.9.
-- My Requests list rows get no `lines[]`, so the per-line chips need a detail screen to appear.
+### DW-214: Pre-approved (non-doa) lines write no audit entry and no notification at raise. Story 4.8 owns the grant path. RESOLVED in Story 4.8 (2026-10-21): a grant-approved line writes an `indent.line_standing_approved` audit entry and tells the stores role once.
+origin: migrated from legacy ledger ("Deferred from: code review of story-4-10 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Pre-approved (non-doa) lines write no audit entry and no notification at raise. Story 4.8 owns the grant path. RESOLVED in Story 4.8 (2026-10-21): a grant-approved line writes an `indent.line_standing_approved` audit entry and tells the stores role once.
+status: open
+
+### DW-215: A line whose band role is held by the requester is frozen with the requester as approver and SOD-01 blocks it permanently. Pre-existing; Story 4.9.
+origin: migrated from legacy ledger ("Deferred from: code review of story-4-10 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: A line whose band role is held by the requester is frozen with the requester as approver and SOD-01 blocks it permanently. Pre-existing; Story 4.9.
+status: open
+
+### DW-216: The role-holder fallback ignores value bands, so a large line can reach a smaller band's holder. Moved verbatim from `resolveApprover`; Story 4.9.
+origin: migrated from legacy ledger ("Deferred from: code review of story-4-10 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: The role-holder fallback ignores value bands, so a large line can reach a smaller band's holder. Moved verbatim from `resolveApprover`; Story 4.9.
+status: open
+
+### DW-217: My Requests list rows get no `lines[]`, so the per-line chips need a detail screen to appear.
+origin: migrated from legacy ledger ("Deferred from: code review of story-4-10 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: My Requests list rows get no `lines[]`, so the per-line chips need a detail screen to appear.
+status: open
+
 
 ## Deferred from: dev of story-4-11 (2026-10-21)
 
-- Offline-first counter issue (UX mock `key-stores.html` line 452 "Issued - Captured - pending sync"), scanner wiring and the "Scan anything" bar on the stores issue page. Story 4.11 D11 ships the page online only; `indent.issued` is refused at the events door and at edge sync. Needs a story of its own once the pilot confirms the counter flow.
-- The stores issue page is reached by URL (`/stores/issue`) and by the `Stores issue` nav entry only when the server bootstrap advertises that name; the bootstrap navigation list is not extended here.
-- Slip quantities print as the NUMERIC text the storekeeper typed (`2` or `2.500`); no unit-aware formatting.
+### DW-218: Offline-first counter issue (UX mock `key-stores.html` line 452 "Issued - Captured - pending sync"), scanner wiring and the "Scan anything" bar on the stores issue page. Story 4.11 D11 ships the page online only; `indent.issued` is refused at the events door and at edge sync. Needs a story of its own once the pilot confirms the counter flow.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-11 (2026-10-21)"), 2026-11-22
+location: key-stores.html
+reason: Offline-first counter issue (UX mock `key-stores.html` line 452 "Issued - Captured - pending sync"), scanner wiring and the "Scan anything" bar on the stores issue page. Story 4.11 D11 ships the page online only; `indent.issued` is refused at the events door and at edge sync. Needs a story of its own once the pilot confirms the counter flow.
+status: open
+
+### DW-219: The stores issue page is reached by URL (`/stores/issue`) and by the `Stores issue` nav entry only when the server bootstrap advertises that name; the bootstrap navigation list is not extended here.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-11 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: The stores issue page is reached by URL (`/stores/issue`) and by the `Stores issue` nav entry only when the server bootstrap advertises that name; the bootstrap navigation list is not extended here.
+status: open
+
+### DW-220: Slip quantities print as the NUMERIC text the storekeeper typed (`2` or `2.500`); no unit-aware formatting.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-11 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Slip quantities print as the NUMERIC text the storekeeper typed (`2` or `2.500`); no unit-aware formatting.
+status: open
+
 
 ## Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)
 
-- Slip number sequence never resets per year and a rolled-back issue burns a number; document gaps as expected or use a per-year counter.
-- Per-line `getLocationByCode` lookups in the issue route loop (N+1); bounded once the lines[] cap lands.
-- Issue audit entry hard-codes `http_status` and logs `indent.line_issued` in `error_code`; matches the existing audit precedent.
-- Stores issuable list is capped at 100 with no pagination.
-- Story 4-11 integration tests TRUNCATE shared tables CASCADE; repo-wide test pattern.
-- `correlation_id ?? randomUUID()` in the issue and close routes breaks trace continuity for untagged indents.
-- Header of a requisition with a pending or rejected line stays `raised`/`approved` after every approved line is issued or closed; define terminal header handling in Story 4.8.
-- Smoke step issues 2 of 100 then closes the remainder; INDENT_LINE_FULLY_ISSUED is covered by test/integration/story-4-11.test.ts and runbook 2.10k only.
+### DW-221: Slip number sequence never resets per year and a rolled-back issue burns a number; document gaps as expected or use a per-year counter.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Slip number sequence never resets per year and a rolled-back issue burns a number; document gaps as expected or use a per-year counter.
+status: open
+
+### DW-222: Per-line `getLocationByCode` lookups in the issue route loop (N+1); bounded once the lines[] cap lands.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Per-line `getLocationByCode` lookups in the issue route loop (N+1); bounded once the lines[] cap lands.
+status: open
+
+### DW-223: Issue audit entry hard-codes `http_status` and logs `indent.line_issued` in `error_code`; matches the existing audit precedent.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Issue audit entry hard-codes `http_status` and logs `indent.line_issued` in `error_code`; matches the existing audit precedent.
+status: open
+
+### DW-224: Stores issuable list is capped at 100 with no pagination.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Stores issuable list is capped at 100 with no pagination.
+status: open
+
+### DW-225: Story 4-11 integration tests TRUNCATE shared tables CASCADE; repo-wide test pattern.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Story 4-11 integration tests TRUNCATE shared tables CASCADE; repo-wide test pattern.
+status: open
+
+### DW-226: `correlation_id ?? randomUUID()` in the issue and close routes breaks trace continuity for untagged indents.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
+location: n/a
+reason: `correlation_id ?? randomUUID()` in the issue and close routes breaks trace continuity for untagged indents.
+status: open
+
+### DW-227: Header of a requisition with a pending or rejected line stays `raised`/`approved` after every approved line is issued or closed; define terminal header handling in Story 4.8.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Header of a requisition with a pending or rejected line stays `raised`/`approved` after every approved line is issued or closed; define terminal header handling in Story 4.8.
+status: open
+
+### DW-228: Smoke step issues 2 of 100 then closes the remainder; INDENT_LINE_FULLY_ISSUED is covered by test/integration/story-4-11.test.ts and runbook 2.10k only.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-11-stores-counter-issue-against-a-requisition (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Smoke step issues 2 of 100 then closes the remainder; INDENT_LINE_FULLY_ISSUED is covered by test/integration/story-4-11.test.ts and runbook 2.10k only.
+status: open
+
 
 ## Deferred from: dev of story-4-8 (2026-10-21)
 
-- Screens for the grant lifecycle (assign, the finance approver's inbox entry, revoke, my grants, the pruning list) are not built; Story 4.8 D14 puts edge UI out of scope. The API and the notifications carry everything a screen needs. The stores issue page shows the grant sentence under a covered line; nothing else changed in the edge app.
-- Web push of the pruning list follows the platform rule that push is opt-in per event type (`standing_grant_review`, default off) and needs a push subscription; in-app delivery is unconditional. If the pilot wants push by default, seed the preference at provisioning.
-- Cap is counted on quantity ISSUED (D7). A requisition raised under a grant does not reserve any cap, so two requisitions can both ride a grant and the later issue lapses and re-routes to normal approval (D8). This is the ruled behaviour, not a defect, but it surprises a storekeeper who sees a line approved at raise and refused at the counter; the refusal names the lapsed line and the line is re-routed in the same call.
-- A line part-issued under a grant and then re-routed resolves its DOA band on the whole line value, not on the remaining open quantity.
-- Re-routing a lapsed line needs a resolvable DOA approver for the line value. With none (Story 4.9 owns the no-band and no-holder fallback) the issue stays refused 409 `STANDING_APPROVAL_LAPSED`, the line stays `standing_approval`, and the response lists it under `reroute_failed` with the resolver's error code.
-- Item group membership is read when the requisition is raised (D5); moving an item to another group afterwards does not change a line already routed.
-- The expiry and pruning sweep runs as one transaction per tick and expires at most `STANDING_GRANT_SWEEP_BATCH_SIZE` (500) grants per tick; a larger backlog drains over successive daily ticks.
-- Terminal header handling for a requisition whose approved lines are all issued or closed while another line is pending or rejected (deferred from Story 4.11 review) is still undefined; Story 4.8 does not change header derivation.
-- `findRoleHolder` with a location still returns the oldest of the site's own and every-location holders. Story 4.8 does not depend on it for authority (assign and finance approval are membership tests on the DOA role at the site, so a newer site holder is never locked out; covered by test); it uses it only to pick the active delegate and the finance approver whose list receives a disabled assigner's grants.
+### DW-229: Screens for the grant lifecycle (assign, the finance approver's inbox entry, revoke, my grants, the pruning list) are not built; Story 4.8 D14 puts edge UI out of scope. The API and the notifications carry everything a screen needs. The stores issue page shows the grant sentence under a covered line; nothing else changed in the edge app.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Screens for the grant lifecycle (assign, the finance approver's inbox entry, revoke, my grants, the pruning list) are not built; Story 4.8 D14 puts edge UI out of scope. The API and the notifications carry everything a screen needs. The stores issue page shows the grant sentence under a covered line; nothing else changed in the edge app.
+status: open
+
+### DW-230: Web push of the pruning list follows the platform rule that push is opt-in per event type (`standing_grant_review`, default off) and needs a push subscription; in-app delivery is unconditional. If the pilot wants push by default, seed the preference at provisioning.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Web push of the pruning list follows the platform rule that push is opt-in per event type (`standing_grant_review`, default off) and needs a push subscription; in-app delivery is unconditional. If the pilot wants push by default, seed the preference at provisioning.
+status: open
+
+### DW-231: Cap is counted on quantity ISSUED (D7). A requisition raised under a grant does not reserve any cap, so two requisitions can both ride a grant and the later issue lapses and re-routes to normal approval (D8). This is the ruled behaviour, not a defect, but it surprises a storekeeper who sees a line approved at raise and refused at the counter; the refusal names the lapsed line and the line is re-routed in the same call.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Cap is counted on quantity ISSUED (D7). A requisition raised under a grant does not reserve any cap, so two requisitions can both ride a grant and the later issue lapses and re-routes to normal approval (D8). This is the ruled behaviour, not a defect, but it surprises a storekeeper who sees a line approved at raise and refused at the counter; the refusal names the lapsed line and the line is re-routed in the same call.
+status: open
+
+### DW-232: A line part-issued under a grant and then re-routed resolves its DOA band on the whole line value, not on the remaining open quantity.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: A line part-issued under a grant and then re-routed resolves its DOA band on the whole line value, not on the remaining open quantity.
+status: open
+
+### DW-233: Re-routing a lapsed line needs a resolvable DOA approver for the line value. With none (Story 4.9 owns the no-band and no-holder fallback) the issue stays refused 409 `STANDING_APPROVAL_LAPSED`, the line stays `standing_approval`, and the response lists it under `reroute_failed` with the resolver's error code.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Re-routing a lapsed line needs a resolvable DOA approver for the line value. With none (Story 4.9 owns the no-band and no-holder fallback) the issue stays refused 409 `STANDING_APPROVAL_LAPSED`, the line stays `standing_approval`, and the response lists it under `reroute_failed` with the resolver's error code.
+status: open
+
+### DW-234: Item group membership is read when the requisition is raised (D5); moving an item to another group afterwards does not change a line already routed.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Item group membership is read when the requisition is raised (D5); moving an item to another group afterwards does not change a line already routed.
+status: open
+
+### DW-235: The expiry and pruning sweep runs as one transaction per tick and expires at most `STANDING_GRANT_SWEEP_BATCH_SIZE` (500) grants per tick; a larger backlog drains over successive daily ticks.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: The expiry and pruning sweep runs as one transaction per tick and expires at most `STANDING_GRANT_SWEEP_BATCH_SIZE` (500) grants per tick; a larger backlog drains over successive daily ticks.
+status: open
+
+### DW-236: Terminal header handling for a requisition whose approved lines are all issued or closed while another line is pending or rejected (deferred from Story 4.11 review) is still undefined; Story 4.8 does not change header derivation.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Terminal header handling for a requisition whose approved lines are all issued or closed while another line is pending or rejected (deferred from Story 4.11 review) is still undefined; Story 4.8 does not change header derivation.
+status: open
+
+### DW-237: `findRoleHolder` with a location still returns the oldest of the site's own and every-location holders. Story 4.8 does not depend on it for authority (assign and finance approval are membership tests on the DOA role at the site, so a newer site holder is never locked out; covered by test); it uses it only to pick the active delegate and the finance approver whose list receives a disabled assigner's grants.
+origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: `findRoleHolder` with a location still returns the oldest of the site's own and every-location holders. Story 4.8 does not depend on it for authority (assign and finance approval are membership tests on the DOA role at the site, so a newer site holder is never locked out; covered by test); it uses it only to pick the active delegate and the finance approver whose list receives a disabled assigner's grants.
+status: open
+
 
 ## Deferred from: dev of story-3-13 (2026-10-21)
 
-- OCR number-plate pre-fill on the Vehicle step is not built (EXPERIENCE.md:122); the officer types the registration.
-- Webcam capture on desktop is not built; the desktop pupil uploads a challan photo file (Q3).
-- The weighbridge indicator AUTO link protocol is post-pilot (Q5). Every pilot reading is MANUAL and the `Read from weighbridge indicator` button renders disabled with its reason.
-- The offline PO and ASN PowerSync bucket (`erp_open_purchase_orders`) is a follow-up. At pilot the challan resolves ASN then PO online with a typed fallback; a typed challan records `po_ref_ext` `UNKNOWN` (Q1, Q2).
-- The Trucks on site list is fed by the `openTrucks` prop; deriving it on-device from the synced `edge_site_events` bucket joined to unsynced outbox rows is a follow-up once the gate bucket is replicated.
-- Gate challan photos are stored in `pendingPhotoStore` and ride the existing attachment PUT path; there is no dedicated gate-photo document route, so the gate event's `challan_photo_ref` is the attachment id.
-- The gate e2e and axe specs (`edge/test/e2e/gate-entry.spec.ts`, `edge/test/accessibility/gate-accessibility.spec.ts`) are authored but could not be executed in this environment: the existing e2e suite fails identically at bootstrap/session setup (all 5 report-damage specs fail the same way), so the Playwright/axe environment is pre-existing broken here. They must be run in CI or a configured device browser.
+### DW-238: OCR number-plate pre-fill on the Vehicle step is not built (EXPERIENCE.md:122); the officer types the registration.
+origin: migrated from legacy ledger ("Deferred from: dev of story-3-13 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: OCR number-plate pre-fill on the Vehicle step is not built (EXPERIENCE.md:122); the officer types the registration.
+status: open
+
+### DW-239: Webcam capture on desktop is not built; the desktop pupil uploads a challan photo file (Q3).
+origin: migrated from legacy ledger ("Deferred from: dev of story-3-13 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Webcam capture on desktop is not built; the desktop pupil uploads a challan photo file (Q3).
+status: open
+
+### DW-240: The weighbridge indicator AUTO link protocol is post-pilot (Q5). Every pilot reading is MANUAL and the `Read from weighbridge indicator` button renders disabled with its reason.
+origin: migrated from legacy ledger ("Deferred from: dev of story-3-13 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: The weighbridge indicator AUTO link protocol is post-pilot (Q5). Every pilot reading is MANUAL and the `Read from weighbridge indicator` button renders disabled with its reason.
+status: open
+
+### DW-241: The offline PO and ASN PowerSync bucket (`erp_open_purchase_orders`) is a follow-up. At pilot the challan resolves ASN then PO online with a typed fallback; a typed challan records `po_ref_ext` `UNKNOWN` (Q1, Q2).
+origin: migrated from legacy ledger ("Deferred from: dev of story-3-13 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: The offline PO and ASN PowerSync bucket (`erp_open_purchase_orders`) is a follow-up. At pilot the challan resolves ASN then PO online with a typed fallback; a typed challan records `po_ref_ext` `UNKNOWN` (Q1, Q2).
+status: open
+
+### DW-242: The Trucks on site list is fed by the `openTrucks` prop; deriving it on-device from the synced `edge_site_events` bucket joined to unsynced outbox rows is a follow-up once the gate bucket is replicated.
+origin: migrated from legacy ledger ("Deferred from: dev of story-3-13 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: The Trucks on site list is fed by the `openTrucks` prop; deriving it on-device from the synced `edge_site_events` bucket joined to unsynced outbox rows is a follow-up once the gate bucket is replicated.
+status: open
+
+### DW-243: Gate challan photos are stored in `pendingPhotoStore` and ride the existing attachment PUT path; there is no dedicated gate-photo document route, so the gate event's `challan_photo_ref` is the attachment id.
+origin: migrated from legacy ledger ("Deferred from: dev of story-3-13 (2026-10-21)"), 2026-11-22
+location: n/a
+reason: Gate challan photos are stored in `pendingPhotoStore` and ride the existing attachment PUT path; there is no dedicated gate-photo document route, so the gate event's `challan_photo_ref` is the attachment id.
+status: open
+
+### DW-244: The gate e2e and axe specs (`edge/test/e2e/gate-entry.spec.ts`, `edge/test/accessibility/gate-accessibility.spec.ts`) are authored but could not be executed in this environment: the existing e2e suite fails identically at bootstrap/session setup (all 5 report-damage specs fail the same way), so the Playwright/axe environment is pre-existing broken here. They must be run in CI or a configured device browser.
+origin: migrated from legacy ledger ("Deferred from: dev of story-3-13 (2026-10-21)"), 2026-11-22
+location: edge/test/e2e/gate-entry.spec.ts
+reason: The gate e2e and axe specs (`edge/test/e2e/gate-entry.spec.ts`, `edge/test/accessibility/gate-accessibility.spec.ts`) are authored but could not be executed in this environment: the existing e2e suite fails identically at bootstrap/session setup (all 5 report-damage specs fail the same way), so the Playwright/axe environment is pre-existing broken here. They must be run in CI or a configured device browser.
+status: open
+
 
 
 ## Deferred from: code review of story-3.13 (2026-10-22)
 
-- Typed or rejected challans bind `po_ref_ext` `UNKNOWN` and the weigh tab cannot rebind them later. Resolves with the offline PO and ASN bucket (Q1, Q2).
-- `test/integration/story-3-13.test.ts` teardown truncates a long table list with CASCADE on shared state. Matches the existing integration convention; revisit if suites move to parallel databases.
+### DW-245: Typed or rejected challans bind `po_ref_ext` `UNKNOWN` and the weigh tab cannot rebind them later. Resolves with the offline PO and ASN bucket (Q1, Q2).
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.13 (2026-10-22)"), 2026-11-22
+location: n/a
+reason: Typed or rejected challans bind `po_ref_ext` `UNKNOWN` and the weigh tab cannot rebind them later. Resolves with the offline PO and ASN bucket (Q1, Q2).
+status: open
+
+### DW-246: `test/integration/story-3-13.test.ts` teardown truncates a long table list with CASCADE on shared state. Matches the existing integration convention; revisit if suites move to parallel databases.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.13 (2026-10-22)"), 2026-11-22
+location: test/integration/story-3-13.test.ts
+reason: `test/integration/story-3-13.test.ts` teardown truncates a long table list with CASCADE on shared state. Matches the existing integration convention; revisit if suites move to parallel databases.
+status: open
+
 
 ## Deferred from: create-story of 3-15 (2026-10-22)
 
-- Offline putaway.completed: the edge door accepted the event with completed_by unstamped from the device payload and no execute-role gate. Story 3.15 refuses putaway.completed and location.override at the edge door with 403 CENTRAL_ONLY_OPERATION; an offline putaway path needs actor stamping and an execute-role gate before it can ship.
-- Alternative-rack list on the putaway detail: the screen offers the suggested bin and scan-or-type; ranked alternatives are deferred.
-- Stock-by-location read for the putaway card: the card shows the task quantity and source bay, not live bin occupancy.
-- Server-side label print queue: labels are device-local IndexedDB only; there is no cross-device restore or print server.
+### DW-247: Offline putaway.completed: the edge door accepted the event with completed_by unstamped from the device payload and no execute-role gate. Story 3.15 refuses putaway.completed and location.override at the edge door with 403 CENTRAL_ONLY_OPERATION; an offline putaway path needs actor stamping and an execute-role gate before it can ship.
+origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-10-22)"), 2026-11-22
+location: n/a
+reason: Offline putaway.completed: the edge door accepted the event with completed_by unstamped from the device payload and no execute-role gate. Story 3.15 refuses putaway.completed and location.override at the edge door with 403 CENTRAL_ONLY_OPERATION; an offline putaway path needs actor stamping and an execute-role gate before it can ship.
+status: open
+
+### DW-248: Alternative-rack list on the putaway detail: the screen offers the suggested bin and scan-or-type; ranked alternatives are deferred.
+origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-10-22)"), 2026-11-22
+location: n/a
+reason: Alternative-rack list on the putaway detail: the screen offers the suggested bin and scan-or-type; ranked alternatives are deferred.
+status: open
+
+### DW-249: Stock-by-location read for the putaway card: the card shows the task quantity and source bay, not live bin occupancy.
+origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-10-22)"), 2026-11-22
+location: n/a
+reason: Stock-by-location read for the putaway card: the card shows the task quantity and source bay, not live bin occupancy.
+status: open
+
+### DW-250: Server-side label print queue: labels are device-local IndexedDB only; there is no cross-device restore or print server.
+origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-10-22)"), 2026-11-22
+location: n/a
+reason: Server-side label print queue: labels are device-local IndexedDB only; there is no cross-device restore or print server.
+status: open
+
 
 ## Deferred from: code review of story-3.16 (2026-10-23)
 
-- Integration coverage for AC 6 exercises the direct confirm route (POST /api/v1/pick-tasks/:id/lines/:lineId/confirm) rather than the edge outbox replay path the PWA actually uses (pick_line.confirmed through src/api/v1/edge.ts ingest and inline finalize). The outbox ingest plus finalize-after-last-line path is unit-tested for payload shape only; an end-to-end outbox replay test would close the gap.
-- Offline inbox refresh after completion relies on the next sync pass: 
+### DW-251: Integration coverage for AC 6 exercises the direct confirm route (POST /api/v1/pick-tasks/:id/lines/:lineId/confirm) rather than the edge outbox replay path the PWA actually uses (pick_line.confirmed through src/api/v1/edge.ts ingest and inline finalize). The outbox ingest plus finalize-after-last-line path is unit-tested for payload shape only; an end-to-end outbox replay test would close the gap.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.16 (2026-10-23)"), 2026-11-22
+location: n/a
+reason: Integration coverage for AC 6 exercises the direct confirm route (POST /api/v1/pick-tasks/:id/lines/:lineId/confirm) rather than the edge outbox replay path the PWA actually uses (pick_line.confirmed through src/api/v1/edge.ts ingest and inline finalize). The outbox ingest plus finalize-after-last-line path is unit-tested for payload shape only; an end-to-end outbox replay test would close the gap.
+status: open
+
+### DW-252: Offline inbox refresh after completion relies on the next sync pass:
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.16 (2026-10-23)"), 2026-11-22
+location: n/a
+reason: Offline inbox refresh after completion relies on the next sync pass:
+status: open
+
 eload() cannot fetch while offline, so the two-pane list reconciles only after connectivity returns.
 
 
 ## Deferred from: code review of story-3.14 (2026-11-19)
-- Arrivals read (GET /api/v1/receiving/arrivals) has no limit or pagination; open gate events that are never closed grow the payload. Pilot volume is small.
-- Arrivals read picks the oldest GRN per correlation id with no status filter; a void earlier GRN would mask a live one once a void status exists.
-- Arrivals PO summary sums open_qty across units of measure and joins on PO number only; display value only.
-- inspect_photo_ref and material_photo_ref are length-checked only, not checked for existence or site ownership; same pattern as reason_photo_ref.
-- Rehearsal setup reports exists for any IB-01 without checking that it is an active staging zone under the site; follows the inspection bay provisioning decision.
-- Stores inbox treats a 403 or 500 on indents, GRNs or putaway as an empty group and shows Nothing waiting.
-- Lot and expiry inputs on the stores acceptance screen (owner ruling 2b, 2026-11-19): follow-up story; pilot receipts taken as not lot-controlled, not confirmed by the owner. A plain-language refusal ships meanwhile.
-- Server-side enforcement of material_photo_ref on goods.received (owner ruling 3b): a server rule affects ERP inbound and every other caller.
-- Counted stepper, Damaged and Rejected reason tiles, and a Match supplier action on the unmatched arrival card (owner ruling 6b): UX pass.
-- Per-site inspection bay codes and a bay for assignments below site level (owner ruling 4b): location_code is globally unique, so only one site can own IB-01; single pilot site for now.
+### DW-253: Arrivals read (GET /api/v1/receiving/arrivals) has no limit or pagination; open gate events that are never closed grow the payload. Pilot volume is small.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Arrivals read (GET /api/v1/receiving/arrivals) has no limit or pagination; open gate events that are never closed grow the payload. Pilot volume is small.
+status: open
+
+### DW-254: Arrivals read picks the oldest GRN per correlation id with no status filter; a void earlier GRN would mask a live one once a void status exists.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Arrivals read picks the oldest GRN per correlation id with no status filter; a void earlier GRN would mask a live one once a void status exists.
+status: open
+
+### DW-255: Arrivals PO summary sums open_qty across units of measure and joins on PO number only; display value only.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Arrivals PO summary sums open_qty across units of measure and joins on PO number only; display value only.
+status: open
+
+### DW-256: inspect_photo_ref and material_photo_ref are length-checked only, not checked for existence or site ownership; same pattern as reason_photo_ref.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: inspect_photo_ref and material_photo_ref are length-checked only, not checked for existence or site ownership; same pattern as reason_photo_ref.
+status: open
+
+### DW-257: Rehearsal setup reports exists for any IB-01 without checking that it is an active staging zone under the site; follows the inspection bay provisioning decision.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Rehearsal setup reports exists for any IB-01 without checking that it is an active staging zone under the site; follows the inspection bay provisioning decision.
+status: open
+
+### DW-258: Stores inbox treats a 403 or 500 on indents, GRNs or putaway as an empty group and shows Nothing waiting.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Stores inbox treats a 403 or 500 on indents, GRNs or putaway as an empty group and shows Nothing waiting.
+status: open
+
+### DW-259: Lot and expiry inputs on the stores acceptance screen (owner ruling 2b, 2026-11-19): follow-up story; pilot receipts taken as not lot-controlled, not confirmed by the owner. A plain-language refusal ships meanwhile.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Lot and expiry inputs on the stores acceptance screen (owner ruling 2b, 2026-11-19): follow-up story; pilot receipts taken as not lot-controlled, not confirmed by the owner. A plain-language refusal ships meanwhile.
+status: open
+
+### DW-260: Server-side enforcement of material_photo_ref on goods.received (owner ruling 3b): a server rule affects ERP inbound and every other caller.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Server-side enforcement of material_photo_ref on goods.received (owner ruling 3b): a server rule affects ERP inbound and every other caller.
+status: open
+
+### DW-261: Counted stepper, Damaged and Rejected reason tiles, and a Match supplier action on the unmatched arrival card (owner ruling 6b): UX pass.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Counted stepper, Damaged and Rejected reason tiles, and a Match supplier action on the unmatched arrival card (owner ruling 6b): UX pass.
+status: open
+
+### DW-262: Per-site inspection bay codes and a bay for assignments below site level (owner ruling 4b): location_code is globally unique, so only one site can own IB-01; single pilot site for now.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Per-site inspection bay codes and a bay for assignments below site level (owner ruling 4b): location_code is globally unique, so only one site can own IB-01; single pilot site for now.
+status: open
+
 
 ## Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)
 
-- One inbox for every approval type (EXPERIENCE.md:169, owner question Q26): `/approvals` lists requisitions only. A follow-up folds damage-case concurrence and standing-grant decisions into it with an approval-type filter.
-- SLA column and SLA pills (mock key-approvals.html L548-551, L598-603): SLA hours are mock values (EXPERIENCE.md:171); no SLA is stored, so the column is omitted.
-- Offline read of the inbox: the lists and detail are fetched live and held in memory only; a cold start offline shows the needs-connection card. Needs a PowerSync bucket for approver rows.
-- Inbox row status for a mixed decision: a requisition where the caller rejected their line but another approver approved theirs reads Approved in the list (`rowStatus` shortcut in `edge/src/components/approvals-model.ts`); the detail shows each line's outcome. Needs per-line decision data on the list row.
-- Ask for info in the detail footer (EXPERIENCE.md:137): Story 4.13.
+### DW-263: One inbox for every approval type (EXPERIENCE.md:169, owner question Q26): `/approvals` lists requisitions only. A follow-up folds damage-case concurrence and standing-grant decisions into it with an approval-type filter.
+origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: n/a
+reason: One inbox for every approval type (EXPERIENCE.md:169, owner question Q26): `/approvals` lists requisitions only. A follow-up folds damage-case concurrence and standing-grant decisions into it with an approval-type filter.
+status: open
+
+### DW-264: SLA column and SLA pills (mock key-approvals.html L548-551, L598-603): SLA hours are mock values (EXPERIENCE.md:171); no SLA is stored, so the column is omitted.
+origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: n/a
+reason: SLA column and SLA pills (mock key-approvals.html L548-551, L598-603): SLA hours are mock values (EXPERIENCE.md:171); no SLA is stored, so the column is omitted.
+status: open
+
+### DW-265: Offline read of the inbox: the lists and detail are fetched live and held in memory only; a cold start offline shows the needs-connection card. Needs a PowerSync bucket for approver rows.
+origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Offline read of the inbox: the lists and detail are fetched live and held in memory only; a cold start offline shows the needs-connection card. Needs a PowerSync bucket for approver rows.
+status: open
+
+### DW-266: Inbox row status for a mixed decision: a requisition where the caller rejected their line but another approver approved theirs reads Approved in the list (`rowStatus` shortcut in `edge/src/components/approvals-model.ts`); the detail shows each line's outcome. Needs per-line decision data on the list row.
+origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: edge/src/components/approvals-model.ts
+reason: Inbox row status for a mixed decision: a requisition where the caller rejected their line but another approver approved theirs reads Approved in the list (`rowStatus` shortcut in `edge/src/components/approvals-model.ts`); the detail shows each line's outcome. Needs per-line decision data on the list row.
+status: open
+
+### DW-267: Ask for info in the detail footer (EXPERIENCE.md:137): Story 4.13.
+origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Ask for info in the detail footer (EXPERIENCE.md:137): Story 4.13.
+status: open
+
 
 ## Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)
 
-- Delegation windows read the UTC date, not the IST calendar date: `hasIndentApprovalScope`, `isApproverOfAnyLine` and `approverIdsFor` follow the same wall-clock `today` as `decideAsApprover` and `pendingLineIdsFor`, so the inbox agrees with the seam but both are a day behind between 00:00 and 05:30 IST. Already recorded as a platform-wide convention (see the entry on `resolveDamageAuthority` and `findActiveDelegation` call sites); Story 4.12 adds three more call sites to change in the same pass.
-- A line routed to its own requester is undecidable (already recorded under Story 4.9). Story 4.12 code review patched the inbox so such a row no longer shows under Waiting for the requester; the routing itself is unchanged.
-- Approvals inbox stops at 200 rows per list (the server cap) with no "more" row, and the tab counts stop there too (`shortcut:` in `edge/src/components/approvals.tsx`). Page the lists when one approver can hold more than 200.
-- The approver band line is not scoped to a site although the Approvals nav entry is (`approverBandsFor` in `src/api/v1/indents.ts`, AC 2, AC 3, Task 1.2). A holder at two sites sees both sites' bands. Needs a location passed once the pilot has a second site.
-- The DOA note tells a delegate they are "the requester's head of department" (`doaNote` in `edge/src/components/approvals-model.ts`). Needs acting-for copy from the UX owner.
+### DW-268: Delegation windows read the UTC date, not the IST calendar date: `hasIndentApprovalScope`, `isApproverOfAnyLine` and `approverIdsFor` follow the same wall-clock `today` as `decideAsApprover` and `pendingLineIdsFor`, so the inbox agrees with the seam but both are a day behind between 00:00 and 05:30 IST. Already recorded as a platform-wide convention (see the entry on `resolveDamageAuthority` and `findActiveDelegation` call sites); Story 4.12 adds three more call sites to change in the same pass.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: n/a
+reason: Delegation windows read the UTC date, not the IST calendar date: `hasIndentApprovalScope`, `isApproverOfAnyLine` and `approverIdsFor` follow the same wall-clock `today` as `decideAsApprover` and `pendingLineIdsFor`, so the inbox agrees with the seam but both are a day behind between 00:00 and 05:30 IST. Already recorded as a platform-wide convention (see the entry on `resolveDamageAuthority` and `findActiveDelegation` call sites); Story 4.12 adds three more call sites to change in the same pass.
+status: open
+
+### DW-269: A line routed to its own requester is undecidable (already recorded under Story 4.9). Story 4.12 code review patched the inbox so such a row no longer shows under Waiting for the requester; the routing itself is unchanged.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: n/a
+reason: A line routed to its own requester is undecidable (already recorded under Story 4.9). Story 4.12 code review patched the inbox so such a row no longer shows under Waiting for the requester; the routing itself is unchanged.
+status: open
+
+### DW-270: Approvals inbox stops at 200 rows per list (the server cap) with no "more" row, and the tab counts stop there too (`shortcut:` in `edge/src/components/approvals.tsx`). Page the lists when one approver can hold more than 200.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: edge/src/components/approvals.tsx
+reason: Approvals inbox stops at 200 rows per list (the server cap) with no "more" row, and the tab counts stop there too (`shortcut:` in `edge/src/components/approvals.tsx`). Page the lists when one approver can hold more than 200.
+status: open
+
+### DW-271: The approver band line is not scoped to a site although the Approvals nav entry is (`approverBandsFor` in `src/api/v1/indents.ts`, AC 2, AC 3, Task 1.2). A holder at two sites sees both sites' bands. Needs a location passed once the pilot has a second site.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: src/api/v1/indents.ts
+reason: The approver band line is not scoped to a site although the Approvals nav entry is (`approverBandsFor` in `src/api/v1/indents.ts`, AC 2, AC 3, Task 1.2). A holder at two sites sees both sites' bands. Needs a location passed once the pilot has a second site.
+status: open
+
+### DW-272: The DOA note tells a delegate they are "the requester's head of department" (`doaNote` in `edge/src/components/approvals-model.ts`). Needs acting-for copy from the UX owner.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
+location: edge/src/components/approvals-model.ts
+reason: The DOA note tells a delegate they are "the requester's head of department" (`doaNote` in `edge/src/components/approvals-model.ts`). Needs acting-for copy from the UX owner.
+status: open
+
 
 ## Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)
 
-- A standing-approval line that lapses at issue and has no resolvable DOA approver stays `standing_approval`; `rerouteLapsedLinesToDoa` reports it in `reroute_failed` and every later issue attempt answers 409 `STANDING_APPROVAL_LAPSED` (`src/compliance/standing-reroute.ts`). Belongs to the no-band fallback of Story 4.9.
-- `getIndent` and the raise response return `line_value` and `unit_price_estimate` to a requester who holds no self-approval limit; only the `mine=true` list withholds `estimated_value` (`src/api/v1/indents.ts`). Pre-existing from Story 4.10 line presentation; check against the Story 1.15 no-number rule.
-- Standing grants edge screen asks for the grantee as a raw user id (`edge/src/components/standing-grants.tsx`). Kept by user ruling 2026-11-19 as a recorded scope change from D14; add a person picker.
-- Self-approval limit is checked per line only (D10, `decideLine` in `src/compliance/indent.ts`). A requester can split a purchase across lines or requisitions and self-approve each part. Kept per line for the pilot by user ruling 2026-11-19; the planned fix is a monthly aggregate of self-approved line value per grant.
+### DW-273: A standing-approval line that lapses at issue and has no resolvable DOA approver stays `standing_approval`; `rerouteLapsedLinesToDoa` reports it in `reroute_failed` and every later issue attempt answers 409 `STANDING_APPROVAL_LAPSED` (`src/compliance/standing-reroute.ts`). Belongs to the no-band fallback of Story 4.9.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)"), 2026-11-22
+location: src/compliance/standing-reroute.ts
+reason: A standing-approval line that lapses at issue and has no resolvable DOA approver stays `standing_approval`; `rerouteLapsedLinesToDoa` reports it in `reroute_failed` and every later issue attempt answers 409 `STANDING_APPROVAL_LAPSED` (`src/compliance/standing-reroute.ts`). Belongs to the no-band fallback of Story 4.9.
+status: open
+
+### DW-274: `getIndent` and the raise response return `line_value` and `unit_price_estimate` to a requester who holds no self-approval limit; only the `mine=true` list withholds `estimated_value` (`src/api/v1/indents.ts`). Pre-existing from Story 4.10 line presentation; check against the Story 1.15 no-number rule.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)"), 2026-11-22
+location: src/api/v1/indents.ts
+reason: `getIndent` and the raise response return `line_value` and `unit_price_estimate` to a requester who holds no self-approval limit; only the `mine=true` list withholds `estimated_value` (`src/api/v1/indents.ts`). Pre-existing from Story 4.10 line presentation; check against the Story 1.15 no-number rule.
+status: open
+
+### DW-275: Standing grants edge screen asks for the grantee as a raw user id (`edge/src/components/standing-grants.tsx`). Kept by user ruling 2026-11-19 as a recorded scope change from D14; add a person picker.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)"), 2026-11-22
+location: edge/src/components/standing-grants.tsx
+reason: Standing grants edge screen asks for the grantee as a raw user id (`edge/src/components/standing-grants.tsx`). Kept by user ruling 2026-11-19 as a recorded scope change from D14; add a person picker.
+status: open
+
+### DW-276: Self-approval limit is checked per line only (D10, `decideLine` in `src/compliance/indent.ts`). A requester can split a purchase across lines or requisitions and self-approve each part. Kept per line for the pilot by user ruling 2026-11-19; the planned fix is a monthly aggregate of self-approved line value per grant.
+origin: migrated from legacy ledger ("Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)"), 2026-11-22
+location: src/compliance/indent.ts
+reason: Self-approval limit is checked per line only (D10, `decideLine` in `src/compliance/indent.ts`). A requester can split a purchase across lines or requisitions and self-approve each part. Kept per line for the pilot by user ruling 2026-11-19; the planned fix is a monthly aggregate of self-approved line value per grant.
+status: open
+
 
 ## Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)
 
-- D10 second-child accept: `applyGoodsPutawayReleasedProjection` releases the one held putaway for the GRN line on the first accepted split child. If a second child of the same receipt task is later accepted, the putaway is already `ready`, so the release is refused with `PUTAWAY_TASK_NOT_HELD` and the second accept does not move stock. The fixed precedence is first accepted child wins. A multi-child putaway design (one putaway row per child, or a putaway split) is a follow-up.
-- Stores inbox rendering of `hold_reason`: the server records `no_inspection_plan`, `no_lot` and `duplicate_lot` on the held putaway and names the machine reason in the `qc_hold_placed` notification. The stores inbox screens (Stories 3.14 and 3.15) are server-only in this story and do not yet render the reason; the human wording and the workbench affordance are an edge follow-up.
-- Retention-sample question for receipt lots: a receipt-lot inspection task inherits the normal retention-sample rules. Whether a purchased lot must retain a physical sample is an open question for the quality owner; no receipt-specific rule was added here.
-- Q33 (a receipt item has no released BOM and therefore no inspection plan): ruled that the receipt still posts, the putaway stays held, and `hold_reason = no_inspection_plan` records the gap. Receipts never fail for a plan absence.
-- Q34 (who may disposition a lot): ruled that every accept, reject and split requires a role in `config.quality.qcHeadRoles` (default `qc_head`), enforced in the HTTP handlers and again at the seam. The existing segregation-of-duties check is unchanged and additive.
-- Q35 (should `inspection_plan.bom_revision_id` become nullable for receipts): ruled closed by D3. A receipt resolves against the item's current released revision, so the column stays NOT NULL and no receipt-specific plan row is created.
-- Q36 (a held receipt with no lot): ruled that it posts, stays held, and records `hold_reason = no_lot`; no inspection task is opened because there is no lot to govern.
+### DW-277: D10 second-child accept: `applyGoodsPutawayReleasedProjection` releases the one held putaway for the GRN line on the first accepted split child. If a second child of the same receipt task is later accepted, the putaway is already `ready`, so the release is refused with `PUTAWAY_TASK_NOT_HELD` and the second accept does not move stock. The fixed precedence is first accepted child wins. A multi-child putaway design (one putaway row per child, or a putaway split) is a follow-up.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
+location: n/a
+reason: D10 second-child accept: `applyGoodsPutawayReleasedProjection` releases the one held putaway for the GRN line on the first accepted split child. If a second child of the same receipt task is later accepted, the putaway is already `ready`, so the release is refused with `PUTAWAY_TASK_NOT_HELD` and the second accept does not move stock. The fixed precedence is first accepted child wins. A multi-child putaway design (one putaway row per child, or a putaway split) is a follow-up.
+status: open
+
+### DW-278: Stores inbox rendering of `hold_reason`: the server records `no_inspection_plan`, `no_lot` and `duplicate_lot` on the held putaway and names the machine reason in the `qc_hold_placed` notification. The stores inbox screens (Stories 3.14 and 3.15) are server-only in this story and do not yet render the reason; the human wording and the workbench affordance are an edge follow-up.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
+location: n/a
+reason: Stores inbox rendering of `hold_reason`: the server records `no_inspection_plan`, `no_lot` and `duplicate_lot` on the held putaway and names the machine reason in the `qc_hold_placed` notification. The stores inbox screens (Stories 3.14 and 3.15) are server-only in this story and do not yet render the reason; the human wording and the workbench affordance are an edge follow-up.
+status: open
+
+### DW-279: Retention-sample question for receipt lots: a receipt-lot inspection task inherits the normal retention-sample rules. Whether a purchased lot must retain a physical sample is an open question for the quality owner; no receipt-specific rule was added here.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
+location: n/a
+reason: Retention-sample question for receipt lots: a receipt-lot inspection task inherits the normal retention-sample rules. Whether a purchased lot must retain a physical sample is an open question for the quality owner; no receipt-specific rule was added here.
+status: open
+
+### DW-280: Q33 (a receipt item has no released BOM and therefore no inspection plan): ruled that the receipt still posts, the putaway stays held, and `hold_reason = no_inspection_plan` records the gap. Receipts never fail for a plan absence.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
+location: n/a
+reason: Q33 (a receipt item has no released BOM and therefore no inspection plan): ruled that the receipt still posts, the putaway stays held, and `hold_reason = no_inspection_plan` records the gap. Receipts never fail for a plan absence.
+status: open
+
+### DW-281: Q34 (who may disposition a lot): ruled that every accept, reject and split requires a role in `config.quality.qcHeadRoles` (default `qc_head`), enforced in the HTTP handlers and again at the seam. The existing segregation-of-duties check is unchanged and additive.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
+location: n/a
+reason: Q34 (who may disposition a lot): ruled that every accept, reject and split requires a role in `config.quality.qcHeadRoles` (default `qc_head`), enforced in the HTTP handlers and again at the seam. The existing segregation-of-duties check is unchanged and additive.
+status: open
+
+### DW-282: Q35 (should `inspection_plan.bom_revision_id` become nullable for receipts): ruled closed by D3. A receipt resolves against the item's current released revision, so the column stays NOT NULL and no receipt-specific plan row is created.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
+location: n/a
+reason: Q35 (should `inspection_plan.bom_revision_id` become nullable for receipts): ruled closed by D3. A receipt resolves against the item's current released revision, so the column stays NOT NULL and no receipt-specific plan row is created.
+status: open
+
+### DW-283: Q36 (a held receipt with no lot): ruled that it posts, stays held, and records `hold_reason = no_lot`; no inspection task is opened because there is no lot to govern.
+origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
+location: n/a
+reason: Q36 (a held receipt with no lot): ruled that it posts, stays held, and records `hold_reason = no_lot`; no inspection task is opened because there is no lot to govern.
+status: open
+
 
 ## Deferred from: code review of story-3.18 (2026-11-21)
 
-- Staging validation-walk (story 3.18 pack and dispatch): the Dev Notes precondition (EXPERIENCE.md:262, key-floor.html L463) requires walking the pack-and-dispatch layout with dispatch1@ on the staging preview and recording the outcome, or recording the owner's waiver. Reason deferred: a manual owner action independent of the code fixes (same handling as Story 3.16). Trigger: the staging pack-and-dispatch walk with dispatch1@ before go-live.- Park at dispatch bay (story 3.18, AC 5): no dispatch bay record exists for the pilot, so the control renders disabled stating the reason. Trigger: a dispatch-bay bay/state model lands.
-- E-way bill row (story 3.18, AC 6): the mock's E-way bill document row (key-floor.html L770) is not rendered; E-way bill generation is out of pilot scope. Trigger: an E-way bill integration requirement.
-- Online-only pack (story 3.18, AC 7): the pack station is online-only (a deliberate departure from EXPERIENCE.md:99 and key-floor.html L464); dispatch.packed / dispatch.shipping_documents_generated / dispatch.dispatched are NOT queued to the outbox even though the server door accepts them. Trigger: offline pack/dispatch capture requirement.
-- source_spec: `_bmad-output/implementation-artifacts/spec-3-19-unloading-exception-commands-server.md`
-  summary: PO binding never checks that the PO belongs to the gate event's site (both `gate.entered` auto-binding and the new 3.19 `match-po` call `getPurchaseOrderByRef` with no site or supplier comparison).
-  evidence: `src/compliance/gate.ts:248` and `src/compliance/gate.ts:292` look the PO up by reference only; the 3.19 match inherits the pre-existing global-PO assumption.
+### DW-284: Staging validation-walk (story 3.18 pack and dispatch): the Dev Notes precondition (EXPERIENCE.md:262, key-floor.html L463) requires walking the pack-and-dispatch layout with dispatch1@ on the staging preview and recording the outcome, or recording the owner's waiver. Reason deferred: a manual owner action independent of the code fixes (same handling as Story 3.16). Trigger: the staging pack-and-dispatch walk with dispatch1@ before go-live.- Park at dispatch bay (story 3.18, AC 5): no dispatch bay record exists for the pilot, so the control renders disabled stating the reason. Trigger: a dispatch-bay bay/state model lands.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.18 (2026-11-21)"), 2026-11-22
+location: n/a
+reason: Staging validation-walk (story 3.18 pack and dispatch): the Dev Notes precondition (EXPERIENCE.md:262, key-floor.html L463) requires walking the pack-and-dispatch layout with dispatch1@ on the staging preview and recording the outcome, or recording the owner's waiver. Reason deferred: a manual owner action independent of the code fixes (same handling as Story 3.16). Trigger: the staging pack-and-dispatch walk with dispatch1@ before go-live.- Park at dispatch bay (story 3.18, AC 5): no dispatch bay record exists for the pilot, so the control renders disabled stating the reason. Trigger: a dispatch-bay bay/state model lands.
+status: open
+
+### DW-285: E-way bill row (story 3.18, AC 6): the mock's E-way bill document row (key-floor.html L770) is not rendered; E-way bill generation is out of pilot scope. Trigger: an E-way bill integration requirement.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.18 (2026-11-21)"), 2026-11-22
+location: n/a
+reason: E-way bill row (story 3.18, AC 6): the mock's E-way bill document row (key-floor.html L770) is not rendered; E-way bill generation is out of pilot scope. Trigger: an E-way bill integration requirement.
+status: open
+
+### DW-286: Online-only pack (story 3.18, AC 7): the pack station is online-only (a deliberate departure from EXPERIENCE.md:99 and key-floor.html L464); dispatch.packed / dispatch.shipping_documents_generated / dispatch.dispatched are NOT queued to the outbox even though the server door accepts them. Trigger: offline pack/dispatch capture requirement.
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.18 (2026-11-21)"), 2026-11-22
+location: n/a
+reason: Online-only pack (story 3.18, AC 7): the pack station is online-only (a deliberate departure from EXPERIENCE.md:99 and key-floor.html L464); dispatch.packed / dispatch.shipping_documents_generated / dispatch.dispatched are NOT queued to the outbox even though the server door accepts them. Trigger: offline pack/dispatch capture requirement.
+status: open
+
+### DW-287: PO binding never checks that the PO belongs to the gate event's site (both `gate.entered` auto-binding and the new 3.19 `match-po` call `getPurchaseOrderByRef` with no site or supplier comparison).
+origin: migrated from legacy ledger ("Deferred from: code review of story-3.18 (2026-11-21)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-3-19-unloading-exception-commands-server.md
+source_spec: _bmad-output/implementation-artifacts/spec-3-19-unloading-exception-commands-server.md
+reason: summary: PO binding never checks that the PO belongs to the gate event's site (both `gate.entered` auto-binding and the new 3.19 `match-po` call `getPurchaseOrderByRef` with no site or supplier comparison). evidence: `src/compliance/gate.ts:248` and `src/compliance/gate.ts:292` look the PO up by reference only; the 3.19 match inherits the pre-existing global-PO assumption.
+status: open
+
 
 ## Deferred from: story-3.20 (2026-11-22)
-- Online-only unloading exceptions (story 3.20, owner question Q22): the screen resolves online only, a deliberate departure from the mock (key-floor.html L467 and L788) that shows offline resolve. Match to PO, Accept within band and Ask procurement are not queued to the outbox. Trigger: an offline resolve requirement for unloading exceptions.
-- Typed PO picker (story 3.20): the mock's open-PO radio list is replaced by a typed PO number lookup against `GET /api/v1/erp/purchase-orders/:poNumber`, because no open-PO-by-supplier list route exists. Trigger: an open-PO-by-supplier read route lands.
-- Unlisted supplier flow (story 3.20): the match-to-vendor flow for a gate event with an unlisted supplier is not built. Trigger: the vendor master match requirement is scheduled.
-- source_spec: `_bmad-output/implementation-artifacts/spec-3-20-unloading-exceptions-screen.md`
-  summary: `GET /api/v1/receiving/exceptions` returns at most 500 rows oldest first with no date filter, so once a site holds more than 500 resolved (or sent) rows the 3.20 `Resolved today` group loses today's rows.
-  evidence: `src/read/projections/receiving_exception.ts:255` caps the list at 500 ordered ascending, and the route accepts only `site` and `status` (`src/api/v1/unloading-exceptions.ts:290-332`).
+### DW-288: Online-only unloading exceptions (story 3.20, owner question Q22): the screen resolves online only, a deliberate departure from the mock (key-floor.html L467 and L788) that shows offline resolve. Match to PO, Accept within band and Ask procurement are not queued to the outbox. Trigger: an offline resolve requirement for unloading exceptions.
+origin: migrated from legacy ledger ("Deferred from: story-3.20 (2026-11-22)"), 2026-11-22
+location: n/a
+reason: Online-only unloading exceptions (story 3.20, owner question Q22): the screen resolves online only, a deliberate departure from the mock (key-floor.html L467 and L788) that shows offline resolve. Match to PO, Accept within band and Ask procurement are not queued to the outbox. Trigger: an offline resolve requirement for unloading exceptions.
+status: open
+
+### DW-289: Typed PO picker (story 3.20): the mock's open-PO radio list is replaced by a typed PO number lookup against `GET /api/v1/erp/purchase-orders/:poNumber`, because no open-PO-by-supplier list route exists. Trigger: an open-PO-by-supplier read route lands.
+origin: migrated from legacy ledger ("Deferred from: story-3.20 (2026-11-22)"), 2026-11-22
+location: n/a
+reason: Typed PO picker (story 3.20): the mock's open-PO radio list is replaced by a typed PO number lookup against `GET /api/v1/erp/purchase-orders/:poNumber`, because no open-PO-by-supplier list route exists. Trigger: an open-PO-by-supplier read route lands.
+status: open
+
+### DW-290: Unlisted supplier flow (story 3.20): the match-to-vendor flow for a gate event with an unlisted supplier is not built. Trigger: the vendor master match requirement is scheduled.
+origin: migrated from legacy ledger ("Deferred from: story-3.20 (2026-11-22)"), 2026-11-22
+location: n/a
+reason: Unlisted supplier flow (story 3.20): the match-to-vendor flow for a gate event with an unlisted supplier is not built. Trigger: the vendor master match requirement is scheduled.
+status: open
+
+### DW-291: `GET /api/v1/receiving/exceptions` returns at most 500 rows oldest first with no date filter, so once a site holds more than 500 resolved (or sent) rows the 3.20 `Resolved today` group loses today's rows.
+origin: migrated from legacy ledger ("Deferred from: story-3.20 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-3-20-unloading-exceptions-screen.md
+source_spec: _bmad-output/implementation-artifacts/spec-3-20-unloading-exceptions-screen.md
+reason: summary: `GET /api/v1/receiving/exceptions` returns at most 500 rows oldest first with no date filter, so once a site holds more than 500 resolved (or sent) rows the 3.20 `Resolved today` group loses today's rows. evidence: `src/read/projections/receiving_exception.ts:255` caps the list at 500 ordered ascending, and the route accepts only `site` and `status` (`src/api/v1/unloading-exceptions.ts:290-332`).
+status: open
+
 
 ## Deferred from: story-4.13 (2026-11-22)
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: There is no requester reply channel; the requester sees the question on My requests and answers the approver outside the app.
-  evidence: `edge/src/components/my-requests.tsx` renders `info_requested` read-only and no `indent.info_replied` event or route exists.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: The `indent_info_requested` notification is stored and returned by `GET /notifications` but no edge notifications bell or in-app display shows it.
-  evidence: `src/compliance/indent.ts` `applyIndentInfoRequested` emits it; the edge shell has no notifications surface.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: A question always covers every line the approver currently holds; there is no line-scoped question picker.
-  evidence: `src/api/v1/indents.ts` `requestInfoIndentBase` accepts `line_ids` but `edge/src/components/approvals.tsx` always sends `pending_for_me_line_ids`.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: Replay: the route mints a new event_id and info_request_id per HTTP call, so a client retry creates a duplicate question and notification.
-  evidence: `src/api/v1/indents.ts` `requestInfoIndentBase` generates ids per request; no idempotency key is read.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: The server does not enforce the DOA-route-only rule for Ask for info; only the UI hides it. Needs an owner ruling on server refusal.
-  evidence: `edge/src/approvals-model.ts` `canAskInfo` checks `approval_route === 'doa'`; `requestInfoIndentBase` does not.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: No cap on the number of questions per approver per indent; only the newest is shown.
-  evidence: `indent_info_request` inserts are unbounded and `info_requests[0]` is rendered.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: `listIndents` info_requested join is not cleared when the requisition is decided or withdrawn, so the chip stays on closed requisitions.
-  evidence: `src/api/v1/indents.ts` `listIndents` join on `indent_info_request` has no status condition.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: `listIndents` DISTINCT ON subquery scans all `indent_info_request` rows on every list call; scope it to the page's indents.
-  evidence: Subquery in `src/api/v1/indents.ts` `listIndents` is unfiltered by page ids.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: `GET /indents/:id` returns all info_requests to any viewer passing `getIndentBase`; the AC has no per-line visibility rule.
-  evidence: `src/api/v1/indents.ts` `getIndentBase` attaches every info request.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: The status block shows `info_requests[0]` to every approver, not only the asker or line holder.
-  evidence: `edge/src/components/approvals.tsx` `latestQuestion` is not filtered by asker.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: A 403 `INDENT_RAISER_CANNOT_APPROVE` or `NOT_RESOLVED_APPROVER` on ask does not reload the detail; only 409 does.
-  evidence: `edge/src/components/approvals.tsx` `askInfo` reloads only on `res.status === 409`.
-- source_spec: `_bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md`
-  summary: Notification target role uses the actor role, not the requester role (unverified; check the notification list filter).
-  evidence: `src/compliance/indent.ts` `applyIndentInfoRequested` notification target; verify against `src/api/v1/notification.ts` list filter.
+### DW-292: There is no requester reply channel; the requester sees the question on My requests and answers the approver outside the app.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: There is no requester reply channel; the requester sees the question on My requests and answers the approver outside the app. evidence: `edge/src/components/my-requests.tsx` renders `info_requested` read-only and no `indent.info_replied` event or route exists.
+status: open
+
+### DW-293: The `indent_info_requested` notification is stored and returned by `GET /notifications` but no edge notifications bell or in-app display shows it.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: The `indent_info_requested` notification is stored and returned by `GET /notifications` but no edge notifications bell or in-app display shows it. evidence: `src/compliance/indent.ts` `applyIndentInfoRequested` emits it; the edge shell has no notifications surface.
+status: open
+
+### DW-294: A question always covers every line the approver currently holds; there is no line-scoped question picker.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: A question always covers every line the approver currently holds; there is no line-scoped question picker. evidence: `src/api/v1/indents.ts` `requestInfoIndentBase` accepts `line_ids` but `edge/src/components/approvals.tsx` always sends `pending_for_me_line_ids`.
+status: open
+
+### DW-295: Replay: the route mints a new event_id and info_request_id per HTTP call, so a client retry creates a duplicate question and notification.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: Replay: the route mints a new event_id and info_request_id per HTTP call, so a client retry creates a duplicate question and notification. evidence: `src/api/v1/indents.ts` `requestInfoIndentBase` generates ids per request; no idempotency key is read.
+status: open
+
+### DW-296: The server does not enforce the DOA-route-only rule for Ask for info; only the UI hides it. Needs an owner ruling on server refusal.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: The server does not enforce the DOA-route-only rule for Ask for info; only the UI hides it. Needs an owner ruling on server refusal. evidence: `edge/src/approvals-model.ts` `canAskInfo` checks `approval_route === 'doa'`; `requestInfoIndentBase` does not.
+status: open
+
+### DW-297: No cap on the number of questions per approver per indent; only the newest is shown.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: No cap on the number of questions per approver per indent; only the newest is shown. evidence: `indent_info_request` inserts are unbounded and `info_requests[0]` is rendered.
+status: open
+
+### DW-298: `listIndents` info_requested join is not cleared when the requisition is decided or withdrawn, so the chip stays on closed requisitions.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: `listIndents` info_requested join is not cleared when the requisition is decided or withdrawn, so the chip stays on closed requisitions. evidence: `src/api/v1/indents.ts` `listIndents` join on `indent_info_request` has no status condition.
+status: open
+
+### DW-299: `listIndents` DISTINCT ON subquery scans all `indent_info_request` rows on every list call; scope it to the page's indents.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: `listIndents` DISTINCT ON subquery scans all `indent_info_request` rows on every list call; scope it to the page's indents. evidence: Subquery in `src/api/v1/indents.ts` `listIndents` is unfiltered by page ids.
+status: open
+
+### DW-300: `GET /indents/:id` returns all info_requests to any viewer passing `getIndentBase`; the AC has no per-line visibility rule.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: `GET /indents/:id` returns all info_requests to any viewer passing `getIndentBase`; the AC has no per-line visibility rule. evidence: `src/api/v1/indents.ts` `getIndentBase` attaches every info request.
+status: open
+
+### DW-301: The status block shows `info_requests[0]` to every approver, not only the asker or line holder.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: The status block shows `info_requests[0]` to every approver, not only the asker or line holder. evidence: `edge/src/components/approvals.tsx` `latestQuestion` is not filtered by asker.
+status: open
+
+### DW-302: A 403 `INDENT_RAISER_CANNOT_APPROVE` or `NOT_RESOLVED_APPROVER` on ask does not reload the detail; only 409 does.
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: A 403 `INDENT_RAISER_CANNOT_APPROVE` or `NOT_RESOLVED_APPROVER` on ask does not reload the detail; only 409 does. evidence: `edge/src/components/approvals.tsx` `askInfo` reloads only on `res.status === 409`.
+status: open
+
+### DW-303: Notification target role uses the actor role, not the requester role (unverified; check the notification list filter).
+origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
+location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
+reason: summary: Notification target role uses the actor role, not the requester role (unverified; check the notification list filter). evidence: `src/compliance/indent.ts` `applyIndentInfoRequested` notification target; verify against `src/api/v1/notification.ts` list filter.
+status: open
+
