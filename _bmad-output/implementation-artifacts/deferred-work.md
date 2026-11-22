@@ -1518,6 +1518,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-capture
 location: n/a
 reason: On the supervisor page the Dashboard and Frontline links are hash links to sections that are not on that page (pre-existing on `/maintenance` too); a real dashboard route or `aria-current` handling is a shell story.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-107: Story 1.14 Task 6.5 (staging check, runbook 2.10d) was not run during dev: it needs the code shipped to the box and the operator's browser session; recorded in the story file as pending.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
