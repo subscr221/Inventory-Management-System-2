@@ -26,6 +26,15 @@
     "label": "Keep open",
     "resolution": ""
   },
+  "DW-112": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "2",
+    "label": "Keep open",
+    "resolution": ""
+  },
   "DW-13": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
