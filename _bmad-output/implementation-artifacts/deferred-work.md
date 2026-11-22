@@ -1960,6 +1960,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-d
 location: damage.ts
 reason: `resolveDamageAuthority`'s escalate-to-next-available-band DOA fallback and its wall-clock (not `occurred_at`) delegation check were initially triaged as Story 8.9 bugs, but both are pre-existing, already-reviewed, platform-wide conventions (`listActiveDoaEntries`'s docstring names the fallback "Story 2.5 review"; every `findActiveDelegation` call site in the codebase uses wall-clock `today`). Fixing only `damage.ts` would make it inconsistent with every other approver/delegation resolver. Deferred to a cross-cutting DOA/delegation review if the platform owner wants either behavior changed.
 status: open
+decision: 2026-11-22 Keep open, revisit post-pilot
 
 ### DW-167: `RAW_BODY_PATH_PREFIX` in `src/api/router.ts:24` is a blanket string-prefix match over the whole `/api/v1/attachments/` namespace rather than the specific upload route; any future PUT endpoint added under that prefix silently receives a raw Buffer instead of parsed JSON, with no compile-time signal. Pre-existing router style in this codebase, not a regression.
 origin: migrated from legacy ledger ("Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
