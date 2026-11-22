@@ -2839,7 +2839,9 @@ origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 
 location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
 source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
 reason: summary: A question always covers every line the approver currently holds; there is no line-scoped question picker. evidence: `src/api/v1/indents.ts` `requestInfoIndentBase` accepts `line_ids` but `edge/src/components/approvals.tsx` always sends `pending_for_me_line_ids`.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 ### DW-295: Replay: the route mints a new event_id and info_request_id per HTTP call, so a client retry creates a duplicate question and notification.
 origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
