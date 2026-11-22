@@ -2,9 +2,9 @@
 title: 'Story 10.2: R&D Requisition, Budget Check, and Issue Types'
 type: 'feature'
 created: '2026-11-22'
-status: 'in-review'
+status: 'done'
 baseline_revision: '79567fd19021639bd6ba66581f822084b579ebef'
-final_revision: ''
+final_revision: '230853d7b0499ee262e7af25be6c658a35869138'
 review_loop_iteration: 1
 followup_review_recommended: true
 context: []
