@@ -2674,7 +2674,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
 location: edge/src/components/approvals-model.ts
 reason: The DOA note tells a delegate they are "the requester's head of department" (`doaNote` in `edge/src/components/approvals-model.ts`). Needs acting-for copy from the UX owner.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 
 ## Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)
