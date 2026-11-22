@@ -2654,7 +2654,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
 location: n/a
 reason: A line routed to its own requester is undecidable (already recorded under Story 4.9). Story 4.12 code review patched the inbox so such a row no longer shows under Waiting for the requester; the routing itself is unchanged.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 ### DW-270: Approvals inbox stops at 200 rows per list (the server cap) with no "more" row, and the tab counts stop there too (`shortcut:` in `edge/src/components/approvals.tsx`). Page the lists when one approver can hold more than 200.
 origin: migrated from legacy ledger ("Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
