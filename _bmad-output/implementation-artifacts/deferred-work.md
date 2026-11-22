@@ -2706,7 +2706,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)"), 2026-11-22
 location: src/compliance/indent.ts
 reason: Self-approval limit is checked per line only (D10, `decideLine` in `src/compliance/indent.ts`). A requester can split a purchase across lines or requisitions and self-approve each part. Kept per line for the pilot by user ruling 2026-11-19; the planned fix is a monthly aggregate of self-approved line value per grant.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 
 ## Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)
