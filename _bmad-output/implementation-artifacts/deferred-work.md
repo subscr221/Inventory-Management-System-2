@@ -1890,7 +1890,9 @@ decision: 2026-11-22 Close, workbench ordering suffices — Workbench lists over
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
 location: n/a
 reason: An employee-only reporter cannot see the central refusal of their own offline damage capture (deferred-work L1187): refused captures are scoped by the stream module, and no one holds a `damage` module. The device still shows "Needs attention" with the code.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Device shows Needs attention with the code; accepted for pilot.
+decision: 2026-11-22 Close, device message is enough — Device shows Needs attention with the code; accepted for pilot.
 
 ### DW-159: Standing approvals and self-approval limits for the replacement requisition (Story 4.8) and the `NOT_RESOLVED_APPROVER` fallback (Story 4.9): the replacement is an ordinary requisition under today's rules.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
