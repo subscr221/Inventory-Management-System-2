@@ -287,6 +287,15 @@
     "label": "Site holder wins, add test",
     "resolution": ""
   },
+  "DW-204": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "1",
+    "label": "Keep open until correct-course",
+    "resolution": ""
+  },
   "DW-29": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
