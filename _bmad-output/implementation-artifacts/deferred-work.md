@@ -2694,6 +2694,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 4-8-standing
 location: src/api/v1/indents.ts
 reason: `getIndent` and the raise response return `line_value` and `unit_price_estimate` to a requester who holds no self-approval limit; only the `mine=true` list withholds `estimated_value` (`src/api/v1/indents.ts`). Pre-existing from Story 4.10 line presentation; check against the Story 1.15 no-number rule.
 status: open
+decision: 2026-11-22 Build it now — Redact line_value and unit_price_estimate in getIndent and the raise response for requesters without a self-approval limit, and update edge consumers.
 
 ### DW-275: Standing grants edge screen asks for the grantee as a raw user id (`edge/src/components/standing-grants.tsx`). Kept by user ruling 2026-11-19 as a recorded scope change from D14; add a person picker.
 origin: migrated from legacy ledger ("Deferred from: code review of 4-8-standing-approvals-and-self-approval-limits (2026-11-19)"), 2026-11-22
