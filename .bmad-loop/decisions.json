@@ -8,6 +8,15 @@
     "label": "Add refusal audit",
     "resolution": ""
   },
+  "DW-14": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Cap also_covers entries on POST /api/v1/dispatch/:dispatchOrderId/irn with a 400 and a test.",
+    "key": "1",
+    "label": "Add a local cap",
+    "resolution": ""
+  },
   "DW-2": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
