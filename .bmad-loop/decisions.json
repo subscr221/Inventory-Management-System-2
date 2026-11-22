@@ -80,6 +80,15 @@
     "label": "Keep open",
     "resolution": ""
   },
+  "DW-45": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Return the stored row with already_excluded true (and 200) when the key exists, without changing the row.",
+    "key": "1",
+    "label": "Keep immutable, flag",
+    "resolution": ""
+  },
   "DW-5": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
