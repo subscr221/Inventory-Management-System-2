@@ -1,0 +1,11 @@
+{
+  "DW-2": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Route the refusal audit through the caller's client or dedupe by idempotency key, and add an acquisition timeout; add a test for retry producing one audit row.",
+    "key": "1",
+    "label": "Fix now",
+    "resolution": ""
+  }
+}
