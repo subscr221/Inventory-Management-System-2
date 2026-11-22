@@ -2856,6 +2856,7 @@ location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-in
 source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
 reason: summary: The server does not enforce the DOA-route-only rule for Ask for info; only the UI hides it. Needs an owner ruling on server refusal. evidence: `edge/src/approvals-model.ts` `canAskInfo` checks `approval_route === 'doa'`; `requestInfoIndentBase` does not.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-297: No cap on the number of questions per approver per indent; only the newest is shown.
 origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
