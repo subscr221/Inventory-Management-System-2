@@ -1787,6 +1787,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-r
 location: mockups/key-requisitions.html
 reason: Availability "Low" state, "expected <date>" and "Collect at <counter>" chips (D5): need min-max levels, open PO data and a counter register. `mockups/key-requisitions.html` still shows "In stock - 12 available" and "Low - N available"; the UX owner is to amend the mock to the no-number rule.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-144: Availability omits `item_name` (Table 2 lists it): `item_master` has no name or description column anywhere in the schema, and adding one is a schema change outside this story (AD-14, schema-drift). The response carries `sku`, `uom`, `in_stock`, `locations`; add the name when the item master gains one.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
