@@ -1357,6 +1357,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused
 location: n/a
 reason: `recordRefusedCapture` swallows every failure into a `console.warn` (Binding Decision 3 says never throw), so a central-record loss is invisible: no metric, no counter, no dead-letter.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-82: No per-device rate limit on refusal records: an authenticated device looping distinct `event_id`s with 64 KB envelopes writes unbounded `domain_events` plus `edge_refused_capture` rows. Same exposure shape as the Story 7.8 raise.
 origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
