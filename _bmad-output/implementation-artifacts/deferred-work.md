@@ -1876,6 +1876,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-un
 location: n/a
 reason: Correcting a locked case: after both keys or an escalation the case is locked; a correction as a linked new case is not built.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-157: A scheduled sweep for overdue external checks (Table 8 last row): no existing sweep was reusable, so none runs; the workbench lists overdue external checks first instead.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
