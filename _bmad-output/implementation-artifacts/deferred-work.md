@@ -2823,6 +2823,7 @@ location: _bmad-output/implementation-artifacts/spec-3-19-unloading-exception-co
 source_spec: _bmad-output/implementation-artifacts/spec-3-19-unloading-exception-commands-server.md
 reason: summary: PO binding never checks that the PO belongs to the gate event's site (both `gate.entered` auto-binding and the new 3.19 `match-po` call `getPurchaseOrderByRef` with no site or supplier comparison). evidence: `src/compliance/gate.ts:248` and `src/compliance/gate.ts:292` look the PO up by reference only; the 3.19 match inherits the pre-existing global-PO assumption.
 status: open
+decision: 2026-11-22 Keep open for later
 
 
 ## Deferred from: story-3.20 (2026-11-22)
