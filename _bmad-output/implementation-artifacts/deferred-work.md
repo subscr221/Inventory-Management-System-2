@@ -1320,6 +1320,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-13-refused-and-par
 location: deploy/pipeline/branch-protection.json
 reason: The `edge-sync-real` CI job is not a required check yet: it must be added to branch protection (and `deploy/pipeline/branch-protection.json`) by a repository admin.
 status: open
+decision: 2026-11-22 Keep open for admin
 
 
 ## Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)
