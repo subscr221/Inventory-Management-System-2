@@ -776,13 +776,17 @@ resolution: already resolved: Same as DW-10: edge/src/sync/connector.ts:291 comm
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
 location: src/compliance/supplier.ts
 reason: 11.5R-9 GSTIN check digits are never verified anywhere in the platform. `GSTIN_REGEX` (`src/compliance/supplier.ts:23`) is shape-only, so a transposed character yields a structurally valid but statutorily invalid GSTIN, which then drives branch-transfer classification and supplier three-way match alike. Shared with the supplier side, so it belongs to a sweep.
-status: open
+status: done 2026-11-22
+resolution: resolved by sweep bundle dw-s0-gstin-validation
+resolution-undo: 61cc36ef7829227a1d2cfca29971be98b64b15d11393e7065150e4d50ef9b1a1 2026-11-22 7374617475733a206f70656e
 
 ### DW-26: 11.5R-10 `effective_from` on a site GSTIN registration is unbounded in both directions
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
 location: src/api/v1/sites.ts
 reason: 11.5R-10 `effective_from` on a site GSTIN registration is unbounded in both directions (`src/api/v1/sites.ts:244-262` validates only the calendar date and `to >= from`). A registration dated 1900-01-01 or 2999-01-01 is accepted; the far-future one silently produces a site with no CURRENTLY effective registration while returning 201.
-status: open
+status: done 2026-11-22
+resolution: resolved by sweep bundle dw-s0-gstin-validation
+resolution-undo: 61cc36ef7829227a1d2cfca29971be98b64b15d11393e7065150e4d50ef9b1a1 2026-11-22 7374617475733a206f70656e
 
 ### DW-27: 11.5R-11 The `gst` block on `GET /api/v1/transfer-requests/:id` exposes both GSTINs and the
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22

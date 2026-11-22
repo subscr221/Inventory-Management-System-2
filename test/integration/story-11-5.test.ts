@@ -40,17 +40,17 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCIM_HEADERS = { Authorization: 'Bearer test-only-scim-bearer-token-not-for-production-use' };
 
-// Valid GSTINs (state code, PAN-shaped middle, Z, check digit). GSTIN_REGEX is a shape check only.
-const GSTIN_A = '27AAACI1234A1Z5';
-const GSTIN_B = '29AAACI1234A1Z1';
-const GSTIN_E = '33AAACI1234A1Z7';
-const GSTIN_F = '36AAACI1234A1Z2';
-const GSTIN_G = '07AAACI1234A1Z9'; // siteG: re-registered mid-flight by the D1 regression arm
-const GSTIN_H = '19AAACI1234A1Z3'; // siteH: like_kind_quality default, for the D3 role gate
-const GSTIN_I = '24AAACI1234A1Z8'; // siteI: invoice_value_full_itc default, recipient ITC-eligible
-const GSTIN_J = '10AAACI1234A1Z4'; // siteJ: the close-route invariant arm closes its config, then it
-const GSTIN_K = '21AAACI1234A1Z6'; // siteK: a CLOSED-ended window, for the effective_from/to boundaries
-const GSTIN_M = '23AAACI1234A1Z0'; // siteM: the close-route lifecycle arm owns this registration
+// Valid GSTINs (state code, PAN-shaped middle, Z, check digit). check digits are mod-36 valid (isValidGstin).
+const GSTIN_A = '27AAACI1234A1ZC';
+const GSTIN_B = '29AAACI1234A1Z8';
+const GSTIN_E = '33AAACI1234A1ZJ';
+const GSTIN_F = '36AAACI1234A1ZD';
+const GSTIN_G = '07AAACI1234A1ZE'; // siteG: re-registered mid-flight by the D1 regression arm
+const GSTIN_H = '19AAACI1234A1Z9'; // siteH: like_kind_quality default, for the D3 role gate
+const GSTIN_I = '24AAACI1234A1ZI'; // siteI: invoice_value_full_itc default, recipient ITC-eligible
+const GSTIN_J = '10AAACI1234A1ZR'; // siteJ: the close-route invariant arm closes its config, then it
+const GSTIN_K = '21AAACI1234A1ZO'; // siteK: a CLOSED-ended window, for the effective_from/to boundaries
+const GSTIN_M = '23AAACI1234A1ZK'; // siteM: the close-route lifecycle arm owns this registration
 
 function irnFor(seed: string): string {
   return createHash('sha256').update(seed).digest('hex');

@@ -23,6 +23,23 @@ const SUPPLIER_EVENT_TYPES = new Set([
 // The ONE GSTIN shape in the codebase (Story 11.5 Task 1.2): supplier-invoice.ts imports it and
 // read/projections/site_gstin.sql pins the same body as a CHECK. Do not add another copy.
 export const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+
+const GSTIN_CHARSET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+// GST mod-36 check character over the first 14 characters (weights 1,2 alternating from index 0).
+export function gstinCheckCharacter(body14: string): string {
+  let sum = 0;
+  for (let i = 0; i < 14; i++) {
+    const p = GSTIN_CHARSET.indexOf(body14.charAt(i)) * ((i % 2) + 1);
+    sum += Math.floor(p / 36) + (p % 36);
+  }
+  return GSTIN_CHARSET.charAt((36 - (sum % 36)) % 36);
+}
+
+// Shape plus check character. Site and gst callers use this; supplier.registered stays shape-only.
+export function isValidGstin(value: string): boolean {
+  return GSTIN_REGEX.test(value) && gstinCheckCharacter(value.slice(0, 14)) === value.charAt(14);
+}
 const DECACTIVATION_REASONS = new Set([
   'fraud',
   'business_closure',

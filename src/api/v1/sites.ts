@@ -7,8 +7,8 @@ import { getParsedBody, getAuthContext, getTraceId } from '../../middleware/cont
 import { requireRole } from '../../middleware/rbac.js';
 import { getPool } from '../../config/db.js';
 import { logAuditEntry } from '../../read/projections/audit_log.js';
-import { GSTIN_REGEX } from '../../compliance/supplier.js';
-import { isValidCalendarDate } from '../../lib/business-days.js';
+import { isValidGstin } from '../../compliance/supplier.js';
+import { isValidCalendarDate, toIstCalendarDate } from '../../lib/business-days.js';
 import {
   insertSiteGstin,
   listSiteGstins,
@@ -164,6 +164,20 @@ export function parseDateWindow(b: Record<string, unknown>): {
   return { effective_from: from, effective_to: (to as string | undefined) ?? null };
 }
 
+// GST went live 2017-07-01; the upper bound refuses a typo'd far-future year (DW-26).
+export function assertSiteGstinEffectiveFrom(effectiveFrom: string, today: string): void {
+  const max = new Date(Date.parse(`${today}T00:00:00Z`) + 366 * 86400000)
+    .toISOString()
+    .slice(0, 10);
+  if (effectiveFrom < '2017-07-01' || effectiveFrom > max) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `effective_from must be between 2017-07-01 and ${max}`,
+    );
+  }
+}
+
 export function requireIdempotencyKey(b: Record<string, unknown>): string {
   // 8.7 D8 (#AD-16): a state-changing route requires a client-supplied idempotency key.
   const key = b['idempotency_key'] ?? b['idempotencyKey'];
@@ -314,7 +328,7 @@ const postSiteGstinBase: RouteHandler = async (req, res, params) => {
   const endpoint = auditEndpoint(req);
 
   const gstin = b['gstin_ext'];
-  if (typeof gstin !== 'string' || !GSTIN_REGEX.test(gstin.trim().toUpperCase())) {
+  if (typeof gstin !== 'string' || !isValidGstin(gstin.trim().toUpperCase())) {
     throw new AppError(400, 'INVALID_PARAMS', 'gstin_ext must be a valid 15-character GSTIN');
   }
   const gstinExt = gstin.trim().toUpperCase();
@@ -323,6 +337,7 @@ const postSiteGstinBase: RouteHandler = async (req, res, params) => {
     gstinExt,
   );
   const window = parseDateWindow(b);
+  assertSiteGstinEffectiveFrom(window.effective_from, toIstCalendarDate(new Date()));
 
   const pool = getPool();
   const client = await pool.connect();

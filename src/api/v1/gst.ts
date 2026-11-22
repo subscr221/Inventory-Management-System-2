@@ -4,7 +4,7 @@ import { getParsedBody, getTraceId } from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { getPool } from '../../config/db.js';
 import { logAuditEntry } from '../../read/projections/audit_log.js';
-import { GSTIN_REGEX } from '../../compliance/supplier.js';
+import { isValidGstin } from '../../compliance/supplier.js';
 import { isPositiveDecimal } from '../../compliance/transfer-request.js';
 import {
   insertValuationConfig,
@@ -40,7 +40,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 function gstinField(b: Record<string, unknown>, field: string): string {
   const value = b[field];
-  if (typeof value !== 'string' || !GSTIN_REGEX.test(value.trim().toUpperCase())) {
+  if (typeof value !== 'string' || !isValidGstin(value.trim().toUpperCase())) {
     throw new AppError(400, 'INVALID_PARAMS', `${field} must be a valid 15-character GSTIN`);
   }
   return value.trim().toUpperCase();
@@ -53,7 +53,7 @@ function gstinField(b: Record<string, unknown>, field: string): string {
  */
 function gstinQueryParam(raw: string, field: string): string {
   const normalised = raw.trim().toUpperCase();
-  if (!GSTIN_REGEX.test(normalised)) {
+  if (!isValidGstin(normalised)) {
     throw new AppError(400, 'INVALID_PARAMS', `${field} must be a valid GSTIN`);
   }
   return normalised;
