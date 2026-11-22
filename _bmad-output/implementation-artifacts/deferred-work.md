@@ -2717,7 +2717,9 @@ decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the
 origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
 location: n/a
 reason: D10 second-child accept: `applyGoodsPutawayReleasedProjection` releases the one held putaway for the GRN line on the first accepted split child. If a second child of the same receipt task is later accepted, the putaway is already `ready`, so the release is refused with `PUTAWAY_TASK_NOT_HELD` and the second accept does not move stock. The fixed precedence is first accepted child wins. A multi-child putaway design (one putaway row per child, or a putaway split) is a follow-up.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 ### DW-278: Stores inbox rendering of `hold_reason`: the server records `no_inspection_plan`, `no_lot` and `duplicate_lot` on the held putaway and names the machine reason in the `qc_hold_placed` notification. The stores inbox screens (Stories 3.14 and 3.15) are server-only in this story and do not yet render the reason; the human wording and the workbench affordance are an edge follow-up.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
