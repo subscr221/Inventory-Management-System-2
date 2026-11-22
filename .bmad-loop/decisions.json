@@ -17,6 +17,15 @@
     "label": "Add a local cap",
     "resolution": ""
   },
+  "DW-19": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Acquire lockInventoryValuation before the stock_balance row in the transfer applier and add a concurrency test.",
+    "key": "1",
+    "label": "Reorder in transfer applier",
+    "resolution": ""
+  },
   "DW-2": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
