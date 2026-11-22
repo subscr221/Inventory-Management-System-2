@@ -2824,6 +2824,7 @@ location: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-in
 source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for-info.md
 reason: summary: There is no requester reply channel; the requester sees the question on My requests and answers the approver outside the app. evidence: `edge/src/components/my-requests.tsx` renders `info_requested` read-only and no `indent.info_replied` event or route exists.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-293: The `indent_info_requested` notification is stored and returned by `GET /notifications` but no edge notifications bell or in-app display shows it.
 origin: migrated from legacy ledger ("Deferred from: story-4.13 (2026-11-22)"), 2026-11-22
