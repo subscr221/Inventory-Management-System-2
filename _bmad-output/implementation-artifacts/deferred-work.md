@@ -1728,6 +1728,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-bre
 location: n/a
 reason: Escalation to `warehouse_manager` per the DOA "Tolerance-breach acceptance band" (primary `unloading_supervisor`, escalation `warehouse_manager`) is not built. Corrected 2026-09-27 code review: the band is not timeout-based â€” it conditions the *initial* routing itself on breach magnitude (`unloading_supervisor` accepts up to 5 percent over tolerance; above 5 percent, or if unavailable, `warehouse_manager` is the approver). `applyWeighbridgeProjection` routes every `tolerance_breach` unconditionally to `unloading_supervisor` regardless of size or availability, and the `notification.created` payload carries no `escalation` field, so no escalation path exists for either condition. Deferred: pilot is single-site/single-holder with no greater-than-5-percent breach traffic yet; implementing the magnitude/availability check (DOA delegation lookup, payload shape, dispatch routing) is scoped to a follow-up story before scaling past pilot.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-136: No breach acceptance or disposition action exists after Story 3.3: the breach is a notification, not a durable task row, so nothing records that the unloading supervisor accepted, rejected or re-weighed the load.
 origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)"), 2026-11-22
