@@ -1011,6 +1011,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (
 location: src/compliance/migration-documents.ts
 reason: A verification run producing more than 10,000 findings can never complete - `computeJobworkChallans` and `computeCustodyRegisters` sweep every platform row for the site with no cap, the route builds the full findings array, and `assertMigrationDocumentEventShape` (`src/compliance/migration-documents.ts:141`) then refuses the event with a generic 400 `INVALID_PARAMS`. A site with more unmatched documents than the cap can never verify that domain. Needs a scale decision (cap and flag truncation, bound the platform sweep by manifest scope, or chunk the run) rather than a mechanical fix; pilot volumes are far below the cap.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-42: Paged list routes report `total: 0` for an out-of-range offset - the `count(*) OVER ()` window returns no rows when the page is empty, so `GET /migration/documents/rows`, `/verification-runs` and `/verification-runs/:run_id` all tell a paging client the collection is empty instead of giving the true total. Story 13.1's `listOpeningStockRowsBase` has the identical pattern, so this is a pre-existing convention rather than a Story 13.2 regression.
 origin: migrated from legacy ledger ("Deferred from: code review of story-13-2 (2026-09-10)"), 2026-11-22
