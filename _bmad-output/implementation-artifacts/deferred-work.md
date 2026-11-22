@@ -1587,6 +1587,7 @@ origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay rac
 location: n/a
 reason: No unpack or void path exists for a packing record. `POST /api/v1/dispatch/{id}/pack` is now one transaction per request, so a refused line no longer strands earlier lines, but a record packed in error can only be corrected by SQL. A legacy record whose SKU and lot match no confirmed pick line is refused at dispatch with 409 `DISPATCH_PACKED_LINE_NOT_PICKED` and needs the same manual correction.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-116: REST audit-location sweep, five single-location handlers still stamping the site, awaiting an owner ruling on whether each is an act at the location or a site-level duty like count approval: transfer ship (`from_location_id`) and transfer receive (`to_location_id`) in `src/api/v1/transfer-requests.ts`, physical verification completion (`location_id`) in `src/api/v1/physical-verification.ts`, the QC retention sample log (`location_id`) in `src/api/v1/quality.ts`, and planning `params_set` (`location_id`) in `src/api/v1/inventory-planning.ts`. Goods receipt (the purchase-order and the job-work challan door) is fixed; a receipt routed to QC hold stamps the dock the receiver stood at, and a target that is not an active location of the receipt's site keeps the site stamp.
 origin: migrated from legacy ledger ("Deferred from: pilot fix batch, replay race, held source stock, packing match, receipt bin stamp (2026-09-22)"), 2026-11-22
