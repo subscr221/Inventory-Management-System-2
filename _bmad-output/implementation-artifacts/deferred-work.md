@@ -2731,7 +2731,9 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
 location: n/a
 reason: Retention-sample question for receipt lots: a receipt-lot inspection task inherits the normal retention-sample rules. Whether a purchased lot must retain a physical sample is an open question for the quality owner; no receipt-specific rule was added here.
-status: open
+status: done 2026-11-22
+resolution: closed by human decision: Accepted as is for the pilot by owner decision.
+decision: 2026-11-22 Close as accepted pilot behavior — Accepted as is for the pilot by owner decision.
 
 ### DW-280: Q33 (a receipt item has no released BOM and therefore no inspection plan): ruled that the receipt still posts, the putaway stays held, and `hold_reason = no_inspection_plan` records the gap. Receipts never fail for a plan absence.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-10-receipt-lot-qc-task-qc-governed-putaway-release-observation-note-and-photo-server (2026-11-20)"), 2026-11-22
