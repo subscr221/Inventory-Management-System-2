@@ -2595,6 +2595,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (
 location: n/a
 reason: Counted stepper, Damaged and Rejected reason tiles, and a Match supplier action on the unmatched arrival card (owner ruling 6b): UX pass.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-262: Per-site inspection bay codes and a bay for assignments below site level (owner ruling 4b): location_code is globally unique, so only one site can own IB-01; single pilot site for now.
 origin: migrated from legacy ledger ("Deferred from: code review of story-3.14 (2026-11-19)"), 2026-11-22
