@@ -1465,6 +1465,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-capture
 location: n/a
 reason: Tails the connector already parked behind a STREAM_CONFLICT head are retained `refused` with `STREAM_CONFLICT` and their queue entries are completed (`SETTLED_STATUSES`), so dismissing the head does not replay them: only rows still pending in the upload queue go out. Each parked tail must be dismissed in turn (it is itself a head for later rows on the stream) and its capture re-entered, and none was recorded centrally (second-review item above).
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-99: Refusals raised before the route handler (413 `PAYLOAD_TOO_LARGE`, 400 `INVALID_JSON`) never reach the central list, so the supervisor screen cannot show them; the device list still does.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
