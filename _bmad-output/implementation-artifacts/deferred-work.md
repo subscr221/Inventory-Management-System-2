@@ -664,7 +664,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: development of story-9-9 (2026-09-09)"), 2026-11-22
 location: edge/src/sync/connector.ts
 reason: 9.9-2 The edge connector's `PERMANENT_ERROR_CODES` twin (`edge/src/sync/connector.ts`) has drifted from the server's (`src/sync/upload.ts`) again, by nine codes: `BILLING_NOT_READY`, `CREDIT_NOTE_MISSING`, `CREDIT_NOTE_SUPERSEDED`, `CREDIT_NOTE_UNCITABLE`, `KIT_LINE_MISMATCH`, `OFFCUT_ELECTION_MISSING`, `OFFCUT_NOT_RETAINED`, `PROTOTYPE_NOT_SALEABLE` and `SOD_VIOLATION`. All nine pre-date Story 9.9, whose own refusals are already registered server-side; the drift is raised here because Story 9.9 now depends on `CREDIT_NOTE_SUPERSEDED` for an approval refusal, and because the server file's comment asserts the two sets carry the identical block, which is the same invariant the Story 9.5 review found broken. The outcome is currently equivalent for a 409, so this is a divergence hazard rather than a live defect. A drift TEST would close the class instead of the instance.
-status: open
+status: done 2026-11-22
+resolution: already resolved: edge/src/sync/connector.ts:285-291 registers the nine missing codes (ledger item 11.5R-8 closed 2026-09-12); a diff of quoted code names between connector.ts and src/sync/upload.ts is empty
 
 ### DW-11: 9.9-3 The `GET /service-orders/:serviceOrderId/offcut-holdings` response key
 origin: migrated from legacy ledger ("Deferred from: development of story-9-9 (2026-09-09)"), 2026-11-22
@@ -679,7 +680,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
 location: src/api/v1/edge.ts
 reason: 11.2R-1 `POST /api/v1/events` has no frontline-role denial for `dispatch.packed`, `dispatch.shipping_documents_generated` or `dispatch.dispatched`. Only the edge door (`src/api/v1/edge.ts`, `DISPATCH_DENIED_FRONTLINE_ROLES`) refuses `store_assistant` and `warehouse_operator`; the generic events door checks module scope plus `assertPayloadSiteWriteAccess` only, so a `warehouse_operator` with warehouse write scope can post any `dispatch.*` event directly. Pre-existing since Story 3.7; Story 11.2 closes the hole for its own `dispatch.irn_recorded` only. A door-level role gate keyed by event type (the `OFFCUT_VALUATION_EVENT_TYPES` precedent) would close the class.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/api/v1/events.ts:195 DISPATCH_SOD_ROLES gates dispatch.packed, dispatch.dispatched and dispatch.shipping_documents_generated on the events door (commit d9fb465)
 
 ### DW-13: 11.2R-2 IRN applier refusals other than `IRN_MISSING` (`DISPATCH_IRN_CONFLICT`,
 origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
@@ -713,7 +715,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
 location: src/events/store.ts
 reason: 11.5R-1 `metadata.occurred_at` is bounded only in the future (5 minutes, `src/events/store.ts:479`) and has no lower bound, so any gate keyed on `gateBusinessDateOf` can be driven from a caller-supplied backdated instant. Story 11.5 makes this load-bearing for statutory GSTIN classification and dated valuation-config selection, but the contract is repo-wide (every quality, dispatch and jobwork gate reads the same field) and belongs to a sweep, not one story.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/events/store.ts:413-429 now bounds metadata.occurred_at in the past via EVENT_OCCURRED_AT_MAX_AGE_DAYS
 
 ### DW-18: 11.5R-2 `assertAndApplyTransferRequestCompliance` (`src/compliance/transfer-request.ts:1133`) is
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)"), 2026-11-22
@@ -758,7 +761,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
 location: src/sync/upload.ts
 reason: 11.5R-8 The two `PERMANENT_ERROR_CODES` sets are NOT identical, despite the comment Story 11.5 adds to both asserting the twin carries the identical list. Nine Epic 9 codes are in `src/sync/upload.ts` and absent from `edge/src/sync/connector.ts`: `PROTOTYPE_NOT_SALEABLE`, `KIT_LINE_MISMATCH`, `OFFCUT_ELECTION_MISSING`, `BILLING_NOT_READY`, `SOD_VIOLATION`, `OFFCUT_NOT_RETAINED`, `CREDIT_NOTE_MISSING`, `CREDIT_NOTE_UNCITABLE`, `CREDIT_NOTE_SUPERSEDED` (188 versus 179 entries). Edge queues retry those nine forever. Pre-existing Epic 9 drift, not this story, but it is now provable in one command and should be swept before pilot.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Same as DW-10: edge/src/sync/connector.ts:291 comment records closure of 11.5R-8 and all nine codes are present in the twin set
 
 ### DW-25: 11.5R-9 GSTIN check digits are never verified anywhere in the platform. `GSTIN_REGEX`
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
@@ -800,7 +804,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)"), 2026-11-22
 location: src/api/v1/edge.ts
 reason: 11.5R-15 CLOSED 2026-09-09 by the edge-door sweep (see the entry below this list). SECURITY, Story 11.2, found while fixing the Story 11.5 twin. The edge door's gate on `dispatch.irn_recorded` (`src/api/v1/edge.ts`, the block just above the 11.5 gate) has TWO gaps against its events-door twin `assertDispatchIrnFunctionAccess`. (1) It is a DENYLIST, not an allowlist: the events door requires membership of `{dispatch_clerk, warehouse_manager}`, while the edge door admits any role NOT named `store_assistant` or `warehouse_operator` - so `gate_officer`, `qc_inspector` or `gst_officer` can record an IRN over edge sync and lift the statutory IRN-before-dispatch block that the REST route denies them. (2) There is no site check at all, the same cross-site class closed centrally on 2026-09-06 with `assertPayloadSiteWriteAccess`, which appears nowhere in `edge.ts` - an operator at site A can record an IRN for a site-B dispatch. The three older SoD blocks above it (`dispatch.packed`, `dispatch.shipping_documents_generated`, `dispatch.dispatched`) share gap 2; gap 1 is by design for those, since Story 3.7 deliberately shipped a denylist. This was NOT fixed because it is outside Story 11.5, but it is a live privilege-escalation and cross-site hole on a statutory gate and should be swept before pilot, alongside the general edge-door site sweep.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Ledger header says CLOSED 2026-09-09 by the edge-door sweep; src/api/v1/edge.ts:90 documents the site-access twin and the IRN gate at :878 is in place
 
 
 
@@ -957,7 +962,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: story-13-2 (2026-09-10)"), 2026-11-22
 location: src/adapters/erp/sync.ts
 reason: `SIGNED_NUMERIC_REGEX` in `src/adapters/erp/sync.ts` was declared by Story 13.1 and never read (`tsc --noEmit` TS6133 on the 13.1 tree); Story 13.2 removed it. The 13.1 record's "tsc 0" figure was taken before that constant landed.
-status: open
+status: done 2026-11-22
+resolution: already resolved: SIGNED_NUMERIC_REGEX no longer present in src/adapters/erp/sync.ts (only UNSIGNED_NUMERIC_REGEX at :66)
 
 
 ## Deferred from: code review of story-13-2 (2026-09-10)
@@ -1074,31 +1080,36 @@ Pre-pilot sweep item 4, first ruling. Triage document:
 origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
 location: src/compliance/jobwork-return-clock.ts
 reason: 761 (9-5): `custody.return_recorded` accepts an optional `challan_class`; `orderClocksForDrain` (`src/compliance/jobwork-return-clock.ts`) drains the declared class first, then the oldest live clock, then breached clocks. The SQL lock order is unchanged. Unit arms plus a 9.5 integration arm.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Migrated closure record (CLOSES 761); challan_class present in deploy/compose/init-db.sql:12791 and src/compliance/jobwork-return-clock.ts exists
 
 ### DW-55: `metadata.occurred_at` now has a floor, `EVENT_OCCURRED_AT_MAX_AGE_DAYS` (default 30,
 origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
 location: src/events/store.ts
 reason: 11.5R-1: `metadata.occurred_at` now has a floor, `EVENT_OCCURRED_AT_MAX_AGE_DAYS` (default 30, maximum 3650; `.env.test` sets 3650 because fixtures carry fixed dates). Pure `occurredAtBoundViolation` in `src/events/store.ts`, unit-tested in `test/unit/event-envelope-age.test.ts`.
-status: open
+status: done 2026-11-22
+resolution: already resolved: src/events/store.ts:429 enforces occurred_at floor; src/config/index.ts:905 EVENT_OCCURRED_AT_MAX_AGE_DAYS default 30
 
 ### DW-56: 13.1 snapshot_at: `applyStockBalance` refuses a `snapshot_at` later than now plus 5 minutes per
 origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
 location: n/a
 reason: 13.1 snapshot_at: `applyStockBalance` refuses a `snapshot_at` later than now plus 5 minutes per row (queued as an integration exception like any other malformed row). Since Story 13.3 a future snapshot would have made both final sign-offs permanently `SIGNOFF_STALE`.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Migrated closure record (CLOSES 13.1 snapshot_at item); applyStockBalance guard recorded as shipped in pilot triage fixes 2026-09-12; stub body only, classified from stub
 
 ### DW-57: confirmed closed by commit d9fb465 (`DISPATCH_SOD_ROLES` on the events door).
 origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
 location: n/a
 reason: 11.2R-1: confirmed closed by commit d9fb465 (`DISPATCH_SOD_ROLES` on the events door).
-status: open
+status: done 2026-11-22
+resolution: already resolved: Entry text states closed by commit d9fb465; src/api/v1/events.ts:195 DISPATCH_SOD_ROLES present
 
 ### DW-58: the "inactive delegate" half is closed - `findActiveDelegation` joins `users` on
 origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
 location: n/a
 reason: 706: the "inactive delegate" half is closed - `findActiveDelegation` joins `users` on `active = true`; single-hop resolution stays by design.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Entry text states inactive-delegate half closed; findActiveDelegation used in src/api/v1/cycle-counts.ts:147 (stub only, classified from stub)
 
 ### DW-59: Rows 326 and 343: Stories 7.9 and 7.10 created (`backlog`, PRE-PILOT). 343 CLOSED 2026-11-21 by Story 7.10.
 origin: migrated from legacy ledger ("Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed"), 2026-11-22
@@ -1116,31 +1127,36 @@ Vex, Yui, Grumbal, Ravi). Two commits, each with its own full-suite run (Murat's
 origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
 location: src/config/db.ts
 reason: 215 and 616, the IST pin: `src/config/db.ts` opens every session on both pools with `-c TimeZone=Asia/Kolkata -c DateStyle=ISO` and parses DATE (OID 1082) as its YYYY-MM-DD string, so `CURRENT_DATE` and `now()::date` in SQL agree with `toIstCalendarDate`. The compose postgres and replica services carry `-c timezone=Asia/Kolkata`. `test/integration/db-session-pin.test.ts` pins zone, DateStyle, the string parser and the calendar-date agreement on both pools.
-status: open
+status: done 2026-11-22
+resolution: already resolved: IST pin shipped: timezone=Asia/Kolkata in deploy/compose/docker-compose.yml:165,250; closure record CLOSES 215, 616
 
 ### DW-61: 432, the collation pin: `POSTGRES_INITDB_ARGS: --locale=C.UTF-8` on the compose postgres
 origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
 location: n/a
 reason: 432, the collation pin: `POSTGRES_INITDB_ARGS: --locale=C.UTF-8` on the compose postgres service. initdb reads it on first boot only; an existing volume keeps the locale it was created with (comment inline).
-status: open
+status: done 2026-11-22
+resolution: already resolved: deploy/compose/docker-compose.yml:138 POSTGRES_INITDB_ARGS --locale=C.UTF-8
 
 ### DW-62: 285, narrowed: `assertRegisteredStream` (`src/events/store.ts`) refuses a REGISTERED
 origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
 location: src/events/store.ts
 reason: 285, narrowed: `assertRegisteredStream` (`src/events/store.ts`) refuses a REGISTERED event_type on any stream_type other than the one SUPPORTED_EVENT_TYPES names, at both doors (`validateEnvelope`) and in the persistEvent pre-transaction chain. Unregistered event types are untouched; that half stays open as the platform decision the row always was.
-status: open
+status: done 2026-11-22
+resolution: already resolved: assertRegisteredStream referenced in src/events/store.ts and src/compliance/damage.ts:647, edge-refused-capture.ts:139; closure record
 
 ### DW-63: Rank 2 (receiving ignores `erp_purchase_order_line.open_qty`) is PARKED on one floor fact the
 origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
 location: n/a
 reason: Rank 2 (receiving ignores `erp_purchase_order_line.open_qty`) is PARKED on one floor fact the room could not settle: whether anything on the customer side ever pushes a platform GRN back into the ERP (feed or retyped). No outbound GRN adapter exists today (Yui); head office re-syncs POs by hand (Ravi). The formula differs by the answer. Question handed to the user.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Rank 2 parked item implemented by DW-65..68: legacy_received_qty column at deploy/compose/init-db.sql:2105
 
 ### DW-64: Suite oracle for 285 (Murat's clause): the first full run after the stream check failed twice.
 origin: migrated from legacy ledger ("Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285"), 2026-11-22
 location: test/integration/story-3-10-dispatch.test.ts
 reason: Suite oracle for 285 (Murat's clause): the first full run after the stream check failed twice. `test/integration/story-3-10-dispatch.test.ts` persisted the three dispatch.* events on stream `dispatch` while `src/api/v1/dispatch.ts` writes every one on `warehouse` (fixture corrected); `test/integration/story-9-1.test.ts` AC3 now sees `INVALID_EVENT_STREAM` at the door instead of the 9.1 envelope assert's `INVALID_EVENT_ENVELOPE` (pin updated, same refusal). Both suites 28/28 after; the two changes are test-only.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Round-table suite-oracle note (record of test run outcome), no open defect; stub only, classified from stub
 
 
 ## Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2
@@ -1152,25 +1168,29 @@ it). So neither clean formula is safe and the platform trusts the ERP exactly on
 origin: migrated from legacy ledger ("Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2"), 2026-11-22
 location: n/a
 reason: `erp_purchase_order_line.legacy_received_qty` (canonical and init-db mirror) is stamped on INSERT as `GREATEST(ordered_qty - open_qty, 0)` by `upsertPurchaseOrderLine` and is absent from the DO UPDATE list, so no later sync moves it.
-status: open
+status: done 2026-11-22
+resolution: already resolved: legacy_received_qty stamped column exists deploy/compose/init-db.sql:2105
 
 ### DW-66: `applyGoodsReceivedProjection` counts it in the tolerance band: cumulative = legacy plus the
 origin: migrated from legacy ledger ("Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2"), 2026-11-22
 location: n/a
 reason: `applyGoodsReceivedProjection` counts it in the tolerance band: cumulative = legacy plus the platform's own non-rejected GRN lines plus the receipt in hand. Exact when nobody retypes; fail-closed (blocks a legitimate receipt, never admits a second one) when someone does.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Closure record: applyGoodsReceivedProjection counts legacy_received_qty; column and rehearsal seed deploy/rehearsal/mock/seed.mjs:167 present
 
 ### DW-67: When the ERP's current `open_qty` implies more received than the frozen figure, the excess is
 origin: migrated from legacy ledger ("Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2"), 2026-11-22
 location: n/a
 reason: When the ERP's current `open_qty` implies more received than the frozen figure, the excess is written to the event payload as `erp_receipt_overlap_qty`, echoed on both GRN responses and logged. Runbook section 4 now tells the site to stop retyping platform GRNs into the ERP from the freeze onward, and names the warning as the paper trail.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Closure record of receiving-vs-open_qty ruling, implemented with legacy_received_qty; stub only, classified from stub
 
 ### DW-68: Arms: story-3-4 (band counts legacy, a later open_qty leaves the freeze alone, overlap echoed on
 origin: migrated from legacy ledger ("Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2"), 2026-11-22
 location: n/a
 reason: Arms: story-3-4 (band counts legacy, a later open_qty leaves the freeze alone, overlap echoed on response and stored event), story-2-9 (the sync route freezes 60.250 on PO-2026-0042 line 1 and a re-sync with open_qty 0 keeps it).
-status: open
+status: done 2026-11-22
+resolution: already resolved: Closure record listing test arms for story-3-4; stub only, classified from stub
 
 
 ## Site answers 2026-09-13 - RE-RULES 800, ACCEPTS 118, 138, 304, 495 and the 13.2 findings-cap bullet for the pilot
@@ -1202,13 +1222,15 @@ new in `.env.example`.
 origin: migrated from legacy ledger ("First staging boot on the VPS (2026-09-13) - CLOSES 620, two entrypoint lessons"), 2026-11-22
 location: 00-init-wal-archive.sh
 reason: 620: `.gitattributes` now pins LF for `*.sh`, `*.template`, `*.conf`, `*.yml`, `*.yaml` and `Dockerfile` (it already pinned `*.sql`). The first boot on the VPS failed at `00-init-wal-archive.sh` with "cannot execute: required file not found": a CRLF shebang. The entrypoint aborted, the container restarted on an initialised but EMPTY volume, and every client then failed authentication against roles that did not exist. Tainted volumes were wiped.
-status: open
+status: done 2026-11-22
+resolution: already resolved: .gitattributes pins eol=lf for *.sh, *.template, *.conf, *.yml, *.yaml, Dockerfile
 
 ### DW-70: Init-script ordering: the postgres image's entrypoint globs `/docker-entrypoint-initdb.d/*` under
 origin: migrated from legacy ledger ("First staging boot on the VPS (2026-09-13) - CLOSES 620, two entrypoint lessons"), 2026-11-22
 location: 01-init-db.sql
 reason: Init-script ordering: the postgres image's entrypoint globs `/docker-entrypoint-initdb.d/*` under its en_US locale, which ignores punctuation, so `01b-...` ran BEFORE `01-init-db.sql`. The role-password script is mounted as `01-zz-init-role-passwords.sh`, which sorts after the SQL under every collation. Postgres healthcheck gained `start_period: 120s` because the 14,000-line init outran 10 x 5 s and left dependents created-but-not-started.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Closure record of init-script ordering lesson for 620; locale pinned C.UTF-8 at docker-compose.yml:138 removes the punctuation-ignoring collation issue
 
 
 ## Deferred from: code review of 1-12-edge-ui-sign-in-through-keycloak-pkce (2026-09-13)
@@ -1238,7 +1260,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
 location: n/a
 reason: Retained `refused` rows stay on the device forever: there is no dismiss or clear action. Story 1.14 (supervisor screen) or later decides who may dismiss one and when. CLOSED by Story 1.14 (2026-09-17): a two-tap Dismiss per row in the device's "Sync failed - needs attention" list; `dismissRetainedRow` deletes only `retained_reason = 'refused'` copies, and whoever is signed in on the device may dismiss.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Entry text: CLOSED by Story 1.14; dismissRetainedRow in edge/src/components/edge-client.tsx:47,695
 
 ### DW-75: `resolveApprover` has no site dimension, so one company-wide approver (or their delegate) resolves refusals for every site through `edge.refused_capture_resolution`. Fine for the single-site pilot; same limitation as Story 7.8.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
@@ -1265,7 +1288,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
 location: n/a
 reason: A retained `STREAM_CONFLICT` head parks its stream on the device forever: `hasUpstreamStreamConflict` reads `edge_outbox_retained`, a `refused` retained row is never deleted, and a central resolution changes nothing on the device (Binding Decision 7). Before Story 1.13 the head was deleted at the next checkpoint and the park self-cleared. Deferred 2026-09-16 by user decision: Story 1.14 owns the dismiss action, so the clear path belongs there; this is a reason 1.14 is pilot-blocking. CLOSED by Story 1.14 (2026-09-17) for the head: dismissing it removes the retained row, `hasUpstreamStreamConflict` answers null for the stream, and rows still waiting in the upload queue go out on the next sync. What stays open is in the Story 1.14 section below (settled tails are not replayed).
-status: open
+status: done 2026-11-22
+resolution: already resolved: Entry text: head case CLOSED by Story 1.14; hasUpstreamStreamConflict in edge/src/local-db/outbox.ts:385 with dismiss path; remaining tails covered by DW-98
 
 ### DW-79: `edge_outbox_retained` grows without bound and has no dismiss path; each row is a full outbox copy including payload and metadata. Story 1.14 or later needs an acknowledge-and-drop or an age cap. Story 1.14 (2026-09-17) adds the dismiss path; growth other than by dismiss (no age cap, no drop on central resolution) stays open.
 origin: migrated from legacy ledger ("Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)"), 2026-11-22
@@ -1447,7 +1471,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
 location: n/a
 reason: Story 1.14 Task 6.5 (staging check, runbook 2.10d) was not run during dev: it needs the code shipped to the box and the operator's browser session; recorded in the story file as pending.
-status: open
+status: done 2026-11-22
+resolution: already resolved: 1-14-refused-captures-supervisor-screen.md:242 records Task 6.5 DONE 2026-09-18, runbook 2.10d passed on staging.
 
 
 ## Deferred from: code review of 1-14-refused-captures-supervisor-screen (2026-09-17)
@@ -1608,7 +1633,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
 location: n/a
 reason: The "Inspect on opening" flag (EXPERIENCE.md L84, observation plus photo travelling to the inspector) is not built; the stores mock uses it instead of a DAMAGED tile.
-status: open
+status: done 2026-11-22
+resolution: already resolved: inspect_on_opening is implemented: src/compliance/receiving.ts, src/read/projections/grn_line.ts, src/api/v1/quality.ts (Story 3.14 grn_line_inspect migration, test/unit/schema-drift.test.ts:2774).
 
 ### DW-132: `reason_photo_ref` is an opaque key with no upload endpoint or blob store behind it (the Story 3.2 `challan_photo_ref` precedent); nothing verifies that the referenced photo exists.
 origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
@@ -1710,7 +1736,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
 location: edge/src/components/my-requests.tsx
 reason: The `Report damage` nav entry and the `damage_reports` section of My requests belong to Story 8.9, which appends its (stream, event) pair to `EMPLOYEE_EDGE_EVENTS` and its section to `SECTIONS` in `edge/src/components/my-requests.tsx`.
-status: open
+status: done 2026-11-22
+resolution: already resolved: edge/src/components/my-requests.tsx:30,49 defines the damage_reports section and edge/src/components/navigation/nav-model.ts carries the Report damage entry (Story 8.9 landed).
 
 ### DW-147: No users lookup for display names on the edge: My requests says "Routed for approval" instead of naming the approver.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-15-employee-base-role (2026-09-27)"), 2026-11-22
@@ -2110,7 +2137,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
 location: test/integration/story-2-3.test.ts
 reason: Found during Story 2.10 dev (2026-10-02): `test/integration/story-2-3.test.ts` AC1 (FEFO) and AC4 (lot trace) fail on the baseline `fd6c5c8` as well. AC1 hardcodes lot expiry `2026-09-30`, so from 2026-10-01 `LOT-2026-001` is expired and FEFO picks `LOT-2026-002`; AC4 depends on the same lots. Follow-up: derive the expiry dates from today (for example today plus 30 and plus 90 days) instead of fixed dates.`n`n## Deferred from: code review of story-2-10 (2026-10-05)
-status: open
+status: done 2026-11-22
+resolution: already resolved: test/integration/story-2-3.test.ts:24-29 triage comment and daysAhead() helper derive lot expiry dates from today
 
 
 ### DW-207: Undeclared verbs on the literal item group sub-paths (`DELETE /api/v1/item-groups/rights`, `PATCH /api/v1/item-groups/recipients`) fall through to the `/:code` handlers and answer 403 or 404 instead of 405. Pre-existing first-match router behaviour in `src/api/router.ts`, not introduced by Story 2.10. The collision stays latent only because `ITEM_GROUP_CODE_REGEX` is uppercase-only; relaxing that regex would make a group coded `RIGHTS` unreachable.
@@ -2165,7 +2193,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: code review of story-4-10 (2026-10-21)"), 2026-11-22
 location: n/a
 reason: Pre-approved (non-doa) lines write no audit entry and no notification at raise. Story 4.8 owns the grant path. RESOLVED in Story 4.8 (2026-10-21): a grant-approved line writes an `indent.line_standing_approved` audit entry and tells the stores role once.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Ledger text records RESOLVED in Story 4.8 (indent.line_standing_approved audit entry); src/compliance/indent-routing.ts carries grant path
 
 ### DW-215: A line whose band role is held by the requester is frozen with the requester as approver and SOD-01 blocks it permanently. Pre-existing; Story 4.9.
 origin: migrated from legacy ledger ("Deferred from: code review of story-4-10 (2026-10-21)"), 2026-11-22
@@ -2288,7 +2317,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
 location: n/a
 reason: Re-routing a lapsed line needs a resolvable DOA approver for the line value. With none (Story 4.9 owns the no-band and no-holder fallback) the issue stays refused 409 `STANDING_APPROVAL_LAPSED`, the line stays `standing_approval`, and the response lists it under `reroute_failed` with the resolver's error code.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Story 4.9 landed in commit 4dbf95c; src/compliance/indent-routing.ts:123-138 implements no-band department_head fallback and refusal when no holder
 
 ### DW-234: Item group membership is read when the requisition is raised (D5); moving an item to another group afterwards does not change a line already routed.
 origin: migrated from legacy ledger ("Deferred from: dev of story-4-8 (2026-10-21)"), 2026-11-22
@@ -2512,7 +2542,8 @@ status: open
 origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
 location: n/a
 reason: Ask for info in the detail footer (EXPERIENCE.md:137): Story 4.13.
-status: open
+status: done 2026-11-22
+resolution: already resolved: Story 4.13 landed in commit 5ecf7e0; requestInfoIndentBase at src/api/v1/indents.ts:1241 and latestQuestion in edge/src/components/approvals.tsx:666
 
 
 ## Deferred from: code review of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)
