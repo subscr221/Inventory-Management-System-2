@@ -1855,6 +1855,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-un
 location: n/a
 reason: Returning issued (`in_use`) units to the stock ledger: an in-use report marked arrived becomes `in_qc_hold` with no stock posting; bringing issued material back to stock is a material return, not built.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-154: Partial release of unconfirmed units on a receipt putaway task: the held putaway of a DAMAGED or REJECTED line releases whole, only after the case is cleared or closed accepted as-is. Stores moves unconfirmed units with a bin move, which the D5 guard allows once the case holds fewer units.
 origin: migrated from legacy ledger ("Deferred from: dev of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)"), 2026-11-22
