@@ -2537,6 +2537,7 @@ origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-
 location: n/a
 reason: Alternative-rack list on the putaway detail: the screen offers the suggested bin and scan-or-type; ranked alternatives are deferred.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-249: Stock-by-location read for the putaway card: the card shows the task quantity and source bay, not live bin occupancy.
 origin: migrated from legacy ledger ("Deferred from: create-story of 3-15 (2026-10-22)"), 2026-11-22
