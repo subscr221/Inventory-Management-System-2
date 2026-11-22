@@ -875,6 +875,8 @@ export async function applyTransferRequestProjection(
       taxable_value: valued.taxable_value,
       valued_at: new Date().toISOString(),
       source_event_id: sourceEventId,
+      valued_by: envelope.metadata.actor.user_id,
+      valued_reason_code: null,
     },
     client,
   );
@@ -1749,12 +1751,11 @@ export async function applyTransferValuationOverridden(
     // misrepresentation D3-P exists to remove. `override` stays reserved for the UPDATE below,
     // which hard-codes it.
     //
-    // ATTRIBUTION: this row records NO overridden_by and NO override_reason_code. The table's CHECK
-    // reserves overridden_by for the override path (`basis_source <> 'override'` REQUIRES
-    // `overridden_by IS NULL`, and a NULL overridden_by in turn REQUIRES a NULL
-    // override_reason_code), so the officer's identity and the payload's reason_code are carried
-    // ONLY by source_event_id and the event envelope it points at. That is the whole of the
-    // row-level attribution for a first valuation; do not work around the CHECK to widen it.
+    // ATTRIBUTION: this row records NO overridden_by (the table's CHECK reserves it for the override
+    // path: `basis_source <> 'override'` REQUIRES `overridden_by IS NULL`, and a NULL overridden_by
+    // in turn REQUIRES a NULL override_reason_code). The officer's identity and the payload's
+    // reason_code are carried by the DW-30 columns valued_by / valued_reason_code instead; do not
+    // work around the CHECK to widen overridden_by.
     await insertBranchTransferValuation(
       {
         transfer_request_id: transferRequestId,
@@ -1773,6 +1774,8 @@ export async function applyTransferValuationOverridden(
         taxable_value: valued.taxable_value,
         valued_at: new Date().toISOString(),
         source_event_id: sourceEventId,
+        valued_by: envelope.metadata.actor.user_id,
+        valued_reason_code: reasonCode,
       },
       client,
     );
@@ -1796,6 +1799,8 @@ export async function applyTransferValuationOverridden(
       override_reason_code: reasonCode,
       valued_at: new Date().toISOString(),
       source_event_id: sourceEventId,
+      valued_by: envelope.metadata.actor.user_id,
+      valued_reason_code: reasonCode,
     },
     client,
   );

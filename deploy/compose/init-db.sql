@@ -14076,6 +14076,16 @@ CREATE TABLE IF NOT EXISTS branch_transfer_valuation (
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- DW-30: valued_by records the authenticated actor (metadata.actor.user_id) who produced the
+-- current valuation on EVERY write path (create, first override, re-override); valued_reason_code
+-- is the override reason (NULL for a config_default create). Added by ALTER so a live database
+-- picks the columns up; existing rows are backfilled from the source event's actor.
+ALTER TABLE branch_transfer_valuation ADD COLUMN IF NOT EXISTS valued_by UUID;
+ALTER TABLE branch_transfer_valuation ADD COLUMN IF NOT EXISTS valued_reason_code TEXT;
+UPDATE branch_transfer_valuation v SET valued_by = (SELECT (e.metadata->'actor'->>'user_id')::uuid FROM domain_events e WHERE e.event_id = v.source_event_id) WHERE v.valued_by IS NULL;
+UPDATE branch_transfer_valuation SET valued_reason_code = override_reason_code WHERE valued_reason_code IS NULL AND override_reason_code IS NOT NULL;
+ALTER TABLE branch_transfer_valuation ALTER COLUMN valued_by SET NOT NULL;
+
 -- Guarded DROP-then-ADD constraint blocks (the bom_line precedent).
 DO $$
 BEGIN

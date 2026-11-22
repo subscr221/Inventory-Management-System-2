@@ -2475,6 +2475,25 @@ describe('Story 2.1 schema drift guard', () => {
     );
   });
 
+  it('DW-30 mirrors the valued_by and valued_reason_code columns and the valued_by backfill into init-db.sql', () => {
+    const valuationSql = read('read/projections/branch_transfer_valuation.sql');
+    for (const fragment of [
+      'ALTER TABLE branch_transfer_valuation ADD COLUMN IF NOT EXISTS valued_by UUID;',
+      'ALTER TABLE branch_transfer_valuation ADD COLUMN IF NOT EXISTS valued_reason_code TEXT;',
+      'FROM domain_events e WHERE e.event_id = v.source_event_id',
+      'ALTER TABLE branch_transfer_valuation ALTER COLUMN valued_by SET NOT NULL;',
+    ]) {
+      assert.ok(
+        normalizeSql(valuationSql).includes(normalizeSql(fragment)),
+        `branch_transfer_valuation.sql missing: ${fragment}`,
+      );
+      assert.ok(
+        normalizeSql(initDb).includes(normalizeSql(fragment)),
+        `init-db.sql missing: ${fragment}`,
+      );
+    }
+  });
+
   // Story 9.7: the eight standalone ADD COLUMN statements carrying the disposal facts onto
   // job_work_offcut_holding, plus the widened lifecycle CHECK. Standalone statements are exactly the
   // case the generic CREATE TABLE comparison above cannot see, and a container booted from

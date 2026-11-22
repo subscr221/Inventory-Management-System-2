@@ -40,6 +40,8 @@ export interface BranchTransferValuationRow {
   currency: string;
   overridden_by: string | null;
   override_reason_code: string | null;
+  valued_by: string;
+  valued_reason_code: string | null;
   valued_at: string;
   source_event_id: string;
   created_at: string;
@@ -84,7 +86,7 @@ function strOrNull(value: unknown): string | null {
 const VALUATION_COLUMNS = `transfer_request_id, from_site_id, to_site_id, from_gstin_ext, to_gstin_ext,
        business_date, valuation_config_id, valuation_basis, basis_source, cost_plus_percent,
        declared_unit_value, unit_value, taxable_value, currency, overridden_by, override_reason_code,
-       valued_at, source_event_id, created_at, updated_at`;
+       valued_at, source_event_id, valued_by, valued_reason_code, created_at, updated_at`;
 
 function mapValuation(row: Record<string, unknown>): BranchTransferValuationRow {
   return {
@@ -106,6 +108,8 @@ function mapValuation(row: Record<string, unknown>): BranchTransferValuationRow 
     override_reason_code: (row['override_reason_code'] as string | null) ?? null,
     valued_at: ts(row['valued_at']),
     source_event_id: row['source_event_id'] as string,
+    valued_by: String(row['valued_by']),
+    valued_reason_code: strOrNull(row['valued_reason_code']),
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
   };
@@ -132,6 +136,10 @@ export interface InsertBranchTransferValuationInput {
   taxable_value: string;
   valued_at: string;
   source_event_id: string;
+  /** The authenticated actor (metadata.actor.user_id) who produced this valuation (DW-30). */
+  valued_by: string;
+  /** The override reason, or null for a config_default create (DW-30). */
+  valued_reason_code: string | null;
 }
 
 /** Inserts the create-time valuation row inside the transfer_request.created transaction. */
@@ -143,8 +151,8 @@ export async function insertBranchTransferValuation(
     `INSERT INTO branch_transfer_valuation
        (transfer_request_id, from_site_id, to_site_id, from_gstin_ext, to_gstin_ext, business_date,
         valuation_config_id, valuation_basis, basis_source, cost_plus_percent, declared_unit_value,
-        unit_value, taxable_value, valued_at, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        unit_value, taxable_value, valued_at, source_event_id, valued_by, valued_reason_code)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
      RETURNING ${VALUATION_COLUMNS}`,
     [
       input.transfer_request_id,
@@ -162,6 +170,8 @@ export async function insertBranchTransferValuation(
       input.taxable_value,
       input.valued_at,
       input.source_event_id,
+      input.valued_by,
+      input.valued_reason_code,
     ],
   );
   return mapValuation(result.rows[0]!);
@@ -186,6 +196,8 @@ export interface OverrideBranchTransferValuationInput {
   override_reason_code: string;
   valued_at: string;
   source_event_id: string;
+  valued_by: string;
+  valued_reason_code: string | null;
 }
 
 /**
@@ -209,6 +221,8 @@ export async function overrideBranchTransferValuation(
             override_reason_code = $9,
             valued_at = $10,
             source_event_id = $11,
+            valued_by = $12,
+            valued_reason_code = $13,
             updated_at = now()
       WHERE transfer_request_id = $1
       RETURNING ${VALUATION_COLUMNS}`,
@@ -224,6 +238,8 @@ export async function overrideBranchTransferValuation(
       input.override_reason_code,
       input.valued_at,
       input.source_event_id,
+      input.valued_by,
+      input.valued_reason_code,
     ],
   );
   return mapValuation(result.rows[0]!);
