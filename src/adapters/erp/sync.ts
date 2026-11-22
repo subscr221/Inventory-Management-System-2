@@ -70,6 +70,10 @@ export const ERP_ERROR_CODES = {
   ERP_SYNC_STALE: 'ERP_SYNC_STALE',
   /** Story 5.6 (FR-B-17): recorded on every exception raised by an inbound BOM record. */
   BOM_INBOUND_SYNC_REJECTED: 'BOM_INBOUND_SYNC_REJECTED',
+  /** Story 10.1 (FR-RD-02): R&D-designated stock issued to non-R&D demand without approved reclassification. */
+  CROSS_ISSUE_BLOCKED: 'CROSS_ISSUE_BLOCKED',
+  /** Story 10.1 (FR-RD-03): R&D material transaction without an active project code. */
+  PROJECT_CODE_REQUIRED: 'PROJECT_CODE_REQUIRED',
 } as const;
 
 // ---------------------------------------------------------------------------

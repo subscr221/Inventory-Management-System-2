@@ -258,6 +258,11 @@ import {
   productizeHandler,
 } from './api/v1/rd-boms.js';
 import {
+  createRdProjectHandler,
+  listRdProjectsHandler,
+  getRdProjectHandler,
+} from './api/v1/rd-projects.js';
+import {
   defineAlternateHandler,
   listBomAlternatesHandler,
   approveSubstitutionHandler,
@@ -964,6 +969,9 @@ export function createAppRouter(): Router {
   router.post('/api/v1/boms/:bomId/productization-signoffs', signProductizationHandler);
   router.get('/api/v1/boms/:bomId/productization-gate', getProductizationGateHandler);
   router.post('/api/v1/boms/:bomId/productize', productizeHandler);
+  router.post('/api/v1/rd-projects', createRdProjectHandler);
+  router.get('/api/v1/rd-projects', listRdProjectsHandler);
+  router.get('/api/v1/rd-projects/:projectCode', getRdProjectHandler);
 
   // Story 5.5: Approved Alternates and BOM Explosion. Every second segment is a literal distinct
   // from the :bomId-only routes above, so there is no route-order trap here.

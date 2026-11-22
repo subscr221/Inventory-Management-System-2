@@ -3157,3 +3157,22 @@ location: maintenance-desk.tsx
 source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
 reason: A selected warranty overrideCode stays in card state across reloads and is not revalidated against the current reasonCodes, so a code removed from config can still be posted. Evidence: Story 7.11 review pass (Edge Case Hunter): maintenance-desk.tsx overrideCode state; confirm button checks only for non-null.
 status: open
+
+- source_spec: `spec-10-1-randd-and-maker-hub-location-types-and-project-master.md`
+  summary: rd_designated and location_type have no setter API; rd_reclassification has no request or approve path; an approved reclassification is never consumed or quantity-bound, so it releases every unit of the lot for all later issues (owner ruling needed on release semantics).
+  evidence: review pass 2026-11-22 (Blind Hunter, Edge Case Hunter) high findings; rd-guards.ts approval check is existence-only; no route writes rd_reclassification.
+- source_spec: `spec-10-1-randd-and-maker-hub-location-types-and-project-master.md`
+  summary: CROSS_ISSUE_BLOCKED guard only on indent issue seam; stock transfers, picks, adjustments and scrap of R&D stock are not guarded, and child bins under rd_store or maker_hub_store do not inherit location_type.
+  evidence: review pass 2026-11-22; spec scoped the guard to the material-issue seam; rd-guards.ts reads location_type from the line location only.
+- source_spec: `spec-10-1-randd-and-maker-hub-location-types-and-project-master.md`
+  summary: rd_project and rd_reclassification writes are direct projection writes with no domain event and no audit row, so projection rebuild or offline sync loses R&D state; project status and phase have no PATCH endpoint.
+  evidence: review pass 2026-11-22; rd-projects.ts create-only; shortcut comment in code marks the gap.
+- source_spec: `spec-10-1-randd-and-maker-hub-location-types-and-project-master.md`
+  summary: guard runs inside applyIndentIssued, so replaying a stored indent.issued after the project closes can fail; validate at command time only.
+  evidence: review pass 2026-11-22 medium finding on rd-guards.ts apply path.
+- source_spec: `spec-10-1-randd-and-maker-hub-location-types-and-project-master.md`
+  summary: R&D demand is defined as business_stream research or maker_hub with no validation of unknown stream values; owner_user_id not checked against users; project_code and location_type value sets are duplicated between SQL CHECK and TypeScript.
+  evidence: review pass 2026-11-22 medium findings; rd-guards.ts hardcoded sets.
+- source_spec: `spec-10-1-randd-and-maker-hub-location-types-and-project-master.md`
+  summary: CROSS_ISSUE_BLOCKED and PROJECT_CODE_REQUIRED placed in ERP_ERROR_CODES enum and treated as permanent edge errors, so a queued issue blocked by a later-fixable condition is dropped with no resubmit path.
+  evidence: review pass 2026-11-22; src/adapters/erp/sync.ts and src/sync/upload.ts placement.

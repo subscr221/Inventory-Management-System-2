@@ -44,6 +44,9 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 10.1 (FR-RD-02): R&D-designated lots are ring-fenced from non-R&D demand.
+ALTER TABLE lot_master ADD COLUMN IF NOT EXISTS rd_designated BOOLEAN NOT NULL DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS idx_lot_master_sku_expiry ON lot_master (sku, expiry_date);
 CREATE INDEX IF NOT EXISTS idx_lot_master_lot_id ON lot_master (lot_id);
 

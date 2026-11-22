@@ -1209,6 +1209,8 @@ export interface IndentIssuedPayload {
   indent_id: string;
   /** Fixed by the route before persistEvent so a replay writes the same slip row. */
   issue_id: string;
+  /** Story 10.1: active rd_project code; required when the requisition is R&D demand. */
+  project_code?: string;
   lines: IndentIssuedLineInput[];
 }
 

@@ -28,6 +28,7 @@ import { emitNotificationInTransaction } from '../notify/emit.js';
 import { toIstCalendarDate } from '../lib/business-days.js';
 import { renderIssueSlip, type IssueSlipLine } from '../warehouse/document-renderer.js';
 import { alreadyPersisted } from './indent.js';
+import { assertRdIssueGuards } from './rd-guards.js';
 import { milliToText, qtyExceeds, toMilli } from '../lib/milli.js';
 import {
   getGrantById,
@@ -487,6 +488,12 @@ async function applyIndentIssued(
         409,
       );
     }
+    await assertRdIssueGuards(
+      client,
+      { ...input, sku: line.sku },
+      indent.business_stream,
+      typeof p['project_code'] === 'string' ? p['project_code'].trim() : null,
+    );
     resolved.push({ input, line, location_code: location.location_code });
   }
 

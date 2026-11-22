@@ -688,6 +688,19 @@ export const issueIndentBase: RouteHandler = async (req, res, params) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'issue_id must be a UUID when supplied');
     return;
   }
+  if (
+    body?.project_code !== undefined &&
+    (typeof body.project_code !== 'string' || body.project_code.trim() === '')
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'project_code must be a non-empty string when supplied',
+    );
+    return;
+  }
   if (typeof suppliedIssueId === 'string') {
     const prior = await getIndentIssueById(suppliedIssueId);
     if (prior) {
@@ -772,7 +785,14 @@ export const issueIndentBase: RouteHandler = async (req, res, params) => {
         stream_id: indent.indent_id,
         event_type: 'indent.issued',
         event_id: randomUUID(),
-        payload: { indent_id: indent.indent_id, issue_id: issueId, lines },
+        payload: {
+          indent_id: indent.indent_id,
+          issue_id: issueId,
+          lines,
+          ...(typeof body?.project_code === 'string'
+            ? { project_code: body.project_code.trim() }
+            : {}),
+        },
         metadata: {
           correlation_id: indent.correlation_id ?? randomUUID(),
           actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },

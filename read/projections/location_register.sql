@@ -95,6 +95,22 @@ BEGIN
     CHECK (zone_type IN ('general', 'hazmat', 'quarantine', 'staging', 'forward_pick', 'reserve'));
 END $$;
 
+-- Story 10.1 (FR-RD-01): R&D and maker-hub stores are first-class location types. The ledger grain
+-- (sku, location_id, lot_id) is unchanged; the type only drives the R&D issue guards.
+ALTER TABLE location_register ADD COLUMN IF NOT EXISTS location_type TEXT NOT NULL DEFAULT 'standard';
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_location_register_location_type'
+      AND conrelid = 'location_register'::regclass
+  ) THEN
+    ALTER TABLE location_register
+      ADD CONSTRAINT chk_location_register_location_type
+      CHECK (location_type IN ('standard', 'rd_store', 'maker_hub_store'));
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_location_register_parent ON location_register (parent_location_id);
 CREATE INDEX IF NOT EXISTS idx_location_register_site ON location_register (site_id);
 

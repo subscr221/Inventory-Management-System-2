@@ -19,6 +19,8 @@ const MIGRATIONS = [
   '../../read/projections/location_register.sql',
   '../../read/projections/stock_balance.sql',
   '../../read/projections/lot_master.sql',
+  '../../read/projections/rd_project.sql',
+  '../../read/projections/rd_reclassification.sql',
   '../../read/projections/serial_master.sql',
   '../../read/projections/lot_trace.sql',
   '../../read/projections/inventory_valuation.sql',
