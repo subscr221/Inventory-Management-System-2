@@ -704,6 +704,7 @@ origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (
 location: n/a
 reason: 11.2R-3 `also_covers` on `POST /api/v1/dispatch/:dispatchOrderId/irn` is uncapped: N site resolutions, N ERP-line reads and N advisory locks per request. No list-bearing route in the codebase caps its list today; a shared cap belongs to a sweep, not one route.
 status: open
+decision: 2026-11-22 Add a local cap — Cap also_covers entries on POST /api/v1/dispatch/:dispatchOrderId/irn with a 400 and a test.
 
 ### DW-15: 11.2R-4 `chk_dispatch_irn_present` uses `btrim` (spaces only), so a tab-only `irn_ext` passes the
 origin: migrated from legacy ledger ("Deferred from: code review of story-11-2 (2026-09-09)"), 2026-11-22
