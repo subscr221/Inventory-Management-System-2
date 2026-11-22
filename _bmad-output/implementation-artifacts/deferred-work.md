@@ -2254,6 +2254,7 @@ origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10
 location: n/a
 reason: No pagination, `LIMIT` or offset on any item group list route (`listItemGroups`, `listActiveItemsByGroup`, `listUngroupedActiveItems`, `listItemGroupRights`, `listItemGroupRecipients`). D10 explicitly placed pagination out of scope for Story 2.10; revisit when the item master grows past a few thousand active SKUs.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-209: The access matrix carries 38 pre-existing permission rows that use em dashes for "not permitted", against the `NO-EMDASH` rule in `FORMATTING_RULES.md`. The six rows Story 2.10 adds correctly use hyphens, which makes the table internally inconsistent until the older rows are converted in a formatting pass.
 origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10 (2026-10-02)"), 2026-11-22
