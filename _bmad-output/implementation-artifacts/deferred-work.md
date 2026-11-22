@@ -2626,6 +2626,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox
 location: n/a
 reason: Offline read of the inbox: the lists and detail are fetched live and held in memory only; a cold start offline shows the needs-connection card. Needs a PowerSync bucket for approver rows.
 status: open
+decision: 2026-11-22 Keep open for later
 
 ### DW-266: Inbox row status for a mixed decision: a requisition where the caller rejected their line but another approver approved theirs reads Approved in the list (`rowStatus` shortcut in `edge/src/components/approvals-model.ts`); the detail shows each line's outcome. Needs per-line decision data on the list row.
 origin: migrated from legacy ledger ("Deferred from: dev of 4-12-approvals-inbox-and-requisition-approval-detail (2026-11-19)"), 2026-11-22
