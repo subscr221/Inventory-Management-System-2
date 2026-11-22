@@ -1452,6 +1452,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-capture
 location: n/a
 reason: Display names for `captured_by` and `resolved_by`: the screen shows the user id the API returns (with `captured_role` beside it). Needs a users lookup that does not exist on the edge.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-97: A central resolution never reaches the device and a device dismiss never reaches the centre; the two records are independent by design (AD-18). A resolved refusal stays under "Sync failed - needs attention" on the tablet until someone dismisses it there.
 origin: migrated from legacy ledger ("Deferred from: dev of 1-14-refused-captures-supervisor-screen (2026-09-17)"), 2026-11-22
