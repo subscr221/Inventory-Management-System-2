@@ -1682,6 +1682,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condit
 location: n/a
 reason: A held DAMAGED or REJECTED putaway task can still be released to a shelf through `goods.putaway_released` (DOA `receiving.putaway_release`) with no QC disposition record. Story 8.9 owns the disposition and should gate that release.
 status: open
+decision: 2026-11-22 Keep open
 
 ### DW-130: EXPERIENCE.md L146 (every receipt lands in the inspection bay first, putaway only after inspection clearance) and L83 (capped excess recorded as "Excess - returned with vehicle", not posted) are not built; receiving still posts GOOD lines straight to the target and over-tolerance quantity as a rejected line.
 origin: migrated from legacy ledger ("Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)"), 2026-11-22
