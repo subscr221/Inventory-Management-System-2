@@ -1755,6 +1755,7 @@ origin: migrated from legacy ledger ("Deferred from: dev of 3-12-weighbridge-bre
 location: n/a
 reason: The pilot roles file had to gain a `notification` read grant for `unload1@ancorlabs.org` so the holder can read the inbox; `requireRole` on the notifications routes checks the `notification` module, which no frontline role in the pack held. Whether every routed role should carry that grant by construction (a derived grant or a module-agnostic self-inbox route) is an access-matrix question for the role review.
 status: open
+decision: 2026-11-22 Keep open
 
 
 ## Deferred from: code review of 3-12-weighbridge-breach-task-routing-for-pilot-roles (2026-09-27)
