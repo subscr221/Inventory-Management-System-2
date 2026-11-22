@@ -260,6 +260,15 @@
     "label": "Keep open",
     "resolution": ""
   },
+  "DW-161": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "2",
+    "label": "Keep open, revisit post-pilot",
+    "resolution": ""
+  },
   "DW-162": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
