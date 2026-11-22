@@ -2206,6 +2206,7 @@ origin: migrated from legacy ledger ("Deferred from: owner rulings on Story 2.10
 location: n/a
 reason: `store_controller` (owner ruling 2026-10-02, round 2) was added by Story 2.10 only as a provisioned, notified role. Its duties (physical tracking of inventory, responsibility for stores and warehouses), its capability rows in access matrix section 3.3, its place in `REQUIRED_SITE_ROLES`, any forbidden pairs, and how it divides work with `warehouse_manager` and `store_assistant` need a correct-course and a new story.
 status: open
+decision: 2026-11-22 Keep open until correct-course
 
 
 ### DW-205: Found during Story 2.10 dev (2026-10-02): item group notifications are delivered as in-app rows to every Table 2 holder, but in the pilot roles pack only `cmf_supervisor@ancorlabs.org` holds `notification` read, so `ceo1@`, `accounts@`, `anupam@` and `invctl1@` cannot open the inbox (`GET /api/v1/notifications` answers 403 `MODULE_ACCESS_DENIED`). Runbook row 2.10i checks their rows by SQL. Follow-up: an owner ruling on whether those hats (or the `employee` base hat) gain `notification` read, then a roles-pack change.
