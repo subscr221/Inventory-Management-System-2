@@ -359,6 +359,15 @@
     "label": "Keep open for later",
     "resolution": ""
   },
+  "DW-274": {
+    "answered_at": "2026-11-22",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Redact line_value and unit_price_estimate in getIndent and the raise response for requesters without a self-approval limit, and update edge consumers.",
+    "key": "1",
+    "label": "Build it now",
+    "resolution": ""
+  },
   "DW-29": {
     "answered_at": "2026-11-22",
     "bundle_name": "",
