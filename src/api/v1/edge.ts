@@ -55,9 +55,14 @@ import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
 import { routeIndentLines, headerApproverOf } from '../../compliance/indent-routing.js';
 import { damageAuthorityTypesFor } from '../../compliance/damage.js';
 import {
+  findFirstActiveDoaEntry,
+  isActiveRoleHolderForEntry,
   listActiveDelegatorsFor,
   listHeldIndentApprovalBands,
 } from '../../read/projections/doa_registry.js';
+import { RETURN_TO_SERVICE_DOA_TYPE } from '../../compliance/asset-operational-status.js';
+import { WARRANTY_OVERRIDE_DOA_TYPE } from '../../compliance/maintenance-coverage.js';
+import { SYNC_CONFLICT_RESOLUTION_DOA_TYPE } from '../../compliance/maintenance-sync-conflict.js';
 import {
   countOpenWorkOrders,
   listOpenWorkOrdersForWorklist,
@@ -412,7 +417,8 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
     | 'gate'
     | 'approvals'
     | 'pack-dispatch'
-    | 'unloading-exceptions';
+    | 'unloading-exceptions'
+    | 'maintenance-desk';
   functionScope: 'read' | 'write';
 }> = [
   { name: 'Dashboard', modules: '*', functionScope: 'read' },
@@ -447,6 +453,11 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   // Story 3.19 (AC 4): the unloading exceptions inbox (the screen is Story 3.20), role-evaluated so a
   // store_assistant holding receiving write is never sent it.
   { name: 'Unloading exceptions', modules: 'unloading-exceptions', functionScope: 'read' },
+  // UX audit fix-now item 5 (G10): the technician Maintenance row, for maintenance read at the site.
+  { name: 'Maintenance', modules: ['maintenance'], functionScope: 'read' },
+  // Story 7.11 (AC 1): the supervisor desk, for an active holder of any of the three maintenance
+  // DOA roles. Role-evaluated, never module-based, so the technician is not sent it.
+  { name: 'Maintenance desk', modules: 'maintenance-desk', functionScope: 'write' },
 ];
 
 /**
@@ -525,6 +536,23 @@ async function hasIndentApprovalScope(authContext: AuthContext, siteId: string):
   return (await listHeldIndentApprovalBands(userIds, undefined, siteId)).length > 0;
 }
 
+/**
+ * Story 7.11 (AC 1): the Maintenance desk shows to an active holder of the role on any of the three
+ * maintenance DOA entries (return to service, warranty override, sync-conflict resolution).
+ */
+async function hasMaintenanceDeskScope(authContext: AuthContext): Promise<boolean> {
+  for (const type of [
+    RETURN_TO_SERVICE_DOA_TYPE,
+    WARRANTY_OVERRIDE_DOA_TYPE,
+    SYNC_CONFLICT_RESOLUTION_DOA_TYPE,
+  ]) {
+    const entry = await findFirstActiveDoaEntry(type);
+    if (entry && (await isActiveRoleHolderForEntry(entry.entry_id, authContext.userId)))
+      return true;
+  }
+  return false;
+}
+
 async function navigationFor(authContext: AuthContext, siteId: string): Promise<string[]> {
   const roles = authContext.roles;
   const names: string[] = [];
@@ -544,6 +572,8 @@ async function navigationFor(authContext: AuthContext, siteId: string): Promise<
       shown = hasPackDispatchScope(authContext, siteId);
     } else if (modules === 'unloading-exceptions') {
       shown = hasUnloadingExceptionScope(authContext, siteId);
+    } else if (modules === 'maintenance-desk') {
+      shown = await hasMaintenanceDeskScope(authContext);
     } else if (modules === 'approvals') {
       shown = await hasIndentApprovalScope(authContext, siteId);
     } else {
@@ -1240,6 +1270,8 @@ const edgeMaintenanceWorklistBase: RouteHandler = async (req, res) => {
       work_order_id: row.work_order_id,
       origin: row.origin,
       status: row.status,
+      status_note: row.status_note,
+      fault_report_id: row.fault_report_id,
       priority: row.priority,
       due_date: row.due_date,
       sla_resolution_due_at: row.sla_resolution_due_at,

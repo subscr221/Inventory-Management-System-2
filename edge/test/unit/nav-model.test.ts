@@ -57,6 +57,21 @@ describe('Story 1.15 nav model', () => {
     assert.equal(typeof message('nav.unloadingExceptions'), 'string');
   });
 
+  it('Story 7.11 and audit item 5: registers Maintenance and Maintenance desk with real paths', () => {
+    assert.deepEqual(
+      NAV_ENTRIES.find((e) => e.name === 'Maintenance'),
+      { name: 'Maintenance', href: '/maintenance', label: 'nav.maintenance' },
+    );
+    assert.deepEqual(
+      NAV_ENTRIES.find((e) => e.name === 'Maintenance desk'),
+      { name: 'Maintenance desk', href: '/maintenance/desk', label: 'nav.maintenanceDesk' },
+    );
+    assert.equal(typeof message('nav.maintenance'), 'string');
+    assert.equal(typeof message('nav.maintenanceDesk'), 'string');
+    // A technician bootstrap (no desk name) never renders the desk row.
+    assert.ok(!entriesFor(['Maintenance']).some((e) => e.name === 'Maintenance desk'));
+  });
+
   it('renders only what the server advertised, in server order', () => {
     const names = entriesFor([
       'Dashboard',

@@ -2110,3 +2110,42 @@ textarea:focus-visible {
  padding: 0.75rem 0;
  background: var(--surface, #fff);
 }
+
+/* Story 7.11: the maintenance desk board. Five columns on desktop classes, one grouped list below. */
+.desk-board-columns {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.desk-board-list {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.desk-attention {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.desk-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.desk-actions {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.desk-tile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--touch-secondary);
+}

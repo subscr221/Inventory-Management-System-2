@@ -2791,3 +2791,51 @@ source_spec: _bmad-output/implementation-artifacts/spec-4-13-requisition-ask-for
 reason: summary: Notification target role uses the actor role, not the requester role (unverified; check the notification list filter). evidence: `src/compliance/indent.ts` `applyIndentInfoRequested` notification target; verify against `src/api/v1/notification.ts` list filter.
 status: open
 
+### DW-304: Maintenance desk has no technician assignment (`assigned_to` absent) on accept.
+origin: story-7.11 (2026-11-22)
+location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Story 7.11 scope: assignment is out of scope; the Assigned / accepted group lists work orders unassigned.
+status: open
+
+### DW-305: Maintenance desk cannot override triage priority; accept shows the SLA policy priority read-only.
+origin: story-7.11 (2026-11-22)
+location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Story 7.11 scope: no priority selector on accept.
+status: open
+
+### DW-306: Maintenance desk has no send-back-to-technician action.
+origin: story-7.11 (2026-11-22)
+location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Story 7.11 scope: no such route or desk control.
+status: open
+
+### DW-307: `reapplied_centrally` sync-conflict resolution records the resolution only; nothing is reapplied.
+origin: story-7.11 (2026-11-22)
+location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Story 7.11: the card states this; a real reapply is a future story.
+status: open
+
+### DW-308: Maintenance desk board is company-wide, not site scoped (Q32).
+origin: story-7.11 (2026-11-22)
+location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Story 7.11: lists carry no site filter; revisit when multi-site maintenance lands.
+status: open
+
+### DW-309: Maintenance desk reject route is not in the UX mock; the desk calls the existing server route.
+origin: story-7.11 (2026-11-22)
+location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Story 7.11: mock lacks Reject; recorded deviation, mock to be updated.
+status: open
+
+### DW-310: Maintenance desk shows no worklist total when the work order lists hit the 500 cap.
+origin: story-7.11 (2026-11-22)
+location: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+source_spec: _bmad-output/implementation-artifacts/spec-7-11-maintenance-supervisor-desk.md
+reason: Story 7.11: the desk shows a 500+ marker only; the edge worklist total is not wired in.
+status: open

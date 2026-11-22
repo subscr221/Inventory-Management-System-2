@@ -341,6 +341,7 @@ import {
   updateWorkOrderStatusHandler,
   listAssetClosuresHandler,
   getClosureCodesHandler,
+  getWarrantyOverrideReasonCodesHandler,
   listSyncConflictsHandler,
   getSyncConflictHandler,
   resolveSyncConflictHandler,
@@ -1138,6 +1139,10 @@ export function createAppRouter(): Router {
   // '/sync-conflicts/:conflictId', so no parameter segment can swallow them. The edge worklist is
   // registered next to the Story 1.8 edge routes below.
   router.get('/api/v1/maintenance/closure-codes', getClosureCodesHandler);
+  router.get(
+    '/api/v1/maintenance/warranty-override-reason-codes',
+    getWarrantyOverrideReasonCodesHandler,
+  );
   router.get('/api/v1/maintenance/sync-conflicts', listSyncConflictsHandler);
   router.get('/api/v1/maintenance/sync-conflicts/:conflictId', getSyncConflictHandler);
   router.post('/api/v1/maintenance/sync-conflicts/:conflictId/resolve', resolveSyncConflictHandler);

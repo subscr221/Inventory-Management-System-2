@@ -272,7 +272,8 @@ export function EdgeClient({
     | 'unloading-exceptions'
     | 'qc-tasks'
     | 'qc-holds'
-    | 'approvals';
+    | 'approvals'
+    | 'maintenance-desk';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.

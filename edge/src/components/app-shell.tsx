@@ -42,6 +42,7 @@ import { GrnRead } from './grn-read';
 import { FloorTasks, type FloorTasksProps } from './floor-tasks';
 import { PackDispatch, type PackDispatchProps } from './pack-dispatch';
 import { UnloadingExceptions, type UnloadingExceptionsProps } from './unloading-exceptions';
+import { MaintenanceDesk } from './maintenance-desk';
 import { Approvals } from './approvals';
 import { QcInbox, type QcInboxProps } from './qc-inbox';
 import { QcHolds, type QcHoldsProps } from './qc-holds';
@@ -172,7 +173,8 @@ type BaseView =
   | 'unloading-exceptions'
   | 'qc-tasks'
   | 'qc-holds'
-  | 'approvals';
+  | 'approvals'
+  | 'maintenance-desk';
 
 /** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
 const BASE_VIEW_ENTRY: Record<BaseView, string> = {
@@ -204,6 +206,8 @@ const BASE_VIEW_ENTRY: Record<BaseView, string> = {
   'qc-holds': 'QC inbox',
   // Story 4.12 (AC 1): the approvals inbox and requisition approval detail.
   approvals: 'Approvals',
+  // Story 7.11 (AC 1): the maintenance supervisor desk, DOA-holder scoped.
+  'maintenance-desk': 'Maintenance desk',
 };
 
 function isBaseView(view: string): view is BaseView {
@@ -215,7 +219,8 @@ const VIEW_NAV_ENTRY: Record<NonNullable<AppShellProps['view']>, string | null> 
   ...BASE_VIEW_ENTRY,
   frontline: 'Frontline',
   dashboard: 'Dashboard',
-  maintenance: null,
+  // UX audit fix-now item 5 (G10): the technician page now has a nav row.
+  maintenance: 'Maintenance',
   'refused-captures': 'Refused captures',
   workflows: 'Workflows',
   'access-control': 'Access control',
@@ -485,6 +490,8 @@ export function AppShell({
                   siteCodeExt: '',
                 })}
               />
+            ) : view === 'maintenance-desk' ? (
+              <MaintenanceDesk online={online} ready={navigationConfirmed} />
             ) : view === 'qc-tasks' ? (
               <QcInbox
                 {...(qcInbox ?? {

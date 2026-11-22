@@ -39,6 +39,9 @@ export const NAV_ENTRIES: NavEntry[] = [
   { name: 'Approvals', href: '/approvals', label: 'nav.approvals' },
   // Story 8.11 (AC 1): the QC inspector's inbox and lot disposition.
   { name: 'QC inbox', href: '/qc/tasks', label: 'nav.qcInbox' },
+  // UX audit fix-now item 5 (G10): the technician page; Story 7.11: the supervisor desk.
+  { name: 'Maintenance', href: '/maintenance', label: 'nav.maintenance' },
+  { name: 'Maintenance desk', href: '/maintenance/desk', label: 'nav.maintenanceDesk' },
   // Enterprise views (Phase 2/4): real paths, rendered only when the bootstrap names them.
   { name: 'Workflows', href: '/workflows', label: 'nav.workflows' },
   { name: 'Access control', href: '/access-control', label: 'nav.accessControl' },

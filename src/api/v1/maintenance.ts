@@ -843,6 +843,25 @@ const sweepGraceWindowsBase: RouteHandler = async (req, res, _params) => {
 // GET /api/v1/maintenance/work-orders
 // ---------------------------------------------------------------------------
 
+/** Story 7.11: asset tag and name for a page of rows, one query, so the desk board titles cards. */
+async function assetLabelsFor(
+  assetIds: string[],
+): Promise<Map<string, { asset_tag: string; asset_name: string }>> {
+  const labels = new Map<string, { asset_tag: string; asset_name: string }>();
+  if (assetIds.length === 0) return labels;
+  const result = await getPool().query(
+    'SELECT asset_id, asset_tag, asset_name FROM asset WHERE asset_id = ANY($1::uuid[])',
+    [[...new Set(assetIds)]],
+  );
+  for (const row of result.rows) {
+    labels.set(row.asset_id as string, {
+      asset_tag: row.asset_tag as string,
+      asset_name: row.asset_name as string,
+    });
+  }
+  return labels;
+}
+
 const listWorkOrdersBase: RouteHandler = async (req, res, _params) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const assetId = url.searchParams.get('asset_id');
@@ -905,7 +924,13 @@ const listWorkOrdersBase: RouteHandler = async (req, res, _params) => {
     limit: limitRaw === null ? undefined : Number(limitRaw),
     offset: offsetRaw === null ? undefined : Number(offsetRaw),
   });
-  sendJson(res, 200, { work_orders: workOrders });
+  const labels = await assetLabelsFor(workOrders.map((w) => w.asset_id));
+  sendJson(res, 200, {
+    work_orders: workOrders.map((w) => ({
+      ...w,
+      asset_tag: labels.get(w.asset_id)?.asset_tag ?? null,
+    })),
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -3177,9 +3202,14 @@ const voidCertificateBase: RouteHandler = async (req, res, params) => {
     const certificateId = requireUuidParam(params, 'certificateId');
     const voidReason = typeof body['void_reason'] === 'string' ? body['void_reason'].trim() : '';
     if (voidReason === '') {
-      throw new AppError(400, 'INVALID_PARAMS', 'void_reason is required and must be a non-empty string', {
-        reason: 'void_reason is required and must be a non-empty string',
-      });
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'void_reason is required and must be a non-empty string',
+        {
+          reason: 'void_reason is required and must be a non-empty string',
+        },
+      );
     }
 
     // UX fast-fail only; the seam re-reads the register row under FOR UPDATE and re-derives
@@ -4192,7 +4222,14 @@ const listAssetStatusesBase: RouteHandler = async (req, res, _params) => {
     limit: paging.limit,
     offset: paging.offset,
   });
-  sendJson(res, 200, { asset_statuses: statuses });
+  const labels = await assetLabelsFor(statuses.map((s) => s.asset_id));
+  sendJson(res, 200, {
+    asset_statuses: statuses.map((s) => ({
+      ...s,
+      asset_tag: labels.get(s.asset_id)?.asset_tag ?? null,
+      asset_name: labels.get(s.asset_id)?.asset_name ?? null,
+    })),
+  });
 };
 
 // GET /api/v1/maintenance/assets/:assetId/costs
@@ -4871,6 +4908,12 @@ const getClosureCodesBase: RouteHandler = async (_req, res) => {
   });
 };
 
+// GET /api/v1/maintenance/warranty-override-reason-codes (Story 7.11: the desk's reason tiles)
+
+const getWarrantyOverrideReasonCodesBase: RouteHandler = async (_req, res) => {
+  sendJson(res, 200, { reason_codes: config.maintenance.warrantyOverrideReasonCodes });
+};
+
 // GET /api/v1/maintenance/sync-conflicts
 
 const listSyncConflictsBase: RouteHandler = async (req, res) => {
@@ -5027,6 +5070,11 @@ export const getClosureCodesHandler = requireRole({
   module: 'maintenance',
   functionScope: 'read',
 })(getClosureCodesBase);
+
+export const getWarrantyOverrideReasonCodesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getWarrantyOverrideReasonCodesBase);
 
 export const listSyncConflictsHandler = requireRole({
   module: 'maintenance',

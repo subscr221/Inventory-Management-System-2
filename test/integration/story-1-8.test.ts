@@ -209,7 +209,8 @@ describe('Story 1.8 backend edge sync contract', () => {
     assert.strictEqual(res.body['site_name'], 'Pilot Gate Site');
     // Story 1.14 (AC 2): a concrete site assignment grants read there, so the supervisor screen
     // is advertised after the two Story 1.8 entries.
-    assert.deepStrictEqual(res.body['navigation'], ['Dashboard', 'Frontline', 'Refused captures']);
+    // UX audit fix-now item 5: the maintenance read holder is also sent the technician Maintenance row.
+    assert.deepStrictEqual(res.body['navigation'], ['Dashboard', 'Frontline', 'Refused captures', 'Maintenance']);
     assert.strictEqual(res.body['offline_ready'], true);
   });
 

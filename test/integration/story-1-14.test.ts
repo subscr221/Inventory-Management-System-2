@@ -190,7 +190,8 @@ describe('Story 1.14 Refused-Captures Supervisor Screen (server side)', () => {
   it('AC2: bootstrap advertises the page to a persona with a read grant at the operating site', async () => {
     const res = await makeRequest(port, 'GET', '/api/v1/edge/bootstrap', undefined, headers['tech']);
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
-    assert.deepStrictEqual(res.body['navigation'], ['Dashboard', 'Frontline', 'Refused captures']);
+    // UX audit fix-now item 5: the maintenance read holder is also sent the technician Maintenance row.
+    assert.deepStrictEqual(res.body['navigation'], ['Dashboard', 'Frontline', 'Refused captures', 'Maintenance']);
     assert.strictEqual(res.body['site_id'], siteId);
   });
 
