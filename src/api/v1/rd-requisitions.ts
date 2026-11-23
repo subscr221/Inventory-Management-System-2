@@ -135,6 +135,10 @@ const raiseBase: RouteHandler = async (req, res) => {
       sendRequestError(req, res, 404, 'RD_REQUISITION_NOT_FOUND', 'Requisition not found');
       return;
     }
+    if (view['budget_breach'] === true || view['status'] === 'approval_required') {
+      sendJson(res, 201, { ...view, error_code: 'APPROVAL_REQUIRED' });
+      return;
+    }
     sendJson(res, 201, view);
   } catch (err: unknown) {
     if (err instanceof AppError) {
@@ -161,7 +165,7 @@ const listBase: RouteHandler = async (req, res) => {
     offset,
   };
   if (status !== null) filters.status = status;
-  if (projectCode !== null) filters.projectCode = projectCode;
+  if (projectCode !== null) filters.projectCode = projectCode.trim().toUpperCase();
   const result = await listRdRequisitions(filters);
   sendJson(res, 200, {
     requisitions: result.rows,

@@ -64,6 +64,10 @@ function reject(
   throw new AppError(status, code, message, details);
 }
 
+function isUniqueViolation(err: unknown): boolean {
+  return err instanceof Error && 'code' in err && (err as { code: unknown }).code === '23505';
+}
+
 export function rdRequisitionEventType(envelope: EventEnvelope): string | null {
   if (!RESEARCH_STREAM_TYPES.has(envelope.stream_type)) return null;
   if (!RD_REQUISITION_EVENT_TYPES.has(envelope.event_type)) return null;
@@ -204,25 +208,39 @@ async function applyRaised(
   const budgetAmount = String(project.rows[0]!['budget_amount']);
 
   // Insert lines first so their NUMERIC line_value is available to the budget probe.
-  for (const line of p.lines) {
-    await insertRdRequisitionLine(
-      {
-        requisition_line_id: line.line_id,
+  try {
+    for (const line of p.lines) {
+      await insertRdRequisitionLine(
+        {
+          requisition_line_id: line.line_id,
+          requisition_id: p.requisition_id,
+          sku: line.sku,
+          requested_qty: line.requested_qty,
+          uom: line.uom,
+          unit_cost_estimate: line.unit_cost_estimate,
+          issue_type: line.issue_type,
+          source_event_id: eventId,
+        },
+        client,
+      );
+    }
+  } catch (err: unknown) {
+    if (isUniqueViolation(err)) {
+      reject('DUPLICATE_EVENT', 'A requisition line with this line_id already exists', {
         requisition_id: p.requisition_id,
-        sku: line.sku,
-        requested_qty: line.requested_qty,
-        uom: line.uom,
-        unit_cost_estimate: line.unit_cost_estimate,
-        issue_type: line.issue_type,
-        source_event_id: eventId,
-      },
-      client,
-    );
+      }, 409);
+    }
+    throw err;
   }
   const newValue = await client.query(
     `SELECT COALESCE(SUM(line_value), 0)::text AS v FROM rd_requisition_line WHERE requisition_id = $1`,
     [p.requisition_id],
   );
+  // NUMERIC(18,4) holds 14 integer digits: reject an aggregate that would overflow the header
+  // insert before the insert is attempted (a raw numeric out-of-range would otherwise be a 500).
+  if (Number(newValue.rows[0]!['v'] as string) >= 1e14) {
+    reject('INVALID_PARAMS', 'aggregate requisition value would overflow NUMERIC(18,4)');
+  }
   const committed = await committedRdValue(p.project_code, client);
   const actual = await actualRdCost(p.project_code, client);
   const breach = await client.query(
@@ -245,22 +263,31 @@ async function applyRaised(
     ownerApproverId = ownerSponsorsOwnRequisition ? null : ownerUserId;
   }
 
-  await insertRdRequisition(
-    {
-      requisition_id: p.requisition_id,
-      project_code: p.project_code,
-      requester_user_id: p.requester_user_id,
-      business_stream: p.business_stream,
-      estimated_value: newValue.rows[0]!['v'] as string,
-      status,
-      budget_breach: isBreach,
-      approver_actor_id: approverActorId,
-      doa_entry_id: doaEntryId,
-      owner_approver_id: ownerApproverId,
-      source_event_id: eventId,
-    },
-    client,
-  );
+  try {
+    await insertRdRequisition(
+      {
+        requisition_id: p.requisition_id,
+        project_code: p.project_code,
+        requester_user_id: p.requester_user_id,
+        business_stream: p.business_stream,
+        estimated_value: newValue.rows[0]!['v'] as string,
+        status,
+        budget_breach: isBreach,
+        approver_actor_id: approverActorId,
+        doa_entry_id: doaEntryId,
+        owner_approver_id: ownerApproverId,
+        source_event_id: eventId,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    if (isUniqueViolation(err)) {
+      reject('DUPLICATE_EVENT', 'A requisition with this requisition_id already exists', {
+        requisition_id: p.requisition_id,
+      }, 409);
+    }
+    throw err;
+  }
 
   if (ownerSponsorsOwnRequisition) {
     await markRdRequisitionOwnerApproved(p.requisition_id, p.requester_user_id, client);

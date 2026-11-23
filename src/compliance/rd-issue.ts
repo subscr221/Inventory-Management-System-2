@@ -12,6 +12,7 @@ import {
   getRdRequisitionById,
   getRdRequisitionLineForUpdate,
   incrementRdRequisitionLineIssued,
+  type RdRequisitionLineRow,
 } from '../read/projections/rd_requisition.js';
 import { getRdProjectChecklist } from '../read/projections/rd_project_checklist.js';
 import { insertRdIssueCost } from '../read/projections/rd_issue_cost.js';
@@ -19,7 +20,7 @@ import {
   insertRdEquipmentCustody,
   rdIssueExists,
 } from '../read/projections/rd_equipment_custody.js';
-import type { RdRequisitionIssuedPayload } from '../events/schema.js';
+import type { RdRequisitionIssuedPayload, RdRequisitionIssueLine } from '../events/schema.js';
 
 /**
  * Story 10.2 (FR-RD-06): the R&D issue seam. Consumable and project-material lines drain stock,
@@ -111,6 +112,12 @@ export function assertRdIssueShape(envelope: EventEnvelope): void {
       reject('INVALID_PARAMS', 'asset_id must be a UUID when supplied');
     }
   }
+  const lineIds = lines.map(
+    (raw) => (raw as Record<string, unknown>)['requisition_line_id'] as string,
+  );
+  if (new Set(lineIds).size !== lineIds.length) {
+    reject('INVALID_PARAMS', 'issue lines must reference distinct requisition_line_id values');
+  }
 }
 
 async function applyIssued(
@@ -154,6 +161,13 @@ async function applyIssued(
   const allMet = checklist.length === 6 && checklist.every((c) => c.met);
 
   const issued: Array<Record<string, unknown>> = [];
+
+  // Lock-order (review): resolve and validate every line first, then sort by SKU ascending so the
+  // stock drains and valuation reliefs run in a stable SKU order across transactions. The
+  // requisition header is already FOR UPDATE-locked above, serializing concurrent issues of the
+  // same requisition; draining all stock rows before any valuation row (never interleaving them)
+  // is what makes two opposite-order transactions unable to deadlock.
+  const resolved: Array<{ line: RdRequisitionIssueLine; rl: RdRequisitionLineRow }> = [];
   for (const line of p.lines) {
     const rl = await getRdRequisitionLineForUpdate(line.requisition_line_id, client);
     if (!rl || rl.requisition_id !== p.requisition_id) {
@@ -206,11 +220,23 @@ async function applyIssued(
           reject('INVALID_PARAMS', 'asset_id does not exist in the asset register');
         }
       }
+    }
 
-      await applyStockIssue(
-        { sku: rl.sku, location_id: line.location_id, lot_id: line.lot_id ?? null, quantity: line.quantity, occurred_at: occurredAt },
-        client,
-      );
+    resolved.push({ line, rl });
+  }
+  resolved.sort((a, b) => (a.rl.sku < b.rl.sku ? -1 : a.rl.sku > b.rl.sku ? 1 : 0));
+
+  // Pass 1: drain every stock row (custody and material lines alike) in ascending SKU order.
+  for (const { line, rl } of resolved) {
+    await applyStockIssue(
+      { sku: rl.sku, location_id: line.location_id, lot_id: line.lot_id ?? null, quantity: line.quantity, occurred_at: occurredAt },
+      client,
+    );
+  }
+
+  // Pass 2: relieve valuations and write custody/cost rows in ascending SKU order.
+  for (const { line, rl } of resolved) {
+    if (rl.issue_type === 'equipment_custody') {
       const custody = {
         custody_id: randomUUID(),
         issue_id: p.issue_id,
@@ -221,7 +247,7 @@ async function applyIssued(
         asset_id: line.asset_id ?? null,
         sku: rl.sku,
         quantity: line.quantity,
-        expected_return_date: line.expected_return_date,
+        expected_return_date: line.expected_return_date!,
         condition_codes: line.condition_codes as string[],
         status: 'on_loan' as const,
         source_event_id: eventId,
@@ -234,22 +260,15 @@ async function applyIssued(
         custody,
       });
     } else {
-      await applyStockIssue(
-        { sku: rl.sku, location_id: line.location_id, lot_id: line.lot_id ?? null, quantity: line.quantity, occurred_at: occurredAt },
-        client,
-      );
       const relieved = await applyValuationOutflow({ sku: rl.sku, quantity: line.quantity }, client);
 
       let capitalization: 'expensed' | 'capitalized' = 'expensed';
       let blockedReason: string | null = null;
-      if (phase === 'development') {
-        if (!allMet) {
-          capitalization = 'expensed';
-          blockedReason = 'CAPITALIZATION_CRITERIA_NOT_MET';
-        } else if (effectiveIst !== null && businessDate >= effectiveIst) {
+      if (phase === 'development' && rl.issue_type === 'project_material') {
+        if (allMet && effectiveIst !== null && businessDate >= effectiveIst) {
           capitalization = 'capitalized';
         } else {
-          capitalization = 'expensed';
+          blockedReason = 'CAPITALIZATION_CRITERIA_NOT_MET';
         }
       }
 

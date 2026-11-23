@@ -3179,3 +3179,18 @@ evidence: review pass 2026-11-22; src/adapters/erp/sync.ts and src/sync/upload.t
 - source_spec: `spec-10-2-randd-requisition-budget-check-and-issue-types.md`
 summary: CAPITALIZATION_CRITERIA_NOT_MET is registered in both PERMANENT_ERROR_CODES sets but is only surfaced as a `capitalization_blocked_reason` field on a 201 issue response, never thrown as an `error_code`, so the edge permanent-retry classification is dead code.
 evidence: review pass 2 2026-11-22 (Blind Hunter) low finding; the incomplete-checklist issue succeeds with the cost expensed rather than failing, so the code never reaches the sync retry path.
+
+## Deferred from: code review of story-10-2 (2026-11-23)
+
+- source_spec: `spec-10-2-randd-requisition-budget-check-and-issue-types.md`
+  summary: No FK from `rd_requisition_line.requisition_id` to `rd_requisition` and no FK from `rd_requisition.project_code`/`rd_issue_cost.project_code` to `rd_project`; the app layer validates both, so this is defense-in-depth only.
+  evidence: code review 2026-11-23 (Blind Hunter) medium finding; rd_reclassification.sql adds an FK to lot_master, so the omission is an inconsistency rather than a convention.
+- source_spec: `spec-10-2-randd-requisition-budget-check-and-issue-types.md`
+  summary: Composite `(source_event_id, <pk>)` unique indexes on `rd_requisition_line`/`rd_issue_cost`/`rd_equipment_custody` are vacuous (the pk column is already unique), and their guarded `DROP INDEX ... NOT LIKE '%(source_event_id, ...)%'` uses unescaped `_` wildcards; idempotency is handled by `alreadyPersisted`, so the indexes are dead code.
+  evidence: code review 2026-11-23 (Blind Hunter + Edge Case Hunter) findings on the three projection files.
+- source_spec: `spec-10-2-randd-requisition-budget-check-and-issue-types.md`
+  summary: DOA budget-breach resolution passes value 0 (`findMatchingDoaEntry('rd_budget_breach', 0)`), so there is no magnitude-based escalation; confirm the `rd_budget_breach` band maps to the R&D head role.
+  evidence: code review 2026-11-23 (Blind Hunter) high finding, contrasted with purchase-order.ts:437 which passes the value.
+- source_spec: `spec-10-2-randd-requisition-budget-check-and-issue-types.md`
+  summary: Loaned equipment drops out of budget commitment: `committedRdValue` subtracts `issued_quantity` for every issue type but equipment custody writes no cost row, so `committed` decreases while `actual` never reflects the loaned value.
+  evidence: code review 2026-11-23 (Blind Hunter) medium finding on rd_requisition.ts:294 + rd-issue.ts custody branch.

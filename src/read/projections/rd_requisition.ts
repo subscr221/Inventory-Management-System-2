@@ -285,7 +285,9 @@ export async function incrementRdRequisitionLineIssued(
   return result.rows.length > 0;
 }
 
-/** Committed: sum of remaining unissued value across approved requisition lines for a project. */
+/** Committed: sum of remaining unissued value across approved and pending requisition lines for a
+ * project. Pending (approval_required) requisitions reserve budget so a later raise cannot double
+ * count the same spend. */
 export async function committedRdValue(
   projectCode: string,
   client: PoolClient,
@@ -294,7 +296,7 @@ export async function committedRdValue(
     `SELECT COALESCE(SUM(round((l.requested_qty - l.issued_quantity) * l.unit_cost_estimate, 4)), 0)::text AS committed
      FROM rd_requisition_line l
      JOIN rd_requisition r ON r.requisition_id = l.requisition_id
-     WHERE r.project_code = $1 AND r.status = 'approved'`,
+     WHERE r.project_code = $1 AND r.status IN ('approved', 'approval_required')`,
     [projectCode],
   );
   return result.rows[0]!['committed'] as string;

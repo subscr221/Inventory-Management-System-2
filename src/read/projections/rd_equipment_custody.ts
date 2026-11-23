@@ -18,6 +18,8 @@ export interface RdEquipmentCustodyRow {
   expected_return_date: string;
   condition_codes: string[];
   status: 'on_loan' | 'returned';
+  overdue: boolean;
+  overdue_days: number;
   source_event_id: string;
   created_at: string;
   updated_at: string;
@@ -43,6 +45,8 @@ function mapRow(row: Record<string, unknown>): RdEquipmentCustodyRow {
     expected_return_date: row['expected_return_date'] instanceof Date ? row['expected_return_date'].toISOString().slice(0, 10) : String(row['expected_return_date']),
     condition_codes: Array.isArray(row['condition_codes']) ? (row['condition_codes'] as string[]) : [],
     status: row['status'] as RdEquipmentCustodyRow['status'],
+    overdue: row['overdue'] === true,
+    overdue_days: typeof row['overdue_days'] === 'number' ? row['overdue_days'] : Number(row['overdue_days'] ?? 0),
     source_event_id: row['source_event_id'] as string,
     created_at: row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']),
     updated_at: row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']),
@@ -98,7 +102,10 @@ export async function listRdEquipmentCustodyByRequisition(
   const result = await r.query(
     `SELECT custody_id, issue_id, requisition_id, requisition_line_id, project_code,
             custodian_user_id, asset_id, sku, quantity, expected_return_date, condition_codes,
-            status, source_event_id, created_at, updated_at
+            status, source_event_id, created_at, updated_at,
+            (status = 'on_loan' AND expected_return_date < (now() AT TIME ZONE 'Asia/Kolkata')::date) AS overdue,
+            CASE WHEN status = 'on_loan' AND expected_return_date < (now() AT TIME ZONE 'Asia/Kolkata')::date
+                 THEN (now() AT TIME ZONE 'Asia/Kolkata')::date - expected_return_date ELSE 0 END AS overdue_days
      FROM rd_equipment_custody WHERE requisition_id = $1 ORDER BY created_at ASC, custody_id ASC`,
     [requisitionId],
   );

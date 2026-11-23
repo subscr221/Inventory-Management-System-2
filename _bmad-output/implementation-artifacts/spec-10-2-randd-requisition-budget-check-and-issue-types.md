@@ -94,6 +94,26 @@ warnings: ['oversized']
 - Given costs already expensed, when the project later passes the checklist, then only costs from the date criteria are met are capitalized and retroactive reinstatement is rejected with `error_code: "RETROACTIVE_REINSTATEMENT_BLOCKED"`.
 - Given an equipment-custody issue, when recorded, then a custody register entry is created with named custodian, expected return date, and condition codes, with overdue ageing tracked.
 
+### Review Findings
+
+- [x] [Review][Patch] Budget over-commit: `approval_required` requisitions are excluded from the committed probe (`rd_requisition.ts:297` `WHERE status = 'approved'`), so a pending breach requisition does not reserve budget. Ruled 2026-11-23: include `approval_required` in the committed probe (`status IN ('approved','approval_required')`) so pending requisitions reserve budget.
+- [x] [Review][Patch] Consumable wrongly capitalized on a development project: the Ind AS 38 classification keys on project phase only, so a `consumable` line with all criteria met is `capitalized` (AC2 says consumable is always expensed) [src/compliance/rd-issue.ts:241-250].
+- [x] [Review][Patch] AC7 overdue ageing not implemented: no `overdue_days`/ageing field or query exists, only raw `expected_return_date` + `status` [src/read/projections/rd_equipment_custody.ts].
+- [x] [Review][Patch] Lock-order deadlock risk: the issue loop interleaves `applyStockIssue` then `applyValuationOutflow` per line instead of draining all stock rows first then relieving in ascending SKU order (violates the `inventory-valuation.ts` docstring rule) [src/compliance/rd-issue.ts].
+- [x] [Review][Patch] Duplicate `requisition_id` on a fresh raise → unmapped 23505 → raw 500; no `catch (err.code === '23505')` like `indent.ts` [src/compliance/rd-requisition.ts].
+- [x] [Review][Patch] AC1 `error_code: APPROVAL_REQUIRED` never surfaced: breach returns 201 with `status: approval_required` but no error code in the response [src/api/v1/rd-requisitions.ts].
+- [x] [Review][Patch] AC6 has no end-to-end test (issue expensed on incomplete checklist, then criteria met, then a later issue capitalizes while the earlier cost stays expensed); only the client-backdate refusal is tested [test/integration/story-10-2.test.ts].
+- [x] [Review][Patch] AC7 `expected_return_date`, `condition_codes`, and overdue ageing are not asserted on the returned custody row [test/integration/story-10-2.test.ts].
+- [x] [Review][Patch] Duplicate `requisition_line_id` within one issue payload is double-issued (the shape assert does not dedupe line ids) [src/compliance/rd-issue.ts].
+- [x] [Review][Patch] Aggregate `estimated_value` (sum of lines) can exceed NUMERIC(18,4) → 22003 → 500; the per-line guard does not bound the sum [src/compliance/rd-requisition.ts].
+- [x] [Review][Patch] A development issue dated before `capitalization_effective_date` is expensed with `capitalization_blocked_reason = null` (indistinguishable from a research-phase expense) [src/compliance/rd-issue.ts:249-252].
+- [x] [Review][Patch] `server.ts` route registrations lost one indentation level (cosmetic, likely trips the format gate) [src/server.ts:981-991].
+- [x] [Review][Patch] `GET /rd-requisitions` list passes `project_code` through without trim/uppercase, so a lowercase filter returns zero rows [src/api/v1/rd-requisitions.ts:158].
+- [x] [Review][Defer] No FK `requisition_id` → `rd_requisition` / `project_code` → `rd_project`; app layer validates both, FK is defense-in-depth [read/projections/rd_requisition_line.sql:7].
+- [x] [Review][Defer] Vacuous composite `(source_event_id, <pk>)` unique indexes and fragile `NOT LIKE` drop guard; idempotency is handled by `alreadyPersisted` [read/projections/rd_issue_cost.sql:40].
+- [x] [Review][Defer] DOA budget-breach resolution passes value 0, so no magnitude escalation (confirm the `rd_budget_breach` band maps to R&D head) [src/compliance/rd-requisition.ts:151].
+- [x] [Review][Defer] Loaned equipment drops out of budget commitment: `committed` decreases on loan but `actual` never reflects the loaned value [src/read/projections/rd_requisition.ts:294].
+
 ## Spec Change Log
 - 2026-11-22 Review pass 1 (bad_spec): the budget "committed" leg double-counted issued spend and the issue path allowed over-issue because the spec omitted a per-line issued-quantity lifecycle. Amended Design Notes and Tasks: per-line `issued_quantity` with over-issue refusal (`RD_REQUISITION_LINE_EXCEEDED`), committed computed on remaining unissued quantity, server-derived IST `business_date`, IST-safe capitalization date comparison, `capitalization_blocked_reason` surfacing, equipment-custody stock drain. KEEP: research stream plus four event types, cost capture via `applyValuationOutflow`, the six-criteria vocabulary, DOA client-aware resolution (AD-12 atomicity), dual owner plus head approval, custody register fields, dual permanent error-code sets, idempotent migrations, spine allowlist, integration suite.
 

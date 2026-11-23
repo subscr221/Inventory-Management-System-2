@@ -708,6 +708,10 @@ describe('Story 10.2 R&D requisition, budget check and issue types', () => {
     assert.strictEqual(custody[0]!['status'], 'on_loan');
     assert.strictEqual(custody[0]!['custodian_user_id'], requesterId);
     assert.strictEqual(Number(custody[0]!['quantity']), 2);
+    assert.strictEqual(custody[0]!['expected_return_date'], '2030-01-01');
+    assert.deepStrictEqual(custody[0]!['condition_codes'], ['working', 'calibrated']);
+    assert.strictEqual(custody[0]!['overdue'], false);
+    assert.strictEqual(custody[0]!['overdue_days'], 0);
     assert.strictEqual(await onHand(SKU, stdBin), before - 2);
     const valuationAfter = await getPool().query(
       `SELECT quantity_on_hand::float8 AS q, carrying_value::float8 AS v FROM inventory_valuation WHERE sku = $1`,
@@ -739,5 +743,72 @@ describe('Story 10.2 R&D requisition, budget check and issue types', () => {
     );
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.ok(Array.isArray(res.body['requisitions']));
+  });
+
+  it('AC6: incomplete checklist expenses, later met capitalizes, first cost row never reinstated', async () => {
+    const project = `AC6-${run}`.toUpperCase();
+    await createProject({ project_code: project, owner_user_id: ownerId, phase: 'development', budget_amount: 1000 });
+    const partial = { ...SIX_CRITERIA, future_economic_benefits: false };
+    const setPartial = await setChecklist(project, partial);
+    assert.strictEqual(setPartial.status, 200, JSON.stringify(setPartial.body));
+
+    const raised = await raise(project, [
+      { sku: SKU, requested_qty: '6', uom: 'EA', unit_cost_estimate: '6', issue_type: 'project_material' },
+    ]);
+    const id = raised.body['requisition_id'] as string;
+    const ln = (raised.body['lines'] as Row[])[0]!;
+
+    const first = await issue(id, [
+      { requisition_line_id: ln['requisition_line_id'], quantity: '3', location_id: stdBin },
+    ]);
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+    const firstCosts = first.body['issue_costs'] as Row[];
+    assert.strictEqual(firstCosts.length, 1);
+    assert.strictEqual(firstCosts[0]!['capitalization'], 'expensed');
+    assert.strictEqual(firstCosts[0]!['capitalization_blocked_reason'], 'CAPITALIZATION_CRITERIA_NOT_MET');
+
+    const setAll = await setChecklist(project, SIX_CRITERIA);
+    assert.strictEqual(setAll.status, 200, JSON.stringify(setAll.body));
+    assert.ok(setAll.body['capitalization_effective_date']);
+
+    const second = await issue(id, [
+      { requisition_line_id: ln['requisition_line_id'], quantity: '3', location_id: stdBin },
+    ]);
+    assert.strictEqual(second.status, 201, JSON.stringify(second.body));
+    const secondCosts = second.body['issue_costs'] as Row[];
+    assert.strictEqual(secondCosts.length, 2);
+    // created_at ordering keeps the earlier issue first: the first cost row stays expensed (no
+    // retroactive reinstatement), and only the second, post-criteria issue capitalizes.
+    assert.strictEqual(secondCosts[0]!['capitalization'], 'expensed');
+    assert.strictEqual(secondCosts[1]!['capitalization'], 'capitalized');
+  });
+
+  it('AC7: overdue on_loan custody surfaces overdue and overdue_days', async () => {
+    const project = `OD-${run}`.toUpperCase();
+    await createProject({ project_code: project, owner_user_id: ownerId, phase: 'research', budget_amount: 1000 });
+    const raised = await raise(project, [
+      { sku: SKU, requested_qty: '2', uom: 'EA', unit_cost_estimate: '6', issue_type: 'equipment_custody' },
+    ]);
+    const id = raised.body['requisition_id'] as string;
+    const ln = (raised.body['lines'] as Row[])[0]!;
+
+    // The issue seam refuses a past return date, so the overdue state is seeded directly at the
+    // register and read back through the read model.
+    const custodyId = randomUUID();
+    const issueId = randomUUID();
+    await getPool().query(
+      `INSERT INTO rd_equipment_custody
+         (custody_id, issue_id, requisition_id, requisition_line_id, project_code, custodian_user_id,
+          asset_id, sku, quantity, expected_return_date, condition_codes, status, source_event_id)
+       VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, '1', '2020-01-01', ARRAY['working'], 'on_loan', $8)`,
+      [custodyId, issueId, id, ln['requisition_line_id'], project, requesterId, SKU, randomUUID()],
+    );
+
+    const got = await makeRequest(port, 'GET', `/api/v1/rd-requisitions/${id}`, undefined, ownerHeaders);
+    assert.strictEqual(got.status, 200, JSON.stringify(got.body));
+    const custody = (got.body['equipment_custody'] as Row[]).filter((c) => c['custody_id'] === custodyId);
+    assert.strictEqual(custody.length, 1);
+    assert.strictEqual(custody[0]!['overdue'], true);
+    assert.ok((custody[0]!['overdue_days'] as number) > 0);
   });
 });
