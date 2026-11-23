@@ -17,6 +17,7 @@ import {
   getAsBuiltLines,
   type RdAsBuiltLineRow,
 } from '../read/projections/rd_build.js';
+import { assertProjectCodeActive } from './rd-guards.js';
 import {
   upsertSignoff,
   evaluateProductizationGate,
@@ -187,6 +188,13 @@ function assertRdBuildRecordedShape(p: Record<string, unknown>): void {
   );
   if (!isNonEmptyString(p['built_uom']))
     reject('INVALID_PARAMS', 'built_uom is required and must be a non-empty string');
+  if (
+    p['project_code'] !== undefined &&
+    p['project_code'] !== null &&
+    !isNonEmptyString(p['project_code'])
+  ) {
+    reject('INVALID_PARAMS', 'project_code must be a non-empty string when supplied');
+  }
   if (
     p['outcome'] !== undefined &&
     p['outcome'] !== null &&
@@ -554,6 +562,17 @@ async function applyRdBuildRecorded(
   const occurredAtIso = new Date(occurredAt).toISOString();
   const actorId = envelope.metadata.actor.user_id;
 
+  if (p.project_code) {
+    const projectResult = await client.query(
+      'SELECT status FROM rd_project WHERE project_code = $1',
+      [p.project_code],
+    );
+    assertProjectCodeActive(
+      p.project_code,
+      (projectResult.rows[0] as { status: string } | undefined) ?? null,
+    );
+  }
+
   await insertBuildRecord(
     {
       build_id: p.build_id,
@@ -567,6 +586,7 @@ async function applyRdBuildRecorded(
       outcome:
         (p.outcome as RdBuildRecordedPayload['outcome'] as
           'success' | 'failed' | 'abandoned' | undefined) ?? null,
+      project_code: p.project_code ?? null,
       recorded_by: actorId,
       recorded_at: occurredAtIso,
       confirmed_by: null,

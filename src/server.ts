@@ -271,6 +271,10 @@ import {
   rejectRdRequisitionHandler,
 } from './api/v1/rd-requisitions.js';
 import { issueRdRequisitionHandler } from './api/v1/rd-issues.js';
+import { getRdProjectWipHandler, getRdProjectBuildsHandler } from './api/v1/rd-wip.js';
+import { completeRdBuildHandler, listRdPrototypesHandler, getRdPrototypeHandler } from './api/v1/rd-prototypes.js';
+import { requestRdDispositionHandler, getRdDispositionHandler, approveRdDispositionHandler, rejectRdDispositionHandler, executeRdDispositionHandler } from './api/v1/rd-dispositions.js';
+import { returnRdMaterialHandler } from './api/v1/rd-returns.js';
 import {
   defineAlternateHandler,
   listBomAlternatesHandler,
@@ -989,6 +993,17 @@ export function createAppRouter(): Router {
   router.post('/api/v1/rd-requisitions/:requisitionId/approve', approveRdRequisitionHandler);
   router.post('/api/v1/rd-requisitions/:requisitionId/reject', rejectRdRequisitionHandler);
   router.post('/api/v1/rd-requisitions/:requisitionId/issue', issueRdRequisitionHandler);
+  router.get('/api/v1/rd-projects/:projectCode/wip', getRdProjectWipHandler);
+  router.get('/api/v1/rd-projects/:projectCode/builds', getRdProjectBuildsHandler);
+  router.post('/api/v1/rd-builds/:buildId/complete', completeRdBuildHandler);
+  router.get('/api/v1/rd-prototypes', listRdPrototypesHandler);
+  router.get('/api/v1/rd-prototypes/:prototypeId', getRdPrototypeHandler);
+  router.post('/api/v1/rd-prototypes/:prototypeId/dispositions', requestRdDispositionHandler);
+  router.get('/api/v1/rd-dispositions/:dispositionId', getRdDispositionHandler);
+  router.post('/api/v1/rd-dispositions/:dispositionId/approve', approveRdDispositionHandler);
+  router.post('/api/v1/rd-dispositions/:dispositionId/reject', rejectRdDispositionHandler);
+  router.post('/api/v1/rd-dispositions/:dispositionId/execute', executeRdDispositionHandler);
+  router.post('/api/v1/rd-projects/:projectCode/returns', returnRdMaterialHandler);
 
   // Story 5.5: Approved Alternates and BOM Explosion. Every second segment is a literal distinct
   // from the :bomId-only routes above, so there is no route-order trap here.

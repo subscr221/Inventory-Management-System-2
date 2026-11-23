@@ -48,6 +48,16 @@ const PERMANENT_ERROR_CODES = new Set([
 'PROJECT_CODE_REQUIRED',
 // Story 10.2: R&D requisition and issue rejections are structural bars - an offline retry can
 // never clear them (the requisition is decided, the line is over-issued, the type is missing).
+// Story 10.3 prototype and disposition/return rejections are structural.
+'NON_SALEABLE_CLASS',
+'RD_PROTOTYPE_NOT_FOUND',
+'RD_PROTOTYPE_ALREADY_DISPOSED',
+'RD_DISPOSITION_NOT_FOUND',
+'RD_DISPOSITION_ALREADY_DECIDED',
+'RD_DISPOSITION_NOT_APPROVED',
+'RD_DISPOSITION_LINE_REQUIRED',
+'RD_RETURN_EXCEEDS_OPEN',
+'RD_BUILD_NOT_COMPLETED',
 'RD_REQUISITION_NOT_FOUND',
 'RD_REQUISITION_ALREADY_DECIDED',
 'RD_REQUISITION_LINE_REQUIRED',

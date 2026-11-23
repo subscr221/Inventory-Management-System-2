@@ -2021,6 +2021,7 @@ export interface RdBuildRecordedPayload {
   revision_id: string;
   build_ref: string;
   business_stream: string;
+  project_code?: string;
   built_quantity: string;
   built_uom: string;
   outcome?: string;
@@ -2096,6 +2097,35 @@ export interface RdProductizedEnvelope extends Omit<EventEnvelope, 'payload'> {
 // issue seam reads it back and never trusts a client-supplied capitalization claim.
 // ---------------------------------------------------------------------------
 
+// Story 10.3: project WIP returns, prototype registration and controlled disposition lifecycle.
+export interface RdBuildCompletedPayload {
+prototype_id: string;
+build_id: string;
+sku: string;
+serial_number: string;
+lot_id: string;
+location_id: string;
+correlation_id?: string;
+}
+export interface RdBuildCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_build.completed'; payload: RdBuildCompletedPayload;
+}
+export interface RdDispositionLineInput { line_id: string; line_no: number; component_sku: string; quantity: string; condition_code: string; }
+export interface RdDispositionRequestedPayload {
+  disposition_id: string; prototype_id: string; disposition_type: 'retain-as-asset' | 'transfer-to-production' | 'teardown' | 'scrap';
+  lines?: RdDispositionLineInput[];
+  asset?: { asset_id: string; asset_tag: string; asset_name: string; criticality_class: 'critical' | 'high' | 'medium' | 'low'; manufacturer?: string | null; model?: string | null; fixed_asset_ref?: string | null };
+  production_reference?: string; correlation_id?: string;
+}
+export interface RdDispositionRequestedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'rd_disposition.requested'; payload: RdDispositionRequestedPayload; }
+export interface RdDispositionDecidedPayload { disposition_id: string; rejection_reason?: string; correlation_id?: string; }
+export interface RdDispositionApprovedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'rd_disposition.approved'; payload: RdDispositionDecidedPayload; }
+export interface RdDispositionRejectedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'rd_disposition.rejected'; payload: RdDispositionDecidedPayload; }
+export interface RdDispositionExecutedPayload { disposition_id: string; correlation_id?: string; }
+export interface RdDispositionExecutedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'rd_disposition.executed'; payload: RdDispositionExecutedPayload; }
+export interface RdMaterialReturnedPayload { posting_id: string; project_code: string; quantity: string; location_id: string; lot_id: string; reason_code: string; correlation_id?: string; }
+export interface RdMaterialReturnedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'rd_material.returned'; payload: RdMaterialReturnedPayload; }
+
 /** One requisition line carried on rd_requisition.raised. Quantities and costs are decimal strings. */
 export interface RdRequisitionRaisedLine {
   line_id: string;
@@ -2155,6 +2185,8 @@ export interface RdRequisitionIssuedPayload {
   requisition_id: string;
   issue_id: string;
   lines: RdRequisitionIssueLine[];
+  issued_lines?: RdRequisitionIssueLine[];
+  business_date?: string;
   correlation_id?: string;
 }
 
@@ -6538,6 +6570,13 @@ export const SUPPORTED_EVENT_TYPES = {
     streamType: 'research',
     requiresBusinessStream: false,
   },
+// Story 10.3: WIP return, build registration and disposition lifecycle events.
+  'rd_build.completed': { streamType: 'research', requiresBusinessStream: false },
+  'rd_disposition.requested': { streamType: 'research', requiresBusinessStream: false },
+  'rd_disposition.approved': { streamType: 'research', requiresBusinessStream: false },
+  'rd_disposition.rejected': { streamType: 'research', requiresBusinessStream: false },
+  'rd_disposition.executed': { streamType: 'research', requiresBusinessStream: false },
+  'rd_material.returned': { streamType: 'research', requiresBusinessStream: false },
   // Story 7.1: asset register on a NEW 'maintenance' stream (AD-9). An asset is master data, not
   // an inventory movement, so requiresBusinessStream is false (the supplier.registered precedent).
   'asset.registered': {

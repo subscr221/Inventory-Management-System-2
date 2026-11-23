@@ -2397,8 +2397,44 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT',
 },
-{
-  canonical: 'read/projections/rd_equipment_custody.sql',
+  {
+    canonical: 'read/projections/rd_project_wip_ledger.sql',
+    table: 'rd_project_wip_ledger',
+    constraints: ['chk_rd_project_wip_posting_type','chk_rd_project_wip_quantity_positive','chk_rd_project_wip_posting_pairing'],
+    indexes: ['idx_rd_project_wip_project','idx_rd_project_wip_source_posting','uq_rd_project_wip_issue_cost'],
+    indexBodies: ['CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_project_wip_issue_cost ON rd_project_wip_ledger (issue_cost_id) WHERE posting_type = \'issue\''],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/rd_prototype.sql',
+    table: 'rd_prototype',
+    constraints: ['chk_rd_prototype_stock_class','chk_rd_prototype_built_quantity_positive','chk_rd_prototype_status','uq_rd_prototype_serial_identity'],
+    indexes: ['idx_rd_prototype_project','idx_rd_prototype_build'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/rd_disposition.sql',
+    table: 'rd_disposition',
+    constraints: ['chk_rd_disposition_type','chk_rd_disposition_status','uq_rd_disposition_source_event'],
+    indexes: ['idx_rd_disposition_prototype','idx_rd_disposition_project'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/rd_disposition_line.sql',
+    table: 'rd_disposition_line',
+    constraints: ['chk_rd_disposition_line_no','chk_rd_disposition_line_quantity_positive','uq_rd_disposition_line_no'],
+    indexes: ['idx_rd_disposition_line_disposition'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/rd_scrap_pending.sql',
+    table: 'rd_scrap_pending',
+    constraints: ['chk_rd_scrap_pending_quantity_positive','chk_rd_scrap_pending_status'],
+    indexes: ['idx_rd_scrap_pending_prototype','idx_rd_scrap_pending_project'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/rd_equipment_custody.sql',
   table: 'rd_equipment_custody',
   constraints: ['chk_rd_equipment_custody_status', 'chk_rd_equipment_custody_qty'],
     indexes: [

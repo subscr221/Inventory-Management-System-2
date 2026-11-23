@@ -136,8 +136,20 @@ import {
 import { assertBomShape, applyBomProjection } from '../compliance/bom.js';
 import { assertEcoShape, applyEcoProjection } from '../compliance/eco.js';
 import { assertRdShape, applyRdProjection } from '../compliance/rd-bom.js';
-import { assertRdRequisitionShape, applyRdRequisitionProjection } from '../compliance/rd-requisition.js';
+import {
+  assertRdRequisitionShape,
+  applyRdRequisitionProjection,
+} from '../compliance/rd-requisition.js';
 import { assertRdIssueShape, applyRdIssueProjection } from '../compliance/rd-issue.js';
+import { assertRdReturnShape, applyRdReturnProjection } from '../compliance/rd-wip.js';
+import {
+  assertRdDispositionShape,
+  applyRdDispositionProjection,
+} from '../compliance/rd-disposition.js';
+import {
+  assertRdBuildCompletedShape,
+  applyRdBuildCompletedProjection,
+} from '../compliance/rd-prototype.js';
 import {
   assertBomExecutionShape,
   applyBomExecutionProjection,
@@ -805,10 +817,13 @@ export async function persistEvent(
   // Story 5.4: R&D draft BOM regime shape validation is non-DB and runs with the other
   // pre-transaction asserts, so a malformed rd_* event never consumes an idempotency key.
   assertRdShape(envelope);
-// Story 10.2: R&D requisition and issue shape validation is non-DB and runs with the other
-// pre-transaction asserts, so a malformed rd_requisition event never consumes an idempotency key.
-assertRdRequisitionShape(envelope);
-assertRdIssueShape(envelope);
+  // Story 10.2: R&D requisition and issue shape validation is non-DB and runs with the other
+  // pre-transaction asserts, so a malformed rd_requisition event never consumes an idempotency key.
+  assertRdRequisitionShape(envelope);
+  assertRdIssueShape(envelope);
+  assertRdReturnShape(envelope);
+  assertRdDispositionShape(envelope);
+  assertRdBuildCompletedShape(envelope);
   // Story 5.5: alternate / substitution / explosion shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed execution event never consumes an idempotency key.
   assertBomExecutionShape(envelope);
@@ -1217,12 +1232,15 @@ assertRdIssueShape(envelope);
     // header, revision, lines, build records, as-built snapshot, and sign-offs commit together
     // with the domain_events insert.
     await applyRdProjection(envelope, client, eventId);
-// Story 10.2: R&D requisition (raise budget check + owner/head approval) and issue (per-line
-// issued-quantity lifecycle + Ind AS 38 costing / equipment custody) projections run inside this
-// same transaction so the header, lines, costing/custody rows and the domain_events insert commit
-// or roll back together.
-await applyRdRequisitionProjection(envelope, client, eventId);
-await applyRdIssueProjection(envelope, client, eventId);
+    // Story 10.2: R&D requisition (raise budget check + owner/head approval) and issue (per-line
+    // issued-quantity lifecycle + Ind AS 38 costing / equipment custody) projections run inside this
+    // same transaction so the header, lines, costing/custody rows and the domain_events insert commit
+    // or roll back together.
+    await applyRdRequisitionProjection(envelope, client, eventId);
+    await applyRdIssueProjection(envelope, client, eventId);
+    await applyRdReturnProjection(envelope, client, eventId);
+    await applyRdDispositionProjection(envelope, client, eventId);
+    await applyRdBuildCompletedProjection(envelope, client, eventId);
     // Story 5.5: alternates, ad-hoc substitutions and explosion runs commit inside this same
     // transaction as the domain_events insert, so a requirement set can never outlive its event.
     await applyBomExecutionProjection(envelope, client, eventId);

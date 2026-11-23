@@ -31,6 +31,7 @@ import {
 } from '../../read/projections/rd_productization.js';
 import type { RdAsBuiltLineInput } from '../../events/schema.js';
 import { resolveApprover } from './indents.js';
+import { getPool } from '../../config/db.js';
 
 /**
  * Story 5.4: R&D draft BOM regime handlers (FR-B-09 to FR-B-11). Copies the src/api/v1/ecos.ts
@@ -287,10 +288,24 @@ const recordBuildBase: RouteHandler = async (req, res, params) => {
     }
   }
 
+  if (typeof body.project_code === 'string' && body.project_code.trim()) {
+    const project = await getPool().query('SELECT status FROM rd_project WHERE project_code = $1', [
+      body.project_code.trim().toUpperCase(),
+    ]);
+    if (project.rows[0]?.status !== 'active') {
+      sendRequestError(
+        req,
+        res,
+        409,
+        'PROJECT_CODE_REQUIRED',
+        'project_code must identify an active R&D project',
+      );
+      return;
+    }
+  }
   const correlationId = body.correlation_id as string | undefined;
   const idempotencyKey = (body.idempotency_key as string) ?? randomUUID();
   const buildId = randomUUID();
-
   const event = {
     stream_type: 'engineering',
     stream_id: buildId,
@@ -305,6 +320,8 @@ const recordBuildBase: RouteHandler = async (req, res, params) => {
       built_quantity: body.built_quantity as string,
       built_uom: body.built_uom as string,
       outcome: body.outcome as string | undefined,
+      project_code:
+        typeof body.project_code === 'string' ? body.project_code.trim().toUpperCase() : undefined,
       notes: body.notes as string | undefined,
       as_built_lines: resolvedLines,
       correlation_id: correlationId,
@@ -404,6 +421,21 @@ const confirmBuildBase: RouteHandler = async (req, res, params) => {
   }
 
   const correlationId = body.correlation_id as string | undefined;
+  if (typeof body.project_code === 'string' && body.project_code.trim()) {
+    const project = await getPool().query('SELECT status FROM rd_project WHERE project_code = $1', [
+      body.project_code.trim().toUpperCase(),
+    ]);
+    if (project.rows[0]?.status !== 'active') {
+      sendRequestError(
+        req,
+        res,
+        409,
+        'PROJECT_CODE_REQUIRED',
+        'project_code must identify an active R&D project',
+      );
+      return;
+    }
+  }
   const idempotencyKey = (body.idempotency_key as string) ?? randomUUID();
 
   const event = {

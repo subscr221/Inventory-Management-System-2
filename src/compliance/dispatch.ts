@@ -7,6 +7,7 @@ import type {
   DispatchShippingDocumentsGeneratedEnvelope,
 } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
+import { nonSaleablePrototypeBlocked } from './rd-prototype.js';
 import { IRN_EXT_REGEX, normalizeIrnExt, isValidIrpAcknowledgedAt } from './irn.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import {
@@ -390,6 +391,8 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
     candidateLotIds,
     client,
   );
+  const blockedPrototypeLots = await nonSaleablePrototypeBlocked(candidateLotIds, client);
+  if (blockedPrototypeLots.length) throw new AppError(400, 'NON_SALEABLE_CLASS', 'Prototype stock cannot be dispatched', { lot_ids: blockedPrototypeLots });
   if (heldLots.length > 0) {
     throw new AppError(
       400,
@@ -576,10 +579,13 @@ export async function applyDispatchDispatchedProjection(
      ORDER BY lm.lot_id`,
     [p.dispatch_order_id],
   );
+  const dispatchLotIds = lotResult.rows.map((r: Record<string, unknown>) => r['lot_id'] as string);
   const { heldLotIds, qcGatedLotIds: qcGatedAtDispatch } = await dispatchGateBlockedLots(
-    lotResult.rows.map((r: Record<string, unknown>) => r['lot_id'] as string),
+    dispatchLotIds,
     client,
   );
+  const blockedPrototypeLots = await nonSaleablePrototypeBlocked(dispatchLotIds, client);
+  if (blockedPrototypeLots.length) throw new AppError(400, 'NON_SALEABLE_CLASS', 'Prototype stock cannot be dispatched', { lot_ids: blockedPrototypeLots });
   if (heldLotIds.length > 0) {
     throw new AppError(
       400,

@@ -360,6 +360,13 @@ const MIGRATIONS = [
 '../../read/projections/rd_project_checklist.sql',
 '../../read/projections/rd_issue_cost.sql',
 '../../read/projections/rd_equipment_custody.sql',
+  // Story 10.3: project WIP, prototype, dispositions and pending scrap projections.
+  '../../read/projections/rd_project_wip_ledger.sql',
+  '../../read/projections/rd_prototype.sql',
+  '../../read/projections/rd_disposition.sql',
+  '../../read/projections/rd_disposition_line.sql',
+  '../../read/projections/rd_scrap_pending.sql',
+  '../../read/projections/rd_build_record_project_code.sql',
 ];
 
 async function migrate(): Promise<void> {

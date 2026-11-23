@@ -16144,3 +16144,319 @@ BEGIN
 END $$;
 
 
+
+CREATE TABLE IF NOT EXISTS rd_project_wip_ledger (
+  posting_id UUID PRIMARY KEY,
+  project_code TEXT NOT NULL,
+  posting_type TEXT NOT NULL,
+  issue_cost_id UUID NOT NULL,
+  rd_issue_id UUID NOT NULL,
+  requisition_id UUID NOT NULL,
+  requisition_line_id UUID NOT NULL,
+  sku TEXT NOT NULL,
+  quantity NUMERIC(18,6) NOT NULL,
+  open_quantity NUMERIC(18,6),
+  unit_cost NUMERIC(18,6),
+  posting_value NUMERIC(18,4) NOT NULL,
+  reason_code TEXT,
+  source_posting_id UUID,
+  source_event_id UUID NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_project_wip_posting_type CHECK (posting_type IN ('issue','return')),
+  CONSTRAINT chk_rd_project_wip_quantity_positive CHECK (quantity > 0),
+  CONSTRAINT chk_rd_project_wip_posting_pairing CHECK (
+    (posting_type = 'issue' AND source_posting_id IS NULL AND reason_code IS NULL AND open_quantity IS NOT NULL)
+    OR
+    (posting_type = 'return' AND source_posting_id IS NOT NULL AND reason_code IS NOT NULL AND open_quantity IS NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_rd_project_wip_project ON rd_project_wip_ledger (project_code, sku);
+CREATE INDEX IF NOT EXISTS idx_rd_project_wip_source_posting ON rd_project_wip_ledger (source_posting_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_project_wip_issue_cost ON rd_project_wip_ledger (issue_cost_id) WHERE posting_type = 'issue';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_project_wip_posting_type' AND conrelid = 'rd_project_wip_ledger'::regclass) THEN
+    ALTER TABLE rd_project_wip_ledger ADD CONSTRAINT chk_rd_project_wip_posting_type CHECK (posting_type IN ('issue','return'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_project_wip_quantity_positive' AND conrelid = 'rd_project_wip_ledger'::regclass) THEN
+    ALTER TABLE rd_project_wip_ledger ADD CONSTRAINT chk_rd_project_wip_quantity_positive CHECK (quantity > 0);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_project_wip_posting_pairing' AND conrelid = 'rd_project_wip_ledger'::regclass) THEN
+    ALTER TABLE rd_project_wip_ledger ADD CONSTRAINT chk_rd_project_wip_posting_pairing CHECK (
+      (posting_type = 'issue' AND source_posting_id IS NULL AND reason_code IS NULL AND open_quantity IS NOT NULL)
+      OR
+      (posting_type = 'return' AND source_posting_id IS NOT NULL AND reason_code IS NOT NULL AND open_quantity IS NULL)
+    );
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_project_wip_ledger TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_project_wip_ledger TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS rd_prototype (
+  prototype_id UUID PRIMARY KEY,
+  build_id UUID NOT NULL,
+  project_code TEXT NOT NULL,
+  sku TEXT NOT NULL,
+  serial_number TEXT NOT NULL,
+  lot_id TEXT NOT NULL,
+  location_id UUID NOT NULL,
+  stock_class TEXT NOT NULL DEFAULT 'prototype',
+  built_quantity NUMERIC(18,6) NOT NULL,
+  uom TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'registered',
+  source_event_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_prototype_stock_class CHECK (stock_class = 'prototype'),
+  CONSTRAINT chk_rd_prototype_built_quantity_positive CHECK (built_quantity > 0),
+  CONSTRAINT chk_rd_prototype_status CHECK (status IN ('registered','disposed')),
+  CONSTRAINT uq_rd_prototype_serial_identity UNIQUE (sku, lot_id, location_id, serial_number, stock_class)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rd_prototype_project ON rd_prototype (project_code, created_at);
+CREATE INDEX IF NOT EXISTS idx_rd_prototype_build ON rd_prototype (build_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_prototype_stock_class' AND conrelid = 'rd_prototype'::regclass) THEN
+    ALTER TABLE rd_prototype ADD CONSTRAINT chk_rd_prototype_stock_class CHECK (stock_class = 'prototype');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_prototype_built_quantity_positive' AND conrelid = 'rd_prototype'::regclass) THEN
+    ALTER TABLE rd_prototype ADD CONSTRAINT chk_rd_prototype_built_quantity_positive CHECK (built_quantity > 0);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_prototype_status' AND conrelid = 'rd_prototype'::regclass) THEN
+    ALTER TABLE rd_prototype ADD CONSTRAINT chk_rd_prototype_status CHECK (status IN ('registered','disposed'));
+  END IF;
+IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_rd_prototype_serial_identity' AND conrelid = 'rd_prototype'::regclass) THEN
+IF EXISTS (
+SELECT 1 FROM pg_class i
+JOIN pg_index ix ON ix.indexrelid = i.oid
+WHERE i.relname = 'uq_rd_prototype_serial_identity' AND ix.indrelid = 'rd_prototype'::regclass
+) THEN
+DROP INDEX uq_rd_prototype_serial_identity;
+END IF;
+ALTER TABLE rd_prototype ADD CONSTRAINT uq_rd_prototype_serial_identity UNIQUE (sku, lot_id, location_id, serial_number, stock_class);
+END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_prototype TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_prototype TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS rd_disposition (
+  disposition_id UUID PRIMARY KEY,
+  prototype_id UUID NOT NULL,
+  project_code TEXT NOT NULL,
+  disposition_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'approval_required',
+  requester_actor_id UUID NOT NULL,
+  approver_actor_id UUID NOT NULL,
+  doa_entry_id UUID NOT NULL,
+  approved_at TIMESTAMPTZ,
+  approved_by UUID,
+  rejected_at TIMESTAMPTZ,
+  rejected_by UUID,
+  rejection_reason TEXT,
+  executed_at TIMESTAMPTZ,
+  executed_by UUID,
+  asset_id UUID,
+  production_reference TEXT,
+  source_event_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_disposition_type CHECK (disposition_type IN ('retain-as-asset','transfer-to-production','teardown','scrap')),
+  CONSTRAINT chk_rd_disposition_status CHECK (status IN ('approval_required','approved','rejected','executed')),
+  CONSTRAINT uq_rd_disposition_source_event UNIQUE (source_event_id, disposition_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rd_disposition_prototype ON rd_disposition (prototype_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_rd_disposition_project ON rd_disposition (project_code, created_at);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_disposition_type' AND conrelid = 'rd_disposition'::regclass) THEN
+    ALTER TABLE rd_disposition ADD CONSTRAINT chk_rd_disposition_type CHECK (disposition_type IN ('retain-as-asset','transfer-to-production','teardown','scrap'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_disposition_status' AND conrelid = 'rd_disposition'::regclass) THEN
+    ALTER TABLE rd_disposition ADD CONSTRAINT chk_rd_disposition_status CHECK (status IN ('approval_required','approved','rejected','executed'));
+  END IF;
+IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_rd_disposition_source_event' AND conrelid = 'rd_disposition'::regclass) THEN
+IF EXISTS (
+SELECT 1 FROM pg_class i
+JOIN pg_index ix ON ix.indexrelid = i.oid
+WHERE i.relname = 'uq_rd_disposition_source_event' AND ix.indrelid = 'rd_disposition'::regclass
+) THEN
+DROP INDEX uq_rd_disposition_source_event;
+END IF;
+ALTER TABLE rd_disposition ADD CONSTRAINT uq_rd_disposition_source_event UNIQUE (source_event_id, disposition_id);
+END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_disposition TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_disposition TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS rd_disposition_line (
+  line_id UUID PRIMARY KEY,
+  disposition_id UUID NOT NULL,
+  line_no INTEGER NOT NULL,
+  component_sku TEXT NOT NULL,
+  quantity NUMERIC(18,6) NOT NULL,
+  condition_code TEXT NOT NULL,
+  source_event_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_disposition_line_no CHECK (line_no > 0),
+  CONSTRAINT chk_rd_disposition_line_quantity_positive CHECK (quantity > 0),
+  CONSTRAINT uq_rd_disposition_line_no UNIQUE (disposition_id, line_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rd_disposition_line_disposition ON rd_disposition_line (disposition_id, line_no);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_disposition_line_no' AND conrelid = 'rd_disposition_line'::regclass) THEN
+    ALTER TABLE rd_disposition_line ADD CONSTRAINT chk_rd_disposition_line_no CHECK (line_no > 0);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_disposition_line_quantity_positive' AND conrelid = 'rd_disposition_line'::regclass) THEN
+    ALTER TABLE rd_disposition_line ADD CONSTRAINT chk_rd_disposition_line_quantity_positive CHECK (quantity > 0);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_rd_disposition_line_no' AND conrelid = 'rd_disposition_line'::regclass) THEN
+    ALTER TABLE rd_disposition_line ADD CONSTRAINT uq_rd_disposition_line_no UNIQUE (disposition_id, line_no);
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON rd_disposition_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_disposition_line TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS rd_scrap_pending (
+  scrap_pending_id UUID PRIMARY KEY,
+  disposition_id UUID NOT NULL,
+  disposition_line_id UUID NOT NULL,
+  prototype_id UUID NOT NULL,
+  project_code TEXT NOT NULL,
+  sku TEXT NOT NULL,
+  quantity NUMERIC(18,6) NOT NULL,
+  condition_code TEXT NOT NULL,
+  source_prototype_ref TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  source_event_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_scrap_pending_quantity_positive CHECK (quantity > 0),
+  CONSTRAINT chk_rd_scrap_pending_status CHECK (status = 'pending')
+);
+
+CREATE INDEX IF NOT EXISTS idx_rd_scrap_pending_prototype ON rd_scrap_pending (prototype_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_rd_scrap_pending_project ON rd_scrap_pending (project_code, created_at);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_scrap_pending_quantity_positive' AND conrelid = 'rd_scrap_pending'::regclass) THEN
+    ALTER TABLE rd_scrap_pending ADD CONSTRAINT chk_rd_scrap_pending_quantity_positive CHECK (quantity > 0);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_rd_scrap_pending_status' AND conrelid = 'rd_scrap_pending'::regclass) THEN
+    ALTER TABLE rd_scrap_pending ADD CONSTRAINT chk_rd_scrap_pending_status CHECK (status = 'pending');
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON rd_scrap_pending TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_scrap_pending TO readonly_user;
+  END IF;
+END $$;
+
+-- R&D draft-BOM build record read model (Story 5.4). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying rd_build.* domain events; mutation
+-- happens exclusively through persistEvent, which applies this projection inside the SAME
+-- transaction as the domain_events insert. A build record is created at status 'recorded'
+-- (rd_build.recorded, FR-B-10) and becomes an immutable as-built snapshot at 'confirmed'
+-- (rd_build.confirmed). 'confirmed' is TERMINAL - corrections are NEW snapshots under a new
+-- build_ref (FR-AC-13). outcome exists for Epic 10 (FR-RD-08) failed/abandoned builds; it is
+-- nullable and unenforced here.
+
+CREATE TABLE IF NOT EXISTS rd_build_record (
+  build_id          UUID PRIMARY KEY,
+  bom_id            UUID NOT NULL,
+  revision_id       UUID NOT NULL,
+  build_ref         TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'recorded',
+  built_quantity    NUMERIC(18,6) NOT NULL,
+  built_uom         TEXT NOT NULL,
+  notes             TEXT,
+  outcome           TEXT,
+  recorded_by       UUID NOT NULL,
+  recorded_at       TIMESTAMPTZ NOT NULL,
+  confirmed_by      UUID,
+  confirmed_at      TIMESTAMPTZ,
+  correlation_id    UUID,
+  source_event_id   UUID NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_build_status CHECK (status IN ('recorded','confirmed')),
+  CONSTRAINT chk_rd_build_quantity_positive CHECK (built_quantity > 0),
+  CONSTRAINT chk_rd_build_outcome CHECK (outcome IS NULL OR outcome IN ('success','failed','abandoned'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_build_ref ON rd_build_record (bom_id, build_ref);
+CREATE INDEX IF NOT EXISTS idx_rd_build_bom_id ON rd_build_record (bom_id);
+CREATE INDEX IF NOT EXISTS idx_rd_build_status ON rd_build_record (status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_build_status'
+      AND conrelid = 'rd_build_record'::regclass
+  ) THEN
+    ALTER TABLE rd_build_record
+      ADD CONSTRAINT chk_rd_build_status CHECK (status IN ('recorded','confirmed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_build_quantity_positive'
+      AND conrelid = 'rd_build_record'::regclass
+  ) THEN
+    ALTER TABLE rd_build_record
+      ADD CONSTRAINT chk_rd_build_quantity_positive CHECK (built_quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_build_outcome'
+      AND conrelid = 'rd_build_record'::regclass
+  ) THEN
+    ALTER TABLE rd_build_record
+      ADD CONSTRAINT chk_rd_build_outcome CHECK (outcome IS NULL OR outcome IN ('success','failed','abandoned'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_build_record TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_build_record TO readonly_user;
+  END IF;
+END $$;
+
+ALTER TABLE rd_build_record ADD COLUMN IF NOT EXISTS project_code TEXT;

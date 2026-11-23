@@ -78,3 +78,5 @@ BEGIN
     GRANT SELECT ON rd_build_record TO readonly_user;
   END IF;
 END $$;
+
+ALTER TABLE rd_build_record ADD COLUMN IF NOT EXISTS project_code TEXT;

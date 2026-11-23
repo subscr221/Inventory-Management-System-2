@@ -17,6 +17,7 @@ export interface RdBuildRecordRow {
   built_uom: string;
   notes: string | null;
   outcome: 'success' | 'failed' | 'abandoned' | null;
+  project_code: string | null;
   recorded_by: string;
   recorded_at: string;
   confirmed_by: string | null;
@@ -126,8 +127,8 @@ export async function insertBuildRecord(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
-    `INSERT INTO rd_build_record (build_id, bom_id, revision_id, build_ref, status, built_quantity, built_uom, notes, outcome, recorded_by, recorded_at, confirmed_by, confirmed_at, correlation_id, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+    `INSERT INTO rd_build_record (build_id, bom_id, revision_id, build_ref, status, built_quantity, built_uom, notes, outcome, project_code, recorded_by, recorded_at, confirmed_by, confirmed_at, correlation_id, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
     [
       row.build_id,
       row.bom_id,
@@ -138,6 +139,7 @@ export async function insertBuildRecord(
       row.built_uom,
       row.notes,
       row.outcome,
+      row.project_code,
       row.recorded_by,
       row.recorded_at,
       row.confirmed_by,

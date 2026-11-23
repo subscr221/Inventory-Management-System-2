@@ -148,7 +148,7 @@ export function assertRdRequisitionShape(envelope: EventEnvelope): void {
  * Client-aware twin of resolveApprover (src/api/v1/indents.ts) so the R&D head resolves inside the
  * raise transaction. Never hard-codes a role name: the DOA registry decides the role.
  */
-async function resolveHeadApproverInTransaction(
+export async function resolveHeadApproverInTransaction(
   client: PoolClient,
   requesterId: string,
 ): Promise<{ approverActorId: string; doaEntryId: string }> {

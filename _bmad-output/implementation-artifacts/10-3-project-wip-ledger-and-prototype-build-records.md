@@ -1,6 +1,6 @@
 # Story 10.3: Project WIP Ledger and Prototype Build Records
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -44,36 +44,36 @@ So that every prototype's material history and cost is fully captured.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Projections `rd_project_wip_ledger`, `rd_prototype`, `rd_disposition`, `rd_disposition_line`, `rd_scrap_pending` (AC: 1, 3, 5, 6, 7)**
-  - [ ] `read/projections/rd_project_wip_ledger.sql` (new) - per-project WIP postings modeled on `production_wip_ledger`: `posting_type` (issue / return), `source_posting_id` for return pairing, quantity, unit_cost, posting_value
-  - [ ] `read/projections/rd_prototype.sql` (new) - completed build registered as a serialized non-saleable class (serial_number, prototype ref, build_id, disposition status)
-  - [ ] `read/projections/rd_disposition.sql` + `rd_disposition_line.sql` (new) - four dispositions, R&D-head approval, line-level teardown recovery
-  - [ ] `read/projections/rd_scrap_pending.sql` (new) - scrap-pending holding (quantity, condition code, source-prototype reference)
-  - [ ] Append all to `MIGRATIONS` tail in `src/events/migrate.ts`, mirror into `deploy/compose/init-db.sql`, add to `EXPECTED` in `test/unit/schema-drift.test.ts`
+- [x] **Task 1: Projections `rd_project_wip_ledger`, `rd_prototype`, `rd_disposition`, `rd_disposition_line`, `rd_scrap_pending` (AC: 1, 3, 5, 6, 7)**
+  - [x] `read/projections/rd_project_wip_ledger.sql` (new) - per-project WIP postings modeled on `production_wip_ledger`: `posting_type` (issue / return), `source_posting_id` for return pairing, quantity, unit_cost, posting_value
+  - [x] `read/projections/rd_prototype.sql` (new) - completed build registered as a serialized non-saleable class (serial_number, prototype ref, build_id, disposition status)
+  - [x] `read/projections/rd_disposition.sql` + `rd_disposition_line.sql` (new) - four dispositions, R&D-head approval, line-level teardown recovery
+  - [x] `read/projections/rd_scrap_pending.sql` (new) - scrap-pending holding (quantity, condition code, source-prototype reference)
+  - [x] Append all to `MIGRATIONS` tail in `src/events/migrate.ts`, mirror into `deploy/compose/init-db.sql`, add to `EXPECTED` in `test/unit/schema-drift.test.ts`
 
-- [ ] **Task 2: Event types and payload interfaces (AC: 1, 3, 5, 6, 7)**
-  - [ ] `src/events/schema.ts` - payload/envelope pairs for `rd_build.completed`, `rd_disposition.requested`, `rd_disposition.approved`, `rd_disposition.executed`, `rd_material.returned`
-  - [ ] Append to `SUPPORTED_EVENT_TYPES` on the `research` stream (`requiresBusinessStream` false for all)
+- [x] **Task 2: Event types and payload interfaces (AC: 1, 3, 5, 6, 7)**
+  - [x] `src/events/schema.ts` - payload/envelope pairs for `rd_build.completed`, `rd_disposition.requested`, `rd_disposition.approved`, `rd_disposition.executed`, `rd_material.returned`
+  - [x] Append to `SUPPORTED_EVENT_TYPES` on the `research` stream (`requiresBusinessStream` false for all)
 
-- [ ] **Task 3: Compliance seam `src/compliance/rd-wip.ts` (AC: 1, 7)**
-  - [ ] WIP issue posting (driven from the story 10.2 issue seam for `project_material`) and return posting (reverses WIP by returned cost, `source_posting_id` pairing)
+- [x] **Task 3: Compliance seam `src/compliance/rd-wip.ts` (AC: 1, 7)**
+  - [x] WIP issue posting (driven from the story 10.2 issue seam for `project_material`) and return posting (reverses WIP by returned cost, `source_posting_id` pairing)
 
-- [ ] **Task 4: Compliance seam `src/compliance/rd-prototype.ts` (AC: 3, 4)**
-  - [ ] Completed build registration as serialized non-saleable class; NON_SALEABLE_CLASS guard at dispatch/issue-to-dispatch
+- [x] **Task 4: Compliance seam `src/compliance/rd-prototype.ts` (AC: 3, 4)**
+  - [x] Completed build registration as serialized non-saleable class; NON_SALEABLE_CLASS guard at dispatch/issue-to-dispatch
 
-- [ ] **Task 5: Compliance seam `src/compliance/rd-disposition.ts` (AC: 5, 6)**
-  - [ ] Disposition request/approve (R&D head via `resolveApprover`)/execute; teardown recovery, retain-as-asset, transfer-to-production, scrap-pending write
+- [x] **Task 5: Compliance seam `src/compliance/rd-disposition.ts` (AC: 5, 6)**
+  - [x] Disposition request/approve (R&D head via `resolveApprover`)/execute; teardown recovery, retain-as-asset, transfer-to-production, scrap-pending write
 
-- [ ] **Task 6: REST routes `src/api/v1/rd-wip.ts`, `rd-prototypes.ts`, `rd-dispositions.ts`, `rd-returns.ts` (AC: 1-7)**
-  - [ ] WIP ledger read, prototype register, disposition request/approve/execute, material return; register in `src/server.ts` and the Story 1.9 spine allowlist
+- [x] **Task 6: REST routes `src/api/v1/rd-wip.ts`, `rd-prototypes.ts`, `rd-dispositions.ts`, `rd-returns.ts` (AC: 1-7)**
+  - [x] WIP ledger read, prototype register, disposition request/approve/execute, material return; register in `src/server.ts` and the Story 1.9 spine allowlist
 
-- [ ] **Task 7: Error codes registered in three places (AC: 4, 5)**
-  - [ ] `NON_SALEABLE_CLASS` and the `RD_DISPOSITION_*` / `RD_RETURN_*` family in `PERMANENT_ERROR_CODES` (`src/sync/upload.ts`), `edge/src/sync/connector.ts`, `edge/src/messages/en.json`
+- [x] **Task 7: Error codes registered in three places (AC: 4, 5)**
+  - [x] `NON_SALEABLE_CLASS` and the `RD_DISPOSITION_*` / `RD_RETURN_*` family in `PERMANENT_ERROR_CODES` (`src/sync/upload.ts`), `edge/src/sync/connector.ts`, `edge/src/messages/en.json`
 
-- [ ] **Task 8: Integration test `test/integration/story-10-3.test.ts` (AC: 1-7)**
+- [x] **Task 8: Integration test `test/integration/story-10-3.test.ts` (AC: 1-7)**
 
-- [ ] **Task 9: Verification gates**
-  - [ ] `npx tsc --noEmit`, `npm run lint`, `npm run db:migrate` idempotent, `npm test`, `npm run spine-acceptance-contract`, `npm run edge:typecheck`, schema-drift and no-hardcoded-role-in-workflow green
+- [x] **Task 9: Verification gates**
+  - [x] `npx tsc --noEmit`, `npm run lint`, `npm run db:migrate` idempotent, `npm test`, `npm run spine-acceptance-contract`, `npm run edge:typecheck`, schema-drift and no-hardcoded-role-in-workflow green
 
 ## Dev Notes
 
@@ -176,8 +176,27 @@ Reuse `APPROVAL_REQUIRED`, `NON_SALEABLE_CLASS`. New codes (register in server r
 
 ### Agent Model Used
 
+deepseek/deepseek-v4.1-flash-1017 (Kilo)
+
 ### Debug Log References
+
+- Story 10.3 integration test: 5 of 5 pass (`node --env-file=.env.test --import tsx --test --test-concurrency=1 test/integration/story-10-3.test.ts`).
+- Full suite: 2887 of 2887 pass (`npm test`, 239 suites).
+- `npx tsc --noEmit`, `npm run lint`, `npm run spine-acceptance-contract` (6 of 6), `npm run edge:typecheck`, `schema-drift` + `no-hardcoded-role-in-workflow` (224 of 224), and two consecutive `src/events/migrate.ts` runs (idempotent) all pass.
 
 ### Completion Notes List
 
+- Implemented the project WIP ledger, prototype registration, the reusable NON_SALEABLE_CLASS dispatch guard, the four-way disposition state machine, scrap-pending holding, and material returns.
+- Retry of the aborted prior attempt: the projection DDL is now idempotent on a database migrated from an earlier index-only unique definition (the guarded ALTER drops the conflicting same-named index before adding the constraint), and the duplicated Story 10.3 block in `deploy/compose/init-db.sql` was removed.
+- Fixed latent defects found by the expanded tests: `rd_prototype.lot_id` stores the lot UUID so the dispatch guard matches packing-record lot ids; the return payload reads frozen valuation from `rd_requisition.issued.issued_lines`; the return event uses the issue posting id as its UUID stream id; and the execute route forwards retain-as-asset / transfer-to-production fields.
+- Removed dead duplicate `rd_build.completed` handling from `src/compliance/rd-bom.ts`; the seam lives only in `src/compliance/rd-prototype.ts` and `rd_bom` now only carries the optional `project_code` build field.
+
 ### File List
+
+- `read/projections/rd_project_wip_ledger.sql`, `rd_prototype.sql`, `rd_disposition.sql`, `rd_disposition_line.sql`, `rd_scrap_pending.sql`, `rd_build_record_project_code.sql`, `rd_build_record.sql`
+- `src/compliance/rd-wip.ts`, `rd-prototype.ts`, `rd-disposition.ts`, `rd-issue.ts`, `rd-bom.ts`, `dispatch.ts`
+- `src/read/projections/rd_project_wip_ledger.ts`, `rd_prototype.ts`, `rd_disposition.ts`, `rd_scrap_pending.ts`, `rd_build.ts`
+- `src/api/v1/rd-wip.ts`, `rd-prototypes.ts`, `rd-dispositions.ts`, `rd-returns.ts`, `rd-boms.ts`
+- `src/events/schema.ts`, `store.ts`, `migrate.ts`; `src/server.ts`; `src/sync/upload.ts`
+- `edge/src/sync/connector.ts`, `edge/src/messages/en.json`
+- `deploy/compose/init-db.sql`; `test/unit/schema-drift.test.ts`; `test/integration/story-1-9.test.ts`; `test/integration/story-10-3.test.ts`

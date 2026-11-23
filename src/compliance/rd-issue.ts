@@ -16,6 +16,7 @@ import {
 } from '../read/projections/rd_requisition.js';
 import { getRdProjectChecklist } from '../read/projections/rd_project_checklist.js';
 import { insertRdIssueCost } from '../read/projections/rd_issue_cost.js';
+import { postProjectWipForIssue } from './rd-wip.js';
 import {
   insertRdEquipmentCustody,
   rdIssueExists,
@@ -272,9 +273,10 @@ async function applyIssued(
         }
       }
 
+      const issueCostId = randomUUID();
       await insertRdIssueCost(
         {
-          issue_cost_id: randomUUID(),
+          issue_cost_id: issueCostId,
           issue_id: p.issue_id,
           requisition_id: p.requisition_id,
           requisition_line_id: rl.requisition_line_id,
@@ -291,6 +293,9 @@ async function applyIssued(
         },
         client,
       );
+      if (rl.issue_type === 'project_material') {
+        await postProjectWipForIssue({ issue_cost_id: issueCostId, rd_issue_id: p.issue_id, requisition_id: p.requisition_id, requisition_line_id: rl.requisition_line_id, project_code: req.project_code, sku: rl.sku, quantity: line.quantity, valuation: relieved, occurred_at: occurredAt }, client, eventId);
+      }
       issued.push({
         requisition_line_id: rl.requisition_line_id,
         issue_type: rl.issue_type,
@@ -299,6 +304,7 @@ async function applyIssued(
         capitalization_blocked_reason: blockedReason,
         cost_amount: relieved.value,
         business_date: businessDate,
+        valuation: relieved,
       });
     }
 
