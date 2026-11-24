@@ -31,9 +31,10 @@ CREATE TABLE IF NOT EXISTS damage_report (
   reporter_user_id               UUID NOT NULL,
   reported_at                    TIMESTAMPTZ NOT NULL,
   source_event_id                UUID NOT NULL,
-  source                         TEXT NOT NULL,
-  source_grn_line_id             UUID,
-  source_reason_code             TEXT,
+  source TEXT NOT NULL,
+  source_grn_line_id UUID,
+  source_pick_line_id UUID,
+  source_reason_code TEXT,
   source_photo_ref               TEXT,
   sku                            TEXT NOT NULL,
   lot_number                     TEXT,
@@ -91,8 +92,9 @@ CREATE TABLE IF NOT EXISTS damage_report (
   replacement_indent_id          UUID,
   created_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_damage_report_source CHECK (source IN ('report', 'receipt')),
+  CONSTRAINT chk_damage_report_source CHECK (source IN ('report', 'receipt', 'pick')),
   CONSTRAINT chk_damage_report_source_grn_pairing CHECK ((source = 'receipt') = (source_grn_line_id IS NOT NULL)),
+  CONSTRAINT chk_damage_report_source_pick_pairing CHECK ((source = 'pick') = (source_pick_line_id IS NOT NULL)),
   CONSTRAINT chk_damage_report_photo_pairing CHECK ((source = 'report') = (photo_attachment_id IS NOT NULL)),
   CONSTRAINT chk_damage_report_quantity CHECK (quantity > 0),
   CONSTRAINT chk_damage_report_found_at CHECK (found_at IN ('stock', 'in_use')),
@@ -190,9 +192,25 @@ CREATE TABLE IF NOT EXISTS damage_report (
   )
 );
 
+ALTER TABLE IF EXISTS damage_report ADD COLUMN IF NOT EXISTS source_pick_line_id UUID;
+
+DO $$
+BEGIN
+  ALTER TABLE damage_report DROP CONSTRAINT IF EXISTS chk_damage_report_source;
+  ALTER TABLE damage_report ADD CONSTRAINT chk_damage_report_source CHECK (source IN ('report', 'receipt', 'pick'));
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE damage_report DROP CONSTRAINT IF EXISTS chk_damage_report_source_pick_pairing;
+  ALTER TABLE damage_report ADD CONSTRAINT chk_damage_report_source_pick_pairing CHECK ((source = 'pick') = (source_pick_line_id IS NOT NULL));
+END $$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_damage_report_number ON damage_report (report_number);
 -- AC 9: one case per GRN line, so a replayed receipt opens nothing new.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_damage_report_source_grn_line ON damage_report (source_grn_line_id) WHERE source_grn_line_id IS NOT NULL;
+-- Story 3.17: one case per pick line (AC 1).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_damage_report_source_pick_line ON damage_report (source_pick_line_id) WHERE source = 'pick';
 CREATE INDEX IF NOT EXISTS idx_damage_report_site_status ON damage_report (site_id, status, reported_at DESC);
 CREATE INDEX IF NOT EXISTS idx_damage_report_reporter ON damage_report (reporter_user_id, reported_at DESC);
 -- D5: the stock guard looks up held cases by SKU on every issue that could leave quarantine.

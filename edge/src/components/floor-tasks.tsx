@@ -20,6 +20,7 @@ export interface FloorTasksProps {
   userId: string;
   checkHeldLot?: (lotNumber: string) => Promise<string | null>;
   onConfirmPickLine?: PickLineProps['onConfirm'];
+  onShortPickLine?: PickLineProps['onShortPick'];
   settlementOf?: PickLineProps['settlementOf'];
   refusalCodeOf?: PickLineProps['refusalCodeOf'];
 }
@@ -36,6 +37,7 @@ export function FloorTasks({
   userId,
   checkHeldLot,
   onConfirmPickLine,
+  onShortPickLine,
   settlementOf,
   refusalCodeOf,
 }: FloorTasksProps) {
@@ -102,6 +104,7 @@ export function FloorTasks({
     ready,
     ...(checkHeldLot ? { checkHeldLot } : {}),
     ...(onConfirmPickLine ? { onConfirm: onConfirmPickLine } : {}),
+    ...(onShortPickLine ? { onShortPick: onShortPickLine } : {}),
     ...(settlementOf ? { settlementOf } : {}),
     ...(refusalCodeOf ? { refusalCodeOf } : {}),
   };

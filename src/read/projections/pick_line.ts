@@ -18,7 +18,7 @@ export interface PickLine {
   confirmed_quantity: string | null;
   location_id: string;
   pick_sequence: number;
-  status: 'pending' | 'confirmed' | 'cancelled' | 'substituted';
+  status: 'pending' | 'confirmed' | 'cancelled' | 'substituted' | 'short';
   override_reason: string | null;
   capture_method: 'PWA' | 'PAPER' | null;
   confirmed_by: string | null;

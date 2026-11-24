@@ -55,6 +55,7 @@ const MIGRATIONS = [
   '../../read/projections/pick_task.sql',
   '../../read/projections/cross_dock_task.sql',
   '../../read/projections/pick_line.sql',
+  '../../read/projections/pick_shortfall.sql',
   '../../read/projections/cross_dock_constraints.sql',
   '../../read/projections/task_sla_config.sql',
   '../../read/projections/supplier.sql',

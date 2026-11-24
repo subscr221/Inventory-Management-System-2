@@ -9,6 +9,8 @@ import {
   directedLot,
   evaluateBin,
   evaluateLot,
+  evaluateShortPick,
+  lineSettled,
   nextLine,
   PICK_STEP_KEYS,
   PICK_STEPS,
@@ -17,6 +19,8 @@ import {
   type MessageResult,
   type PickLineConfirmInput,
   type PickLineRow,
+  type PickLineShortPickInput,
+  type PickShortReason,
   type PickStep,
   type PickTaskDetail,
 } from './pick-line-model';
@@ -24,10 +28,9 @@ import {
 type PickView = 'loading' | 'ready' | 'read-only' | 'submitting' | 'failed';
 
 /**
- * Story 3.16 (AC 4, 5, 6): the pick-line execution screen. Scans the bin, then the directed lot
- * (with the held-lot guard), then confirms the directed quantity. Confirmation writes one
- * `pick_line.confirmed` event to the edge outbox; the server finalizes the task inline when the
- * last line confirms. The picker never sends `pick_task.completed`.
+ * Story 3.16 (AC 4, 5, 6) & Story 3.17 (AC 3, 4): the pick-line execution screen.
+ * Scans the bin, then the directed lot (with the held-lot guard), then confirms the directed quantity
+ * or captures a short-pick exception or lot substitution.
  */
 
 export interface PickLineProps {
@@ -36,6 +39,7 @@ export interface PickLineProps {
   ready: boolean;
   checkHeldLot?: (lotNumber: string) => Promise<string | null>;
   onConfirm?: (input: PickLineConfirmInput) => Promise<string>;
+  onShortPick?: (input: PickLineShortPickInput) => Promise<string>;
   settlementOf?: (eventId: string) => Promise<'pending' | 'synced' | 'refused'>;
   refusalCodeOf?: (eventId: string) => Promise<string | null>;
   onComplete?: () => void;
@@ -47,6 +51,7 @@ export function PickLine({
   ready,
   checkHeldLot,
   onConfirm,
+  onShortPick,
   settlementOf,
   refusalCodeOf,
   onComplete,
@@ -61,21 +66,28 @@ export function PickLine({
   const [refusedCode, setRefusedCode] = useState('');
   const idempotencyKey = useRef('');
   const lastConfirmSignature = useRef('');
-  // Lines the device has confirmed this session (offline or before the server ack). The effective
+  // Lines the device has confirmed or short-picked this session (offline or before the server ack). The effective
   // line set merges these so the completion decision reflects device confirmation even when a
   // re-fetch returns the line pending (3.16: offline confirm still advances the pick list).
-  const confirmedRef = useRef(new Set<string>());
+  const settledStatusRef = useRef(new Map<string, 'confirmed' | 'short'>());
 
-  const effectiveLines = lines.map((line) =>
-    confirmedRef.current.has(line.pick_line_id) && line.status === 'pending'
-      ? { ...line, status: 'confirmed' as const }
-      : line,
-  );
+  const effectiveLines = lines.map((line) => {
+    const settled = settledStatusRef.current.get(line.pick_line_id);
+    if (settled && line.status === 'pending') {
+      return { ...line, status: settled };
+    }
+    return line;
+  });
   const current = nextLine(effectiveLines);
   const activeCount = effectiveLines.filter((line) => line.status !== 'cancelled').length;
-  const confirmedCount = effectiveLines.filter(
-    (line) => line.status === 'confirmed' || line.status === 'substituted',
-  ).length;
+  const confirmedCount = effectiveLines.filter((line) => lineSettled(line)).length;
+
+  const [isShort, setIsShort] = useState(false);
+  const [foundQuantity, setFoundQuantity] = useState('');
+  const [shortReason, setShortReason] = useState<PickShortReason | null>(null);
+  const [shortNote, setShortNote] = useState('');
+  const [substitutingLot, setSubstitutingLot] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState('');
 
   useEffect(() => {
     if (!online) return;
@@ -93,9 +105,15 @@ export function PickLine({
     setScanned('');
     setMessage(null);
     setRefusedCode('');
+    setIsShort(false);
+    setFoundQuantity('');
+    setShortReason(null);
+    setShortNote('');
+    setSubstitutingLot(null);
+    setOverrideReason('');
     idempotencyKey.current = '';
     lastConfirmSignature.current = '';
-    confirmedRef.current = new Set<string>();
+    settledStatusRef.current = new Map<string, 'confirmed' | 'short'>();
     setAnnouncement('');
     setView('loading');
     let cancelled = false;
@@ -110,11 +128,11 @@ export function PickLine({
           const code = typeof body['error_code'] === 'string' ? body['error_code'] : '';
           if (code === 'FUNCTION_ACCESS_DENIED' || code === 'LOCATION_ACCESS_DENIED') {
             setView('read-only');
-            setAnnouncement(errorMessage(code || 'FUNCTION_ACCESS_DENIED'));
-          } else {
-            setView('failed');
-            setAnnouncement(errorMessage(code || 'PICK_TASK_NOT_FOUND'));
+            setAnnouncement(errorMessage(code));
+            return;
           }
+          setView('failed');
+          setAnnouncement(t('floor.failed'));
           return;
         }
         const body = (await res.json()) as {
@@ -123,18 +141,13 @@ export function PickLine({
         };
         if (!body.task) {
           setView('failed');
-          setAnnouncement(t('floor.failed'));
           return;
         }
         setTask(body.task);
         setLines(body.lines ?? []);
-        setStep('bin');
         setView('ready');
       } catch {
-        if (!cancelled) {
-          setView('failed');
-          setAnnouncement(t('floor.needsConnection'));
-        }
+        if (!cancelled) setView('failed');
       }
     }
     void load();
@@ -148,6 +161,12 @@ export function PickLine({
     setStep('bin');
     setScanned('');
     setMessage(null);
+    setIsShort(false);
+    setFoundQuantity('');
+    setShortReason(null);
+    setShortNote('');
+    setSubstitutingLot(null);
+    setOverrideReason('');
   }, [current?.pick_line_id]);
 
   async function onScanBin(code: string): Promise<void> {
@@ -211,7 +230,7 @@ export function PickLine({
     if (!current || !onConfirm) return;
     // Idempotency: reuse the key across retries of the same line/quantity; mint fresh when it
     // changes (3.15 rule).
-    const signature = `${current.pick_line_id}|${current.directed_quantity}`;
+    const signature = `${current.pick_line_id}|${current.directed_quantity}|${substitutingLot ?? ''}|${overrideReason}`;
     if (lastConfirmSignature.current !== signature) {
       lastConfirmSignature.current = signature;
       idempotencyKey.current = crypto.randomUUID();
@@ -222,12 +241,46 @@ export function PickLine({
       const eventId = await onConfirm({
         pickTaskId: current.pick_task_id,
         pickLineId: current.pick_line_id,
-        confirmedLotId: current.directed_lot_id,
+        confirmedLotId: substitutingLot ? null : current.directed_lot_id,
         confirmedQuantity: current.directed_quantity,
+        directedLotNumber: substitutingLot ?? current.directed_lot_number,
+        idempotencyKey: idempotencyKey.current,
+        overrideReason: substitutingLot ? overrideReason.trim() : null,
+      });
+      await refreshAfterConfirm(eventId, 'confirmed');
+    } catch (error) {
+      setView('ready');
+      if (error instanceof Error && error.message === 'LOT_ON_HOLD') {
+        const lot = (substitutingLot ?? current.directed_lot_number) ?? '';
+        setAnnouncement(
+          t('floor.announce.onHold').replace('{lot}', lot).replace('{directed}', lot),
+        );
+      } else {
+        setAnnouncement(t('floor.needsConnection'));
+      }
+    }
+  }
+
+  async function submitShortPick(): Promise<void> {
+    if (!current || !onShortPick || !shortReason) return;
+    const signature = `short|${current.pick_line_id}|${foundQuantity}|${shortReason}|${shortNote}`;
+    if (lastConfirmSignature.current !== signature) {
+      lastConfirmSignature.current = signature;
+      idempotencyKey.current = crypto.randomUUID();
+    }
+    setView('submitting');
+    setRefusedCode('');
+    try {
+      const eventId = await onShortPick({
+        pickTaskId: current.pick_task_id,
+        pickLineId: current.pick_line_id,
+        foundQuantity,
+        reason: shortReason,
+        note: shortNote.trim() || null,
         directedLotNumber: current.directed_lot_number,
         idempotencyKey: idempotencyKey.current,
       });
-      await refreshAfterConfirm(eventId);
+      await refreshAfterConfirm(eventId, 'short');
     } catch (error) {
       setView('ready');
       if (error instanceof Error && error.message === 'LOT_ON_HOLD') {
@@ -241,7 +294,10 @@ export function PickLine({
     }
   }
 
-  async function refreshAfterConfirm(eventId: string): Promise<void> {
+  async function refreshAfterConfirm(
+    eventId: string,
+    settledKind: 'confirmed' | 'short' = 'confirmed',
+  ): Promise<void> {
     // Surface the sync outcome; the server-finalized lines then drive the next step or completion.
     let settlement: 'pending' | 'synced' | 'refused' = 'pending';
     if (settlementOf) {
@@ -263,7 +319,7 @@ export function PickLine({
         }
       }
       setRefusedCode(code ?? '');
-      if (current) confirmedRef.current.delete(current.pick_line_id);
+      if (current) settledStatusRef.current.delete(current.pick_line_id);
       lastConfirmSignature.current = '';
       idempotencyKey.current = '';
       setView('ready');
@@ -273,17 +329,19 @@ export function PickLine({
       await reload();
       return;
     }
-    if (current) confirmedRef.current.add(current.pick_line_id);
+    if (current) settledStatusRef.current.set(current.pick_line_id, settledKind);
     setAnnouncement(
       settlement === 'synced' ? t('floor.result.lineSynced') : t('floor.result.lineCaptured'),
     );
     const reloaded = await reload();
     if (reloaded) {
-      const effective = reloaded.lines.map((line) =>
-        confirmedRef.current.has(line.pick_line_id) && line.status === 'pending'
-          ? { ...line, status: 'confirmed' as const }
-          : line,
-      );
+      const effective = reloaded.lines.map((line) => {
+        const settled = settledStatusRef.current.get(line.pick_line_id);
+        if (settled && line.status === 'pending') {
+          return { ...line, status: settled };
+        }
+        return line;
+      });
       if (effective.every((line) => line.status !== 'pending')) onComplete?.();
     }
   }
@@ -352,16 +410,28 @@ export function PickLine({
 
   // Completion panel (AC 6): every non-cancelled line confirmed.
   if (taskComplete(effectiveLines) && !current) {
+    const shortCount = effectiveLines.filter((l) => l.status === 'short').length;
     return (
       <section className="edge-card floor-done" aria-live="polite">
         <h1>{t('floor.task.completedTitle')}</h1>
         <p>
           {t('floor.task.title').replace('{task}', task?.pick_task_id ?? taskId)} ·{' '}
-          {t('floor.task.order').replace('{order}', task?.so_number_ext ?? task?.dispatch_order_id ?? '')}
+          {t('floor.task.order').replace(
+            '{order}',
+            task?.so_number_ext ?? task?.dispatch_order_id ?? '',
+          )}
         </p>
         <span className="stores-pill">
           {t('floor.task.lines').replace('{total}', String(activeCount))}
         </span>
+        {shortCount > 0 ? (
+          <>
+            <span className="stores-pill warn">
+              {t('floor.task.shortCount').replace('{count}', String(shortCount))}
+            </span>
+            <p>{t('floor.task.shortNote')}</p>
+          </>
+        ) : null}
         <p>{t('floor.task.allPicked')}</p>
         <a className="primary-action" href="/floor/tasks">
           {t('floor.done.back')}
@@ -436,7 +506,7 @@ export function PickLine({
         </section>
       ) : null}
 
-      {step === 'lot' ? (
+      {step === 'lot' && !isShort ? (
         <section className="edge-card">
           <ScanField
             id="pick-lot-scan"
@@ -447,11 +517,49 @@ export function PickLine({
             onScan={(value) => void onScanLot(value)}
             onChange={setScanned}
           />
+          {message?.canSubstitute ? (
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => {
+                setSubstitutingLot(message.scannedLot ?? scanned);
+                setStep('qty');
+                setMessage(null);
+              }}
+            >
+              {t('floor.useLotInstead')}
+            </button>
+          ) : null}
+          <button
+            className="secondary-action"
+            type="button"
+            onClick={() => {
+              setIsShort(true);
+              setFoundQuantity('0');
+              setShortReason(null);
+              setShortNote('');
+            }}
+          >
+            {t('floor.shortPick')}
+          </button>
         </section>
       ) : null}
 
-      {step === 'qty' ? (
+      {step === 'qty' && !isShort ? (
         <section className="edge-card">
+          {substitutingLot ? (
+            <div className="stores-field">
+              <label htmlFor="override-reason">{t('floor.substitute.reasonLabel')}</label>
+              <input
+                id="override-reason"
+                className="scan-input"
+                type="text"
+                value={overrideReason}
+                placeholder={t('floor.substitute.reasonPlaceholder')}
+                onChange={(e) => setOverrideReason(e.target.value)}
+              />
+            </div>
+          ) : null}
           <div className="qty">
             <label htmlFor="pick-qty">{t('floor.qty.label')}</label>
             <input
@@ -463,21 +571,141 @@ export function PickLine({
               value={current.directed_quantity}
             />
             <span className="of">
-              {t('floor.qty.of').replace('{qty}', current.directed_quantity).replace('{uom}', current.uom ?? '')}
+              {t('floor.qty.of')
+                .replace('{qty}', current.directed_quantity)
+                .replace('{uom}', current.uom ?? '')}
             </span>
           </div>
           <button
             className="primary-action"
             type="button"
-            disabled={view === 'submitting' || !quantityReady(current.directed_quantity, current)}
+            disabled={
+              view === 'submitting' ||
+              !quantityReady(current.directed_quantity, current) ||
+              (substitutingLot !== null && overrideReason.trim().length === 0)
+            }
             onClick={() => void confirm()}
           >
-            {t('floor.confirm').replace('{qty}', current.directed_quantity)}
+            {substitutingLot
+              ? t('floor.substitute.confirm')
+              : t('floor.confirm').replace('{qty}', current.directed_quantity)}
           </button>
-          <button className="secondary-action" type="button" disabled>
+          <button
+            className="secondary-action"
+            type="button"
+            onClick={() => {
+              setIsShort(true);
+              setFoundQuantity(current.directed_quantity);
+              setShortReason(null);
+              setShortNote('');
+            }}
+          >
             {t('floor.shortPick')}
           </button>
-          <p>{t('floor.shortPickDisabled')}</p>
+        </section>
+      ) : null}
+
+      {isShort ? (
+        <section className="edge-card">
+          <div className="qty">
+            <label htmlFor="short-pick-found">{t('floor.qty.label')}</label>
+<input
+id="short-pick-found"
+className="scan-input"
+type="number"
+inputMode="numeric"
+min="0"
+max={current.directed_quantity}
+value={foundQuantity}
+              onChange={(e) => {
+                const val = e.target.value;
+                setFoundQuantity(val);
+                if (parseFloat(val) >= parseFloat(current.directed_quantity)) {
+                  setIsShort(false);
+                  setShortReason(null);
+                  setShortNote('');
+                }
+              }}
+            />
+            <span className="of">
+              {t('floor.qty.of')
+                .replace('{qty}', current.directed_quantity)
+                .replace('{uom}', current.uom ?? '')}
+            </span>
+          </div>
+
+          <p className="stores-field-label">{t('floor.short.reasonLabel')}</p>
+          <div className="card-grid">
+            <button
+              type="button"
+              className={shortReason === 'BIN_EMPTY' ? 'primary-action' : 'secondary-action'}
+              onClick={() => {
+                setShortReason('BIN_EMPTY');
+                setFoundQuantity('0');
+              }}
+            >
+              {t('floor.short.binEmpty')}
+            </button>
+            <button
+              type="button"
+              className={shortReason === 'LESS_IN_BIN' ? 'primary-action' : 'secondary-action'}
+              onClick={() => setShortReason('LESS_IN_BIN')}
+            >
+              {t('floor.short.lessInBin')}
+            </button>
+            <button
+              type="button"
+              className={shortReason === 'DAMAGED' ? 'primary-action' : 'secondary-action'}
+              onClick={() => setShortReason('DAMAGED')}
+            >
+              {t('floor.short.damaged')}
+            </button>
+            <button
+              type="button"
+              className={shortReason === 'OTHER' ? 'primary-action' : 'secondary-action'}
+              onClick={() => setShortReason('OTHER')}
+            >
+              {t('floor.short.other')}
+            </button>
+          </div>
+
+          {shortReason === 'DAMAGED' ? (
+            <p className="stores-field-hint">{t('floor.short.damagedHint')}</p>
+          ) : null}
+
+          {shortReason === 'OTHER' ? (
+            <div className="stores-field">
+              <label htmlFor="short-pick-note">{t('floor.short.noteLabel')}</label>
+              <input
+                id="short-pick-note"
+                className="scan-input"
+                type="text"
+                maxLength={200}
+                value={shortNote}
+                placeholder={t('floor.short.notePlaceholder')}
+                onChange={(e) => setShortNote(e.target.value)}
+              />
+            </div>
+          ) : null}
+
+          {(() => {
+            const shortValidation = evaluateShortPick(foundQuantity, shortReason, shortNote, current);
+            return (
+              <>
+                <p className="stores-status">{t(shortValidation.footerKey as MessageKey)}</p>
+                <button
+                  className="primary-action"
+                  type="button"
+                  disabled={view === 'submitting' || !shortValidation.ready}
+                  onClick={() => void submitShortPick()}
+                >
+                  {t('floor.short.confirmPrimary')
+                    .replace('{found}', foundQuantity)
+                    .replace('{directed}', current.directed_quantity)}
+                </button>
+              </>
+            );
+          })()}
         </section>
       ) : null}
 

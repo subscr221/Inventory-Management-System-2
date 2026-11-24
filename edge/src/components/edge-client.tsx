@@ -12,7 +12,12 @@ import { createGateEnteredEvent, createWeighbridgeRecordedEvent } from '../captu
 import type { ReceiptRow, ReceiptSubmission } from '../capture/receiving';
 import type { DoneRow } from './stores-inbox-model';
 import type { ReceiptSubmitResult } from './stores-accept';
-import { confirmPayload, type PickLineConfirmInput } from './pick-line-model';
+import {
+  confirmPayload,
+  shortPickPayload,
+  type PickLineConfirmInput,
+  type PickLineShortPickInput,
+} from './pick-line-model';
 import type {
   GateSubmitInput,
   GateSubmitResult,
@@ -1136,6 +1141,48 @@ export function EdgeClient({
           pickLineId: input.pickLineId,
           confirmedLotId: input.confirmedLotId,
           confirmedQuantity: input.confirmedQuantity,
+          directedLotNumber: input.directedLotNumber,
+          ...(input.overrideReason !== undefined ? { overrideReason: input.overrideReason } : {}),
+        }),
+        userId: state.userId,
+        role: state.role,
+        siteId: state.siteId,
+        correlationId: crypto.randomUUID(),
+        deviceId: deviceId(),
+        idempotencyKey: input.idempotencyKey,
+        occurredAt: new Date().toISOString(),
+        captureMethod: 'AUTO',
+      });
+      await insertOwnCapture(db, event);
+      await refreshLocalState(db);
+      return event.event_id;
+    },
+    [refreshLocalState, requireReady, state.role, state.siteId, state.userId],
+  );
+
+  // Story 3.17 (Task 6.3): short-pick a pick line by writing one `pick_line.short_picked` event
+  // (stream warehouse) to the edge outbox. capture_method is always PWA.
+  const shortPickLine = useCallback(
+    async (input: PickLineShortPickInput): Promise<string> => {
+      const db = requireReady();
+      if (input.directedLotNumber) {
+        try {
+          await assertLotNotHeld(db, input.directedLotNumber);
+        } catch {
+          throw new Error('LOT_ON_HOLD');
+        }
+      }
+      const event = createOutboxEvent({
+        eventId: crypto.randomUUID(),
+        streamType: 'warehouse',
+        streamId: input.pickTaskId,
+        eventType: 'pick_line.short_picked',
+        payload: shortPickPayload({
+          pickTaskId: input.pickTaskId,
+          pickLineId: input.pickLineId,
+          foundQuantity: input.foundQuantity,
+          reason: input.reason,
+          ...(input.note !== undefined ? { note: input.note } : {}),
         }),
         userId: state.userId,
         role: state.role,
@@ -1341,6 +1388,7 @@ export function EdgeClient({
         userId: state.userId,
         checkHeldLot,
         onConfirmPickLine: confirmPickLine,
+        onShortPickLine: shortPickLine,
         settlementOf: pickSettlement,
         refusalCodeOf: pickRefusalCode,
       }}

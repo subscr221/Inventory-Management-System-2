@@ -22,6 +22,7 @@ import {
   allocateDamageReportNumber,
   getDamageReportById,
   getDamageReportByGrnLine,
+  getDamageReportByPickLine,
   insertDamageAction,
   insertDamageReport,
   updateDamageReport,
@@ -1924,24 +1925,135 @@ export async function openReceiptDamageCase(
     },
     client,
   );
+    await insertDamageAction(
+      {
+        report_id: reportId,
+        action: 'reported',
+        actor_user_id: input.receivedBy,
+        actor_role: input.envelope.metadata.actor.role,
+        at: occurredAt,
+        detail: {
+          source: 'receipt',
+          grn_line_id: input.grnLineId,
+          line_condition: input.lineCondition,
+          quantity: input.quantity,
+        },
+        source_event_id: input.eventId,
+      },
+      client,
+    );
+  }
+
+/**
+ * Story 3.17 Task 4.1: opens a damage report for a short-picked line whose reason is DAMAGED.
+ * Photo-less (photo_attachment_id is null); held in quarantine zone ZONE-QC-HOLD at the line's site
+ * with physical_state = 'in_qc_hold'. Fails closed with PICK_SHORT_QC_HOLD_MISSING (409) if
+ * the site has no active ZONE-QC-HOLD quarantine location.
+ */
+export async function openPickShortDamageCase(
+  input: {
+    envelope: EventEnvelope;
+    eventId: string;
+    pickLineId: string;
+    pickTaskId: string;
+    siteId: string;
+    pickerUserId: string;
+    sku: string;
+    lotNumber: string | null;
+    quantity: string;
+    uom: string;
+    qcHoldLocation?: { location_id: string; location_code: string };
+    note: string | null;
+  },
+  client: PoolClient,
+): Promise<{ location_id: string; location_code: string } | null> {
+  // Idempotent replay: if a damage report already exists for this pick line, do nothing.
+  if (await getDamageReportByPickLine(input.pickLineId, client)) return null;
+
+  let qcHoldLocation = input.qcHoldLocation;
+  if (!qcHoldLocation) {
+    const qcHoldRes = await client.query(
+      `SELECT location_id, location_code
+       FROM location_register
+      WHERE site_id = $1
+        AND UPPER(location_code) = UPPER($2)
+        AND status = 'active'
+        AND quarantine = true
+      LIMIT 1`,
+      [input.siteId, QC_HOLD_ZONE_CODE],
+    );
+    if (qcHoldRes.rows.length === 0) {
+      throw new AppError(
+        409,
+        'PICK_SHORT_QC_HOLD_MISSING',
+        'Quarantine zone ZONE-QC-HOLD is missing or inactive at this site',
+        { site_id: input.siteId },
+      );
+    }
+    qcHoldLocation = qcHoldRes.rows[0]! as { location_id: string; location_code: string };
+  }
+
+  const occurredAt = input.envelope.metadata.occurred_at ?? new Date().toISOString();
+  const reportId = randomUUID();
+  const year = toIstCalendarDate(new Date(occurredAt)).slice(0, 4);
+  const reportNumber = await allocateDamageReportNumber(year, client);
+
+  await insertDamageReport(
+    {
+      report_id: reportId,
+      report_number: reportNumber,
+      site_id: input.siteId,
+      reporter_user_id: input.pickerUserId,
+      reported_at: occurredAt,
+      source_event_id: input.eventId,
+      source: 'pick',
+      source_grn_line_id: null,
+      source_pick_line_id: input.pickLineId,
+      source_reason_code: null,
+      source_photo_ref: null,
+      sku: input.sku,
+      lot_number: input.lotNumber,
+      quantity: input.quantity,
+      uom: input.uom,
+      found_at: 'stock',
+      bin_location_id: qcHoldLocation.location_id,
+      bin_code: qcHoldLocation.location_code,
+      reason_code: 'DAMAGED_COMPONENT',
+      reason_note: null,
+      photo_attachment_id: null,
+      hold_mode: 'quarantined',
+      hold_note: null,
+      quarantine_location_id: qcHoldLocation.location_id,
+      physical_state: 'in_qc_hold',
+      whole_lot_requested: false,
+      replacement_indent_id: null,
+    },
+    client,
+  );
+
   await insertDamageAction(
     {
       report_id: reportId,
       action: 'reported',
-      actor_user_id: input.receivedBy,
+      actor_user_id: input.pickerUserId,
       actor_role: input.envelope.metadata.actor.role,
       at: occurredAt,
       detail: {
-        source: 'receipt',
-        grn_line_id: input.grnLineId,
-        line_condition: input.lineCondition,
+        source: 'pick',
+        pick_line_id: input.pickLineId,
+        pick_task_id: input.pickTaskId,
+        reason: 'DAMAGED',
         quantity: input.quantity,
       },
       source_event_id: input.eventId,
     },
     client,
   );
+
+  return qcHoldLocation;
 }
+
+export const openPickDamageCase = openPickShortDamageCase;
 
 /**
  * AC 9 (closes deferred-work L1157): a held putaway of a damaged or rejected GRN line is released

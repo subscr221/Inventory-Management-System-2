@@ -57,12 +57,39 @@ test('the stepper exposes the active step', async ({ page }) => {
   await provisionFloor(page, { task: 'one-line' });
   await page.goto('/floor/tasks?task=77777777-7777-4777-8777-777777777781');
 
-  const steps = page.getByLabel('Pick steps');
-  await expect(steps).toContainText('1 Scan bin');
-  await expect(steps).toContainText('2 Scan lot');
-  await expect(steps).toContainText('3 Confirm qty');
-  await expect(page.getByRole('listitem').filter({ hasText: '1 Scan bin' })).toHaveAttribute(
-    'aria-current',
-    'step',
-  );
+const steps = page.getByLabel('Pick steps');
+await expect(steps).toContainText('1 Scan bin');
+await expect(steps).toContainText('2 Scan lot');
+await expect(steps).toContainText('3 Confirm qty');
+await expect(page.getByRole('listitem').filter({ hasText: '1 Scan bin' })).toHaveAttribute(
+  'aria-current',
+  'step',
+);
+});
+
+test('short pick records shortfall, shows completion panel with short pill and re-pick note', async ({
+  page,
+}) => {
+  await provisionFloor(page, { task: 'one-line' });
+  await page.goto('/floor/tasks?task=77777777-7777-4777-8777-777777777781');
+
+  const bin = page.getByLabel('Scan or type the bin label');
+  await bin.fill('BIN-F-01');
+  await bin.press('Enter');
+
+  const shortBtn = page.getByRole('button', { name: 'Short pick' });
+  await expect(shortBtn).toBeVisible();
+  await shortBtn.click();
+
+  // Short pick form is shown
+  await expect(page.getByText('Reason for short pick')).toBeVisible();
+  await page.getByRole('button', { name: 'Bin empty' }).click();
+
+  const confirmShort = page.getByRole('button', { name: 'Confirm short pick - 0 of 10.000' });
+  await expect(confirmShort).toBeVisible();
+  await confirmShort.click();
+
+  await expect(page.getByRole('heading', { name: 'Pick complete' })).toBeVisible();
+  await expect(page.getByText('1 short')).toBeVisible();
+  await expect(page.getByText('Short lines go back to planning for a re-pick.')).toBeVisible();
 });

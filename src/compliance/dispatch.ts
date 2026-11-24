@@ -230,14 +230,14 @@ export async function applyDispatchPackedProjection(
         `Item "${p.sku}" is lot-controlled; a packing record must name a lot`,
         { sku: p.sku },
       );
-    const lotLessPick = await client.query(
-      `SELECT 1 FROM pick_line pl
-        WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2
-          AND pl.confirmed_lot_id IS NULL
-          AND pl.status IN ('confirmed', 'substituted')
-        LIMIT 1`,
-      [p.dispatch_order_id, p.sku],
-    );
+      const lotLessPick = await client.query(
+        `SELECT 1 FROM pick_line pl
+         WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2
+           AND pl.confirmed_lot_id IS NULL
+           AND pl.status IN ('confirmed', 'substituted', 'short')
+         LIMIT 1`,
+        [p.dispatch_order_id, p.sku],
+      );
     if (lotLessPick.rows.length === 0)
       reject(
         'DISPATCH_PACKED_INVALID_PAYLOAD',
@@ -251,15 +251,15 @@ export async function applyDispatchPackedProjection(
   // dispatch order may be packed across multiple lines/events (one per SKU/lot); the spec's
   // "packed_qty must match total confirmed" check applies to the sum across the whole order, not
   // to each individual line in isolation.
-  const qtyResult = await client.query(
-    `SELECT COALESCE(SUM(pl.confirmed_quantity)::numeric, 0) AS total_confirmed
-     FROM pick_line pl
-     WHERE pl.dispatch_order_line_id IN (
-       SELECT id FROM erp_sales_order WHERE id = $1
-     )
-     AND pl.status IN ('confirmed', 'substituted')`,
-    [p.dispatch_order_id],
-  );
+      const qtyResult = await client.query(
+        `SELECT COALESCE(SUM(pl.confirmed_quantity)::numeric, 0) AS total_confirmed
+         FROM pick_line pl
+         WHERE pl.dispatch_order_line_id IN (
+           SELECT id FROM erp_sales_order WHERE id = $1
+         )
+         AND pl.status IN ('confirmed', 'substituted', 'short')`,
+        [p.dispatch_order_id],
+      );
   const totalConfirmed = qtyResult.rows[0].total_confirmed;
 
   const packedResult = await client.query(
@@ -282,17 +282,17 @@ export async function applyDispatchPackedProjection(
   // uses - counting what is already packed at that grain. A SKU or lot the order never picked has a
   // picked quantity of zero, so it is refused here too, and the dispatch decrement never goes
   // looking for a balance the pick did not touch.
-  const grainResult = await client.query(
-    `SELECT
-       (SELECT COALESCE(SUM(pl.confirmed_quantity), 0) FROM pick_line pl
-         WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2
-           AND pl.confirmed_lot_id IS NOT DISTINCT FROM $3::uuid
-           AND pl.status IN ('confirmed', 'substituted'))::text AS picked_qty,
-       (SELECT COALESCE(SUM(pr.packed_qty), 0) FROM packing_record pr
-         WHERE pr.dispatch_order_id = $1 AND pr.sku = $2
-           AND pr.lot_id IS NOT DISTINCT FROM $3::uuid)::text AS already_packed_qty`,
-    [p.dispatch_order_id, p.sku, p.lot_id],
-  );
+      const grainResult = await client.query(
+        `SELECT
+           (SELECT COALESCE(SUM(pl.confirmed_quantity), 0) FROM pick_line pl
+             WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2
+               AND pl.confirmed_lot_id IS NOT DISTINCT FROM $3::uuid
+               AND pl.status IN ('confirmed', 'substituted', 'short'))::text AS picked_qty,
+           (SELECT COALESCE(SUM(pr.packed_qty), 0) FROM packing_record pr
+             WHERE pr.dispatch_order_id = $1 AND pr.sku = $2
+               AND pr.lot_id IS NOT DISTINCT FROM $3::uuid)::text AS already_packed_qty`,
+        [p.dispatch_order_id, p.sku, p.lot_id],
+      );
   const grain = grainResult.rows[0] as Record<string, string>;
   if (
     (toScaled3(grain['already_packed_qty']!) ?? 0n) + (toScaled3(p.packed_qty) ?? 0n) >
@@ -675,7 +675,7 @@ export async function applyDispatchDispatchedProjection(
          FROM pick_line pl
         WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2
           AND pl.confirmed_lot_id IS NOT DISTINCT FROM $3::uuid
-          AND pl.status IN ('confirmed', 'substituted')
+          AND pl.status IN ('confirmed', 'substituted', 'short')
         GROUP BY 1 ORDER BY 1`,
       [p.dispatch_order_id, packed['sku'], packed['lot_id']],
     );

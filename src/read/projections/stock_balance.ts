@@ -807,16 +807,68 @@ export async function applyStockPick(input: StockPickInput, client: PoolClient):
         AND allocated >= $1::numeric`,
     [quantity, input.sku, input.location_id, lotId, stockClass, input.lot_less === true],
   );
+    if ((result.rowCount ?? 0) === 0) {
+      throw new AppError(
+        409,
+        'INSUFFICIENT_STOCK_FOR_PICK',
+        'No allocation covers this pick at the given bin and lot',
+        {
+          sku: input.sku,
+          location_id: input.location_id,
+          ...(lotId !== null ? { lot_id: lotId } : {}),
+          stock_class: stockClass,
+          requested_quantity: quantity,
+        },
+      );
+    }
+  }
+
+/**
+ * Story 3.17 (Task 3.5): relieves the allocated reservation for the shortfall portion of a
+ * short-picked line (directed_quantity - found_quantity) at a single (sku, location, lot) grain
+ * without moving to picked. Scoped to allocated >= shortfallQty with rowCount check.
+ */
+export async function applyStockAllocationRelief(
+  siteId: string | null,
+  sku: string,
+  lotId: string | null,
+  binLocationId: string,
+  shortfallQty: string | number,
+  client: PoolClient,
+): Promise<void> {
+  const quantity = String(shortfallQty);
+  let lotNumber = lotId;
+  if (lotId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(lotId)) {
+    const lotRes = await client.query(
+      `SELECT lot_number FROM lot_master WHERE lot_id = $1::uuid AND sku = $2`,
+      [lotId, sku],
+    );
+    if (lotRes.rows.length > 0) {
+      lotNumber = lotRes.rows[0]!.lot_number as string;
+    }
+  }
+
+  const result = await client.query(
+    `UPDATE stock_balance
+        SET allocated = allocated - $1::numeric,
+            updated_at = now()
+      WHERE sku = $2
+        AND location_id = $3
+        AND stock_class = 'owned'
+        AND CASE WHEN $4::text IS NULL THEN lot_id IS NULL ELSE lot_id = $4 END
+        AND allocated >= $1::numeric`,
+    [quantity, sku, binLocationId, lotNumber],
+  );
   if ((result.rowCount ?? 0) === 0) {
     throw new AppError(
       409,
       'INSUFFICIENT_STOCK_FOR_PICK',
-      'No allocation covers this pick at the given bin and lot',
+      'No allocation to release at this bin and lot',
       {
-        sku: input.sku,
-        location_id: input.location_id,
-        ...(lotId !== null ? { lot_id: lotId } : {}),
-        stock_class: stockClass,
+        site_id: siteId,
+        sku,
+        location_id: binLocationId,
+        lot_id: lotNumber,
         requested_quantity: quantity,
       },
     );

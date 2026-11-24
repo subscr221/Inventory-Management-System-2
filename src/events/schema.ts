@@ -639,6 +639,12 @@ export interface PickLineConfirmedPayload {
   pick_line_id: string;
   /** null confirms a lot-less line (Pilot B3); it must match a lot-less directed line. */
   confirmed_lot_id: string | null;
+  /**
+   * Story 3.17 (Task 6.5): the edge has no lot_master replica, so a lot substitution sends the
+   * scanned lot number here (with confirmed_lot_id null) and the server resolves it to a lot UUID
+   * scoped to the line's SKU. Ignored when confirmed_lot_id is set.
+   */
+  confirmed_lot_number?: string | null;
   confirmed_quantity: number | string;
   override_reason?: string | null;
   capture_method: 'PWA' | 'PAPER';
@@ -651,6 +657,27 @@ export interface PickLineConfirmedPayload {
 export interface PickLineConfirmedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'pick_line.confirmed';
   payload: PickLineConfirmedPayload;
+}
+
+// Story 3.17: Short pick exception recording (AC 1).
+export type PickShortReasonCode = 'BIN_EMPTY' | 'LESS_IN_BIN' | 'DAMAGED' | 'OTHER';
+
+export interface PickLineShortPickedPayload {
+  pick_task_id: string;
+  pick_line_id: string;
+  found_quantity: number | string;
+  reason: PickShortReasonCode;
+  note?: string | null;
+  capture_method: 'PWA' | 'PAPER';
+  /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
+  short_picked_by?: string;
+  /** Server-set; never trusted from the client. */
+  short_picked_at?: string;
+}
+
+export interface PickLineShortPickedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'pick_line.short_picked';
+  payload: PickLineShortPickedPayload;
 }
 
 // Fires when ALL pick lines for a task are confirmed (AC7). completed_by/completed_at are
@@ -6132,6 +6159,10 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'pick_line.confirmed': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'pick_line.short_picked': {
     streamType: 'warehouse',
     requiresBusinessStream: false,
   },

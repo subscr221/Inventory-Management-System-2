@@ -409,12 +409,25 @@ const EXPECTED = [
       'idx_pick_task_priority_status',
     ],
   },
-  {
-    canonical: 'read/projections/pick_line.sql',
-    table: 'pick_line',
-    constraints: ['chk_pick_line_status', 'chk_pick_line_capture_method'],
-    indexes: ['idx_pick_line_task', 'idx_pick_line_location_status', 'idx_pick_line_directed_lot'],
-  },
+    {
+      canonical: 'read/projections/pick_line.sql',
+      table: 'pick_line',
+      constraints: ['chk_pick_line_status', 'chk_pick_line_capture_method'],
+      indexes: ['idx_pick_line_task', 'idx_pick_line_location_status', 'idx_pick_line_directed_lot'],
+    },
+    {
+      canonical: 'read/projections/pick_shortfall.sql',
+      table: 'pick_shortfall',
+      constraints: [
+        'chk_pick_shortfall_reason',
+        'chk_pick_shortfall_found_quantity',
+        'chk_pick_shortfall_found_lt_directed',
+        'chk_pick_shortfall_bin_empty',
+        'chk_pick_shortfall_other_note',
+      ],
+      indexes: ['idx_pick_shortfall_task', 'idx_pick_shortfall_source_event'],
+      appUserGrant: 'INSERT, SELECT',
+    },
   {
     canonical: 'read/projections/pick_task.sql',
     table: 'dispatch_order_status',
@@ -2314,20 +2327,21 @@ const EXPECTED = [
   },
   // Story 8.9: the damage case (inline two-way pairing CHECKs, no guarded DO blocks: a new table),
   // its append-only action history, and the photo store (append-only; bytes never rewritten).
-  {
-    canonical: 'read/projections/damage_report.sql',
-    table: 'damage_report',
-    constraints: [] as string[],
-    indexes: [
-      'uq_damage_report_number',
-      'uq_damage_report_source_grn_line',
-      'idx_damage_report_site_status',
-      'idx_damage_report_reporter',
-      'idx_damage_report_held_sku',
-      'idx_damage_report_replacement_indent',
-    ],
-    appUserGrant: 'INSERT, SELECT, UPDATE',
-  },
+    {
+      canonical: 'read/projections/damage_report.sql',
+      table: 'damage_report',
+      constraints: ['chk_damage_report_source', 'chk_damage_report_source_pick_pairing'],
+      indexes: [
+        'uq_damage_report_number',
+        'uq_damage_report_source_grn_line',
+        'uq_damage_report_source_pick_line',
+        'idx_damage_report_site_status',
+        'idx_damage_report_reporter',
+        'idx_damage_report_held_sku',
+        'idx_damage_report_replacement_indent',
+      ],
+      appUserGrant: 'INSERT, SELECT, UPDATE',
+    },
   {
     canonical: 'read/projections/damage_report.sql',
     table: 'damage_report_action',

@@ -4,11 +4,13 @@ import { randomUUID } from 'node:crypto';
 import {
   assertPickTaskCreatedShape,
   assertPickLineConfirmedShape,
+  assertPickLineShortPickedShape,
   assertPickTaskCompletedShape,
 } from '../../src/compliance/pick.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
+  PickLineShortPickedEnvelope,
   PickTaskCompletedEnvelope,
 } from '../../src/events/schema.js';
 import { AppError } from '../../src/middleware/error.js';
@@ -77,6 +79,23 @@ function lineConfirmed(overrides: Record<string, unknown> = {}): PickLineConfirm
       ...overrides,
     },
   } as PickLineConfirmedEnvelope;
+}
+
+function lineShortPicked(overrides: Record<string, unknown> = {}): PickLineShortPickedEnvelope {
+  return {
+    stream_type: 'warehouse',
+    stream_id: randomUUID(),
+    event_type: 'pick_line.short_picked',
+    metadata: metadata(),
+    payload: {
+      pick_task_id: randomUUID(),
+      pick_line_id: randomUUID(),
+      found_quantity: '5.000',
+      reason: 'LESS_IN_BIN',
+      capture_method: 'PWA',
+      ...overrides,
+    },
+  } as PickLineShortPickedEnvelope;
 }
 
 function taskCompleted(overrides: Record<string, unknown> = {}): PickTaskCompletedEnvelope {
@@ -221,6 +240,20 @@ describe('Story 3.6: pick event envelope validation', () => {
       () => assertPickLineConfirmedShape(lineConfirmed({ capture_method: 'SMS' })),
       'capture_method',
     );
+    // Story 3.17 (Task 6.5): substitution-by-number is valid with confirmed_lot_id null.
+    assert.doesNotThrow(() =>
+      assertPickLineConfirmedShape(
+        lineConfirmed({ confirmed_lot_id: null, confirmed_lot_number: 'LOT-SUB-2' }),
+      ),
+    );
+    expectInvalid(
+      () => assertPickLineConfirmedShape(lineConfirmed({ confirmed_lot_number: '   ' })),
+      'confirmed_lot_number',
+    );
+    expectInvalid(
+      () => assertPickLineConfirmedShape(lineConfirmed({ confirmed_lot_number: 'x'.repeat(65) })),
+      'confirmed_lot_number',
+    );
   });
 
   it('pick_task.completed requires a pick_task_id', () => {
@@ -231,6 +264,76 @@ describe('Story 3.6: pick event envelope validation', () => {
     expectInvalid(
       () => assertPickTaskCompletedShape(taskCompleted({ pick_task_id: 'not-a-uuid' })),
       'malformed pick_task_id',
+    );
+  });
+
+  it('pick_line.short_picked validates valid and invalid shapes', () => {
+    // Valid cases
+    assert.doesNotThrow(() => assertPickLineShortPickedShape(lineShortPicked()));
+    assert.doesNotThrow(
+      () => assertPickLineShortPickedShape(lineShortPicked({ found_quantity: '0.000', reason: 'BIN_EMPTY' })),
+    );
+    assert.doesNotThrow(
+      () =>
+        assertPickLineShortPickedShape(
+          lineShortPicked({ found_quantity: 0, reason: 'BIN_EMPTY', capture_method: 'PAPER' }),
+        ),
+    );
+    assert.doesNotThrow(
+      () =>
+        assertPickLineShortPickedShape(
+          lineShortPicked({ reason: 'OTHER', note: 'Something unusual happened at bin' }),
+        ),
+    );
+
+    // Invalid identifiers
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ pick_task_id: undefined })),
+      'missing pick_task_id',
+    );
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ pick_task_id: 'invalid-uuid' })),
+      'invalid pick_task_id',
+    );
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ pick_line_id: undefined })),
+      'missing pick_line_id',
+    );
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ pick_line_id: 'invalid-uuid' })),
+      'invalid pick_line_id',
+    );
+
+    // Invalid found_quantity
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ found_quantity: '-1.000' })),
+      'negative found_quantity',
+    );
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ found_quantity: 'abc' })),
+      'non-numeric found_quantity',
+    );
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ found_quantity: '1.2345' })),
+      'more than 3 decimals',
+    );
+
+    // Invalid reason
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ reason: 'UNKNOWN_REASON' })),
+      'unknown reason',
+    );
+
+    // Invalid capture_method
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ capture_method: 'EMAIL' })),
+      'invalid capture_method',
+    );
+
+    // Note too long (> 200 chars)
+    expectInvalid(
+      () => assertPickLineShortPickedShape(lineShortPicked({ note: 'a'.repeat(201) })),
+      'note too long',
     );
   });
 });

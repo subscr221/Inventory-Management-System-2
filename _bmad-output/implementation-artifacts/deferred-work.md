@@ -3194,3 +3194,26 @@ evidence: review pass 2 2026-11-22 (Blind Hunter) low finding; the incomplete-ch
 - source_spec: `spec-10-2-randd-requisition-budget-check-and-issue-types.md`
   summary: Loaned equipment drops out of budget commitment: `committedRdValue` subtracts `issued_quantity` for every issue type but equipment custody writes no cost row, so `committed` decreases while `actual` never reflects the loaned value.
   evidence: code review 2026-11-23 (Blind Hunter) medium finding on rd_requisition.ts:294 + rd-issue.ts custody branch.
+
+## Deferred from: story-3.17 (2026-11-24)
+
+- source_spec: `3-17-short-pick-exception-seam-and-tiles.md`
+  summary: Closed the Story 3.6 data-loss path by introducing explicit `pick_line.short_picked` exception seam and recording `pick_shortfall` records instead of silently vanishing unpicked remainder.
+  status: resolved
+  evidence: Story 3.17 implementation; `applyPickLineShortPickedProjection` and `pick_shortfall` table.
+
+- source_spec: `3-17-short-pick-exception-seam-and-tiles.md`
+  summary: `BIN_EMPTY` and `LESS_IN_BIN` release allocation and do not post a stock adjustment, so the system can show available quantity in `stock_balance` that is not physically present in the bin until a cycle count or adjustment event is posted.
+  status: open
+  evidence: Story 3.17 binding stock rules (Table 1); inventory reconciliation/cycle count is needed to adjust on_hand balance.
+
+- source_spec: `3-17-short-pick-exception-seam-and-tiles.md`
+  summary: `planner1@ancorlabs.org` has production write and inventory read only, with no `notification` read grant; the planner shortfall notification row is inserted into `notifications` but planner1 cannot access `GET /api/v1/notifications` until read grants are extended.
+  status: open
+  evidence: Story 3.17 Task 5.2 / roles.json:444-469.
+
+## Deferred from: code review of 3-17-short-pick-exception-seam-and-tiles (2026-11-24)
+
+- Migration fails if existing `pick_line` rows have invalid status values — the DROP-then-ADD constraint in `pick_line.sql` validates all rows; pre-existing pattern used across migrations.
+- Planner notification undeliverable — `planner1` has no `notification` read grant; already tracked above.
+

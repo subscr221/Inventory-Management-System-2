@@ -22,20 +22,15 @@ CREATE TABLE IF NOT EXISTS pick_line (
   confirmed_at           TIMESTAMPTZ,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_pick_line_status CHECK (status IN ('pending', 'confirmed', 'cancelled', 'substituted')),
+  CONSTRAINT chk_pick_line_status CHECK (status IN ('pending', 'confirmed', 'cancelled', 'substituted', 'short')),
   CONSTRAINT chk_pick_line_capture_method CHECK (capture_method IS NULL OR capture_method IN ('PWA', 'PAPER'))
 );
 
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_pick_line_status'
-      AND conrelid = 'pick_line'::regclass
-  ) THEN
-    ALTER TABLE pick_line
-      ADD CONSTRAINT chk_pick_line_status CHECK (status IN ('pending', 'confirmed', 'cancelled', 'substituted'));
-  END IF;
+  ALTER TABLE pick_line DROP CONSTRAINT IF EXISTS chk_pick_line_status;
+  ALTER TABLE pick_line
+    ADD CONSTRAINT chk_pick_line_status CHECK (status IN ('pending', 'confirmed', 'cancelled', 'substituted', 'short'));
 END $$;
 
 DO $$

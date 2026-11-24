@@ -23,8 +23,9 @@ export interface DamageReportRow {
   reporter_user_id: string;
   reported_at: string;
   source_event_id: string;
-  source: 'report' | 'receipt';
+  source: 'report' | 'receipt' | 'pick';
   source_grn_line_id: string | null;
+  source_pick_line_id: string | null;
   source_reason_code: string | null;
   source_photo_ref: string | null;
   sku: string;
@@ -167,6 +168,20 @@ export async function getDamageReportByGrnLine(
   return result.rows.length > 0 ? mapDamageRow(result.rows[0]!) : null;
 }
 
+export async function getDamageReportByPickLine(
+  pickLineId: string,
+  client?: PoolClient,
+  lock: 'none' | 'share' = 'none',
+): Promise<DamageReportRow | null> {
+  if (!UUID_REGEX.test(pickLineId)) return null;
+  const lockClause = lock === 'share' ? ' FOR SHARE' : '';
+  const result = await runner(client).query(
+    `SELECT ${SELECT_COLUMNS} FROM damage_report d WHERE d.source_pick_line_id = $1${lockClause}`,
+    [pickLineId],
+  );
+  return result.rows.length > 0 ? mapDamageRow(result.rows[0]!) : null;
+}
+
 /** DMG-YYYY-NNNN from damage_report_number_seq (the indent_number_seq precedent), IST year. */
 export async function allocateDamageReportNumber(
   year: string,
@@ -184,8 +199,9 @@ export interface InsertDamageReportInput {
   reporter_user_id: string;
   reported_at: string;
   source_event_id: string;
-  source: 'report' | 'receipt';
+  source: 'report' | 'receipt' | 'pick';
   source_grn_line_id: string | null;
+  source_pick_line_id?: string | null;
   source_reason_code: string | null;
   source_photo_ref: string | null;
   sku: string;
@@ -212,13 +228,13 @@ export async function insertDamageReport(
 ): Promise<void> {
   await client.query(
     `INSERT INTO damage_report (
-       report_id, report_number, site_id, reporter_user_id, reported_at, source_event_id, source,
-       source_grn_line_id, source_reason_code, source_photo_ref, sku, lot_number, quantity, uom,
-       found_at, bin_location_id, bin_code, reason_code, reason_note, photo_attachment_id,
-       hold_mode, hold_note, quarantine_location_id, physical_state, whole_lot_requested,
-       replacement_indent_id
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::numeric,$14,$15,$16,$17,$18,$19,$20,$21,
-               $22,$23,$24,$25,$26)`,
+      report_id, report_number, site_id, reporter_user_id, reported_at, source_event_id, source,
+      source_grn_line_id, source_pick_line_id, source_reason_code, source_photo_ref, sku, lot_number, quantity, uom,
+      found_at, bin_location_id, bin_code, reason_code, reason_note, photo_attachment_id,
+      hold_mode, hold_note, quarantine_location_id, physical_state, whole_lot_requested,
+      replacement_indent_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::numeric,$15,$16,$17,$18,$19,$20,$21,
+      $22,$23,$24,$25,$26,$27)`,
     [
       row.report_id,
       row.report_number,
@@ -228,6 +244,7 @@ export async function insertDamageReport(
       row.source_event_id,
       row.source,
       row.source_grn_line_id,
+      row.source_pick_line_id ?? null,
       row.source_reason_code,
       row.source_photo_ref,
       row.sku,
@@ -263,6 +280,7 @@ const UPDATABLE_COLUMNS: ReadonlySet<string> = new Set([
   'source_event_id',
   'source',
   'source_grn_line_id',
+  'source_pick_line_id',
   'source_reason_code',
   'source_photo_ref',
   'sku',

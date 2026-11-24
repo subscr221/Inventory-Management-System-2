@@ -75,9 +75,11 @@ import { assertStockBinMovedShape, applyStockBinMovedProjection } from '../compl
 import {
   assertPickTaskCreatedShape,
   assertPickLineConfirmedShape,
+  assertPickLineShortPickedShape,
   assertPickTaskCompletedShape,
   applyPickTaskCreatedProjection,
   applyPickLineConfirmedProjection,
+  applyPickLineShortPickedProjection,
   applyPickTaskCompletedProjection,
 } from '../compliance/pick.js';
 import {
@@ -330,6 +332,7 @@ import { resolveProductionOrderStageLineDuplicateConflict } from '../read/projec
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
+  PickLineShortPickedEnvelope,
   PickTaskCompletedEnvelope,
   PutawayCompletedEnvelope,
   LocationOverrideEnvelope,
@@ -733,10 +736,13 @@ export async function persistEvent(
   if (envelope.event_type === 'pick_task.created') {
     assertPickTaskCreatedShape(envelope as unknown as PickTaskCreatedEnvelope);
   }
-  if (envelope.event_type === 'pick_line.confirmed') {
-    assertPickLineConfirmedShape(envelope as unknown as PickLineConfirmedEnvelope);
-  }
-  if (envelope.event_type === 'pick_task.completed') {
+      if (envelope.event_type === 'pick_line.confirmed') {
+        assertPickLineConfirmedShape(envelope as unknown as PickLineConfirmedEnvelope);
+      }
+      if (envelope.event_type === 'pick_line.short_picked') {
+        assertPickLineShortPickedShape(envelope as unknown as PickLineShortPickedEnvelope);
+      }
+      if (envelope.event_type === 'pick_task.completed') {
     assertPickTaskCompletedShape(envelope as unknown as PickTaskCompletedEnvelope);
   }
   // Story 3.7: dispatch shape validation (packed, documents-generated, dispatched) is non-DB and
@@ -1084,13 +1090,20 @@ export async function persistEvent(
         eventId,
       );
     }
-    if (envelope.event_type === 'pick_line.confirmed') {
-      await applyPickLineConfirmedProjection(
-        envelope as unknown as PickLineConfirmedEnvelope,
-        client,
-        eventId,
-      );
-    }
+      if (envelope.event_type === 'pick_line.confirmed') {
+        await applyPickLineConfirmedProjection(
+          envelope as unknown as PickLineConfirmedEnvelope,
+          client,
+          eventId,
+        );
+      }
+      if (envelope.event_type === 'pick_line.short_picked') {
+        await applyPickLineShortPickedProjection(
+          envelope as unknown as PickLineShortPickedEnvelope,
+          client,
+          eventId,
+        );
+      }
     if (envelope.event_type === 'pick_task.completed') {
       await applyPickTaskCompletedProjection(
         envelope as unknown as PickTaskCompletedEnvelope,

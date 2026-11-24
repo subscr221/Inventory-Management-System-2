@@ -873,6 +873,9 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   if (body.stream_type === 'warehouse' && body.event_type === 'pick_line.confirmed') {
     body.payload['confirmed_by'] = authContext.userId;
   }
+  if (body.stream_type === 'warehouse' && body.event_type === 'pick_line.short_picked') {
+    body.payload['short_picked_by'] = authContext.userId;
+  }
   if (body.stream_type === 'warehouse' && body.event_type === 'pick_task.completed') {
     body.payload['completed_by'] = authContext.userId;
   }

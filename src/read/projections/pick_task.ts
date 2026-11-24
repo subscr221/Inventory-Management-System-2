@@ -299,8 +299,8 @@ export async function listPickTasks(
        pt.strategy, pt.wave_id, pt.batch_id, pt.zone_id, pt.status, pt.assigned_to, pt.priority,
        pt.created_by, pt.created_at, pt.completed_at, pt.completed_by, pt.updated_at,
        eso.so_number_ext AS so_number_ext,
-       (SELECT COUNT(*) FILTER (WHERE status IN ('confirmed', 'substituted'))
-          FROM pick_line pl WHERE pl.pick_task_id = pt.pick_task_id) AS confirmed_line_count,
+  (SELECT COUNT(*) FILTER (WHERE status IN ('confirmed', 'substituted', 'short'))
+   FROM pick_line pl WHERE pl.pick_task_id = pt.pick_task_id) AS confirmed_line_count,
        (SELECT COUNT(*) FILTER (WHERE status <> 'cancelled')
           FROM pick_line pl WHERE pl.pick_task_id = pt.pick_task_id) AS line_count`;
   // Priority ordering ranks the vocabulary explicitly; ORDER BY pt.priority would sort the text

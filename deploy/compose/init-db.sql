@@ -2904,20 +2904,15 @@ CREATE TABLE IF NOT EXISTS pick_line (
   confirmed_at           TIMESTAMPTZ,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_pick_line_status CHECK (status IN ('pending', 'confirmed', 'cancelled', 'substituted')),
+  CONSTRAINT chk_pick_line_status CHECK (status IN ('pending', 'confirmed', 'cancelled', 'substituted', 'short')),
   CONSTRAINT chk_pick_line_capture_method CHECK (capture_method IS NULL OR capture_method IN ('PWA', 'PAPER'))
 );
 
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_pick_line_status'
-      AND conrelid = 'pick_line'::regclass
-  ) THEN
-    ALTER TABLE pick_line
-      ADD CONSTRAINT chk_pick_line_status CHECK (status IN ('pending', 'confirmed', 'cancelled', 'substituted'));
-  END IF;
+  ALTER TABLE pick_line DROP CONSTRAINT IF EXISTS chk_pick_line_status;
+  ALTER TABLE pick_line
+    ADD CONSTRAINT chk_pick_line_status CHECK (status IN ('pending', 'confirmed', 'cancelled', 'substituted', 'short'));
 END $$;
 
 DO $$
@@ -2948,11 +2943,62 @@ CREATE INDEX IF NOT EXISTS idx_pick_line_directed_lot ON pick_line (directed_lot
 
 DO $$
 BEGIN
+IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+GRANT INSERT, SELECT, UPDATE ON pick_line TO app_user;
+END IF;
+IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+GRANT SELECT ON pick_line TO readonly_user;
+END IF;
+END $$;
+
+-- Story 3.17: Pick shortfall recording for short-picked lines (AC 1).
+-- This file is the CANONICAL definition, applied by src/events/migrate.ts.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init.
+
+CREATE TABLE IF NOT EXISTS pick_shortfall (
+  pick_shortfall_id UUID PRIMARY KEY,
+  pick_task_id UUID NOT NULL,
+  pick_line_id UUID NOT NULL UNIQUE,
+  directed_quantity NUMERIC(14,3) NOT NULL,
+  found_quantity NUMERIC(14,3) NOT NULL,
+  reason TEXT NOT NULL,
+  note TEXT,
+  actor_user_id UUID NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  source_event_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_pick_shortfall_reason CHECK (reason IN ('BIN_EMPTY', 'LESS_IN_BIN', 'DAMAGED', 'OTHER')),
+  CONSTRAINT chk_pick_shortfall_found_quantity CHECK (found_quantity >= 0),
+  CONSTRAINT chk_pick_shortfall_found_lt_directed CHECK (found_quantity < directed_quantity),
+  CONSTRAINT chk_pick_shortfall_bin_empty CHECK (reason <> 'BIN_EMPTY' OR found_quantity = 0),
+  CONSTRAINT chk_pick_shortfall_other_note CHECK (reason <> 'OTHER' OR (note IS NOT NULL AND btrim(note) <> '' AND char_length(note) <= 200))
+);
+
+CREATE INDEX IF NOT EXISTS idx_pick_shortfall_task ON pick_shortfall (pick_task_id);
+CREATE INDEX IF NOT EXISTS idx_pick_shortfall_source_event ON pick_shortfall (source_event_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_pick_shortfall_reason' AND conrelid = 'pick_shortfall'::regclass) THEN
+    ALTER TABLE pick_shortfall ADD CONSTRAINT chk_pick_shortfall_reason CHECK (reason IN ('BIN_EMPTY', 'LESS_IN_BIN', 'DAMAGED', 'OTHER'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_pick_shortfall_found_quantity' AND conrelid = 'pick_shortfall'::regclass) THEN
+    ALTER TABLE pick_shortfall ADD CONSTRAINT chk_pick_shortfall_found_quantity CHECK (found_quantity >= 0);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_pick_shortfall_found_lt_directed' AND conrelid = 'pick_shortfall'::regclass) THEN
+    ALTER TABLE pick_shortfall ADD CONSTRAINT chk_pick_shortfall_found_lt_directed CHECK (found_quantity < directed_quantity);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_pick_shortfall_bin_empty' AND conrelid = 'pick_shortfall'::regclass) THEN
+    ALTER TABLE pick_shortfall ADD CONSTRAINT chk_pick_shortfall_bin_empty CHECK (reason <> 'BIN_EMPTY' OR found_quantity = 0);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_pick_shortfall_other_note' AND conrelid = 'pick_shortfall'::regclass) THEN
+    ALTER TABLE pick_shortfall ADD CONSTRAINT chk_pick_shortfall_other_note CHECK (reason <> 'OTHER' OR (note IS NOT NULL AND btrim(note) <> '' AND char_length(note) <= 200));
+  END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-    GRANT INSERT, SELECT, UPDATE ON pick_line TO app_user;
+    GRANT INSERT, SELECT ON pick_shortfall TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
-    GRANT SELECT ON pick_line TO readonly_user;
+    GRANT SELECT ON pick_shortfall TO readonly_user;
   END IF;
 END $$;
 
@@ -15246,9 +15292,10 @@ CREATE TABLE IF NOT EXISTS damage_report (
   reporter_user_id               UUID NOT NULL,
   reported_at                    TIMESTAMPTZ NOT NULL,
   source_event_id                UUID NOT NULL,
-  source                         TEXT NOT NULL,
-  source_grn_line_id             UUID,
-  source_reason_code             TEXT,
+  source TEXT NOT NULL,
+  source_grn_line_id UUID,
+  source_pick_line_id UUID,
+  source_reason_code TEXT,
   source_photo_ref               TEXT,
   sku                            TEXT NOT NULL,
   lot_number                     TEXT,
@@ -15306,8 +15353,9 @@ CREATE TABLE IF NOT EXISTS damage_report (
   replacement_indent_id          UUID,
   created_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_damage_report_source CHECK (source IN ('report', 'receipt')),
+  CONSTRAINT chk_damage_report_source CHECK (source IN ('report', 'receipt', 'pick')),
   CONSTRAINT chk_damage_report_source_grn_pairing CHECK ((source = 'receipt') = (source_grn_line_id IS NOT NULL)),
+  CONSTRAINT chk_damage_report_source_pick_pairing CHECK ((source = 'pick') = (source_pick_line_id IS NOT NULL)),
   CONSTRAINT chk_damage_report_photo_pairing CHECK ((source = 'report') = (photo_attachment_id IS NOT NULL)),
   CONSTRAINT chk_damage_report_quantity CHECK (quantity > 0),
   CONSTRAINT chk_damage_report_found_at CHECK (found_at IN ('stock', 'in_use')),
@@ -15405,9 +15453,25 @@ CREATE TABLE IF NOT EXISTS damage_report (
   )
 );
 
+ALTER TABLE IF EXISTS damage_report ADD COLUMN IF NOT EXISTS source_pick_line_id UUID;
+
+DO $$
+BEGIN
+  ALTER TABLE damage_report DROP CONSTRAINT IF EXISTS chk_damage_report_source;
+  ALTER TABLE damage_report ADD CONSTRAINT chk_damage_report_source CHECK (source IN ('report', 'receipt', 'pick'));
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE damage_report DROP CONSTRAINT IF EXISTS chk_damage_report_source_pick_pairing;
+  ALTER TABLE damage_report ADD CONSTRAINT chk_damage_report_source_pick_pairing CHECK ((source = 'pick') = (source_pick_line_id IS NOT NULL));
+END $$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_damage_report_number ON damage_report (report_number);
 -- AC 9: one case per GRN line, so a replayed receipt opens nothing new.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_damage_report_source_grn_line ON damage_report (source_grn_line_id) WHERE source_grn_line_id IS NOT NULL;
+-- Story 3.17: one case per pick line (AC 1).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_damage_report_source_pick_line ON damage_report (source_pick_line_id) WHERE source = 'pick';
 CREATE INDEX IF NOT EXISTS idx_damage_report_site_status ON damage_report (site_id, status, reported_at DESC);
 CREATE INDEX IF NOT EXISTS idx_damage_report_reporter ON damage_report (reporter_user_id, reported_at DESC);
 -- D5: the stock guard looks up held cases by SKU on every issue that could leave quarantine.

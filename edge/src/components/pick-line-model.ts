@@ -14,7 +14,7 @@ export interface PickLineRow {
   confirmed_quantity: string | null;
   location_id: string;
   pick_sequence: number;
-  status: 'pending' | 'confirmed' | 'cancelled' | 'substituted';
+  status: 'pending' | 'confirmed' | 'cancelled' | 'substituted' | 'short';
   capture_method: 'PWA' | 'PAPER' | null;
   location_code: string | null;
   directed_lot_number: string | null;
@@ -37,6 +37,7 @@ export interface PickLineConfirmInput {
   confirmedQuantity: string;
   directedLotNumber: string | null;
   idempotencyKey: string;
+  overrideReason?: string | null;
 }
 
 export type PickStep = 'bin' | 'lot' | 'qty';
@@ -55,6 +56,8 @@ export interface MessageResult {
   held?: boolean;
   messageKey: string | null;
   messageParams?: Record<string, string>;
+  canSubstitute?: boolean;
+  scannedLot?: string;
 }
 
 export function directedBin(line: PickLineRow): string {
@@ -118,6 +121,8 @@ export function evaluateLot(
       ok: false,
       step: 'lot',
       held: false,
+      canSubstitute: true,
+      scannedLot: scanned,
       messageKey: 'floor.wrongLot',
       messageParams: { code: scanned, lot: directed },
     };
@@ -139,19 +144,112 @@ export function confirmPayload(args: {
   pickLineId: string;
   confirmedLotId: string | null;
   confirmedQuantity: string;
+  directedLotNumber?: string | null;
+  overrideReason?: string | null;
 }): Record<string, unknown> {
+  // Story 3.17 (Task 6.5): the edge has no lot_master replica, so a lot substitution sends the
+  // scanned lot number (confirmed_lot_id null) and the server resolves it to a UUID for the SKU.
+  const substituting =
+    args.confirmedLotId === null &&
+    typeof args.directedLotNumber === 'string' &&
+    args.directedLotNumber.trim().length > 0;
   return {
     pick_task_id: args.pickTaskId,
     pick_line_id: args.pickLineId,
     confirmed_lot_id: args.confirmedLotId,
+    ...(substituting ? { confirmed_lot_number: args.directedLotNumber!.trim() } : {}),
     confirmed_quantity: args.confirmedQuantity,
+    ...(args.overrideReason && args.overrideReason.trim().length > 0
+      ? { override_reason: args.overrideReason.trim() }
+      : {}),
     capture_method: 'PWA',
   };
 }
 
-/** A line reads Synced when it carries a confirmed status and no quantity remains pending. */
+/** A line reads Synced when it carries a confirmed, substituted or short status and no quantity remains pending. */
 export function lineSettled(line: PickLineRow): boolean {
-  return line.status === 'confirmed' || line.status === 'substituted';
+  return line.status === 'confirmed' || line.status === 'substituted' || line.status === 'short';
+}
+
+/**
+ * Story 3.17 (Task 6.2): Short pick reason codes and payload construction.
+ */
+export type PickShortReason = 'BIN_EMPTY' | 'LESS_IN_BIN' | 'DAMAGED' | 'OTHER';
+
+export const SHORT_PICK_REASONS: readonly PickShortReason[] = [
+  'BIN_EMPTY',
+  'LESS_IN_BIN',
+  'DAMAGED',
+  'OTHER',
+];
+
+export interface PickLineShortPickInput {
+  pickTaskId: string;
+  pickLineId: string;
+  foundQuantity: string;
+  reason: PickShortReason;
+  note?: string | null;
+  directedLotNumber: string | null;
+  idempotencyKey: string;
+}
+
+export function shortPickPayload(args: {
+  pickTaskId: string;
+  pickLineId: string;
+  foundQuantity: string;
+  reason: PickShortReason;
+  note?: string | null;
+}): Record<string, unknown> {
+  return {
+    pick_task_id: args.pickTaskId,
+    pick_line_id: args.pickLineId,
+    found_quantity: args.foundQuantity,
+    reason: args.reason,
+    ...(args.note && args.note.trim().length > 0 ? { note: args.note.trim() } : {}),
+    capture_method: 'PWA',
+  };
+}
+
+export function isShortQuantity(value: string, line: PickLineRow): boolean {
+  const v = parseFloat(value.trim());
+  const d = parseFloat(line.directed_quantity.trim());
+  return !Number.isNaN(v) && v >= 0 && v < d;
+}
+
+export interface ShortPickValidation {
+  ready: boolean;
+  footerKey: string;
+}
+
+export function evaluateShortPick(
+  found: string,
+  reason: PickShortReason | null,
+  note: string,
+  line: PickLineRow,
+): ShortPickValidation {
+  const isShort = isShortQuantity(found, line);
+  if (!isShort) {
+    return {
+      ready: false,
+      footerKey: 'floor.short.invalidQuantity',
+    };
+  }
+  if (!reason) {
+    return {
+      ready: false,
+      footerKey: 'floor.short.leftReason',
+    };
+  }
+  if (reason === 'OTHER' && note.trim().length === 0) {
+    return {
+      ready: false,
+      footerKey: 'floor.short.leftNote',
+    };
+  }
+  return {
+    ready: true,
+    footerKey: 'floor.short.ready',
+  };
 }
 
 /**

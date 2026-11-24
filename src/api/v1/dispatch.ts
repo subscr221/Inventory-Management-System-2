@@ -287,15 +287,15 @@ export const postPacked: RouteHandler = async (req, res) => {
   // pick quantity BEFORE persisting any event, so a doomed multi-line request fails fast instead
   // of leaving earlier lines committed while a later line is rejected.
   const pool = getPool();
-  const qtyResult = await pool.query(
-    `SELECT COALESCE(SUM(pl.confirmed_quantity)::numeric, 0) AS total_confirmed
-     FROM pick_line pl
-     WHERE pl.dispatch_order_line_id IN (
-       SELECT id FROM erp_sales_order WHERE id = $1
-     )
-     AND pl.status IN ('confirmed', 'substituted')`,
-    [dispatchOrderId],
-  );
+    const qtyResult = await pool.query(
+      `SELECT COALESCE(SUM(pl.confirmed_quantity)::numeric, 0) AS total_confirmed
+       FROM pick_line pl
+       WHERE pl.dispatch_order_line_id IN (
+         SELECT id FROM erp_sales_order WHERE id = $1
+       )
+       AND pl.status IN ('confirmed', 'substituted', 'short')`,
+      [dispatchOrderId],
+    );
   const packedResult = await pool.query(
     `SELECT COALESCE(SUM(packed_qty)::numeric, 0) AS already_packed
      FROM packing_record WHERE dispatch_order_id = $1`,

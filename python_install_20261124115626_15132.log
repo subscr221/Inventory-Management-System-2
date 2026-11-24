@@ -1,0 +1,107 @@
+>> Writing logs to D:\WINCODE\Inventory Management System_2\python_install_20261124115626_15132.log
+>> Python installation manager 26.0
+Copyright (c) Python Software Foundation. All Rights Reserved.
+
+BEGIN install_command.execute: []
+>  ********************************************************************************
+Reading installs from D:\WINCODE\Inventory Management System_2\Python
+Found 0 installs
+Calculating default install
+Filtering installs by tag = 3
+tag '3' matched 0 installs
+default_platform '-64' matched 0 installs
+Reusing unfiltered list
+Searching https://www.python.org/ftp/python/index-windows.json
+>> Searching for Python matching 3
+Selecting package with tag=3 and platform=-64
+Fetching: https://www.python.org/ftp/python/index-windows.json
+winhttp_urlopen: https://www.python.org/ftp/python/index-windows.json
+>> Failed to download using WinHTTP. Retrying with fallback method.
+ERROR:
+Traceback (most recent call last):
+  File "manage\urlutils.py", line 361, in urlopen
+  File "manage\urlutils.py", line 174, in _winhttp_urlopen
+OSError: [WinError 10106] The requested service provider could not be loaded or initialized.
+
+urllib download unavailable - using fallback
+>> Failed to download using PowerShell. Retrying with fallback method.
+ERROR:
+Traceback (most recent call last):
+  File "manage\pathutils.py", line 19, in __init__
+AttributeError: 'NoneType' object has no attribute '__fspath__'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "manage\urlutils.py", line 398, in urlopen
+  File "manage\urlutils.py", line 272, in _powershell_urlopen
+  File "manage\urlutils.py", line 297, in _powershell_urlretrieve
+  File "manage\pathutils.py", line 21, in __init__
+  File "<frozen os>", line 869, in fsdecode
+TypeError: expected str, bytes or os.PathLike object, not NoneType
+
+!! Unable to access runtimes index at https://www.python.org/ftp/python/index-windows.json: The requested service provider could not be loaded or initialized.
+Capturing error in case fallbacks fail
+Traceback (most recent call last):
+  File "manage\install_command.py", line 847, in execute
+  File "manage\install_command.py", line 380, in _find_one
+  File "manage\install_command.py", line 62, in select_package
+  File "manage\urlutils.py", line 664, in __next__
+  File "manage\urlutils.py", line 408, in urlopen
+  File "manage\urlutils.py", line 361, in urlopen
+  File "manage\urlutils.py", line 174, in _winhttp_urlopen
+OSError: [WinError 10106] The requested service provider could not be loaded or initialized.
+
+Searching file:///C:/Program Files/PyManager/bundled/fallback-index.json
+>> Searching for Python matching 3
+Selecting package with tag=3 and platform=-64
+Fetching: file:///C:/Program Files/PyManager/bundled/fallback-index.json
+!! Unable to find runtimes index at file:///C:/Program Files/PyManager/bundled/fallback-index.json
+Capturing error in case fallbacks fail
+Traceback (most recent call last):
+  File "manage\install_command.py", line 847, in execute
+  File "manage\install_command.py", line 380, in _find_one
+  File "manage\install_command.py", line 62, in select_package
+  File "manage\urlutils.py", line 664, in __next__
+  File "manage\urlutils.py", line 350, in urlopen
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Program Files\\PyManager\\bundled\\fallback-index.json'
+
+!! An error occurred. Please check any output above, or the log file, and try again.
+>  Log file for this session: D:\WINCODE\Inventory Management System_2\python_install_20261124115626_15132.log
+>  If you cannot resolve it yourself, please report the error with your log file at https://github.com/python/pymanager
+TRACEBACK:
+Traceback (most recent call last):
+  File "manage\install_command.py", line 862, in execute
+  File "manage\install_command.py", line 847, in execute
+  File "manage\install_command.py", line 380, in _find_one
+  File "manage\install_command.py", line 62, in select_package
+  File "manage\urlutils.py", line 664, in __next__
+  File "manage\urlutils.py", line 408, in urlopen
+  File "manage\urlutils.py", line 361, in urlopen
+  File "manage\urlutils.py", line 174, in _winhttp_urlopen
+OSError: [WinError 10106] The requested service provider could not be loaded or initialized.
+
+>  To see all available commands, run 'py help'
+>  ********************************************************************************
+END install_command.execute
+SILENCED ERROR
+Traceback (most recent call last):
+  File "manage\install_command.py", line 862, in execute
+  File "manage\install_command.py", line 847, in execute
+  File "manage\install_command.py", line 380, in _find_one
+  File "manage\install_command.py", line 62, in select_package
+  File "manage\urlutils.py", line 664, in __next__
+  File "manage\urlutils.py", line 408, in urlopen
+  File "manage\urlutils.py", line 361, in urlopen
+  File "manage\urlutils.py", line 174, in _winhttp_urlopen
+OSError: [WinError 10106] The requested service provider could not be loaded or initialized.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "manage\__init__.py", line 50, in main
+  File "manage\commands.py", line 859, in execute
+  File "manage\install_command.py", line 882, in execute
+  File "manage\install_command.py", line 673, in _fatal_install_error
+SystemExit: 10106
+
