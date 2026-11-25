@@ -2152,6 +2152,19 @@ export interface RdDispositionExecutedPayload { disposition_id: string; correlat
 export interface RdDispositionExecutedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'rd_disposition.executed'; payload: RdDispositionExecutedPayload; }
 export interface RdMaterialReturnedPayload { posting_id: string; project_code: string; quantity: string; location_id: string; lot_id: string; reason_code: string; correlation_id?: string; }
 export interface RdMaterialReturnedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'rd_material.returned'; payload: RdMaterialReturnedPayload; }
+// Story 10.4: hub customer register, machine link and machine-time booking (FR-RD-13/14).
+export interface HubCustomerRegisteredPayload { customer_id: string; customer_kind: 'member' | 'walk_in'; display_name: string; membership_no?: string; location_id?: string; }
+export interface HubCustomerRegisteredEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'hub.customer_registered'; payload: HubCustomerRegisteredPayload; }
+export interface HubMachineRegisteredPayload { machine_id: string; machine_code: string; location_id: string; asset_id: string; meter_id?: string | null; operator_role: string; }
+export interface HubMachineRegisteredEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'hub.machine_registered'; payload: HubMachineRegisteredPayload; }
+export interface HubMachineMeterLinkedPayload { machine_id: string; meter_id: string; }
+export interface HubMachineMeterLinkedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'hub.machine_meter_linked'; payload: HubMachineMeterLinkedPayload; }
+export interface HubBookingOpenedPayload { booking_id: string; customer_id: string; machine_id: string; opened_at: string; scheduled_start?: string; scheduled_end?: string; backdate_reason?: string; }
+export interface HubBookingOpenedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'hub.booking_opened'; payload: HubBookingOpenedPayload; }
+export interface HubBookingClosedPayload { booking_id: string; actual_minutes: number; meter_reading_value: number; reading_id: string; closed_at: string; }
+export interface HubBookingClosedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'hub.booking_closed'; payload: HubBookingClosedPayload; }
+export interface HubBookingExceptionRaisedPayload { booking_id: string; raised_at: string; }
+export interface HubBookingExceptionRaisedEnvelope extends Omit<EventEnvelope, 'payload'> { event_type: 'hub.booking_exception_raised'; payload: HubBookingExceptionRaisedPayload; }
 
 /** One requisition line carried on rd_requisition.raised. Quantities and costs are decimal strings. */
 export interface RdRequisitionRaisedLine {
@@ -6608,6 +6621,13 @@ export const SUPPORTED_EVENT_TYPES = {
   'rd_disposition.rejected': { streamType: 'research', requiresBusinessStream: false },
   'rd_disposition.executed': { streamType: 'research', requiresBusinessStream: false },
   'rd_material.returned': { streamType: 'research', requiresBusinessStream: false },
+  // Story 10.4: hub customers, machines and machine-time bookings (FR-RD-13/14).
+  'hub.customer_registered': { streamType: 'research', requiresBusinessStream: false },
+  'hub.machine_registered': { streamType: 'research', requiresBusinessStream: false },
+  'hub.machine_meter_linked': { streamType: 'research', requiresBusinessStream: false },
+  'hub.booking_opened': { streamType: 'research', requiresBusinessStream: false },
+  'hub.booking_closed': { streamType: 'research', requiresBusinessStream: false },
+  'hub.booking_exception_raised': { streamType: 'research', requiresBusinessStream: false },
   // Story 7.1: asset register on a NEW 'maintenance' stream (AD-9). An asset is master data, not
   // an inventory movement, so requiresBusinessStream is false (the supplier.registered precedent).
   'asset.registered': {

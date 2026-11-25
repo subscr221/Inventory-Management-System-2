@@ -2448,6 +2448,30 @@ const EXPECTED = [
     appUserGrant: 'INSERT, SELECT',
   },
   {
+    canonical: 'read/projections/hub_customer.sql',
+    table: 'hub_customer',
+    constraints: ['chk_hub_customer_kind','chk_hub_customer_status','chk_hub_customer_membership_no'],
+    // Second review P-K: case-insensitive uniqueness is an expression index, so its body is pinned.
+    indexes: ['uq_hub_customer_membership_no'],
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_hub_customer_membership_no ON hub_customer (lower(btrim(membership_no)));',
+    ],
+  },
+  {
+    canonical: 'read/projections/hub_machine.sql',
+    table: 'hub_machine',
+    indexes: ['uq_hub_machine_code','uq_hub_machine_asset','uq_hub_machine_meter'],
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_hub_machine_code ON hub_machine (lower(btrim(machine_code)));',
+    ],
+  },
+  {
+    canonical: 'read/projections/hub_booking.sql',
+    table: 'hub_booking',
+    constraints: ['chk_hub_booking_status','chk_hub_booking_actual_minutes','chk_hub_booking_closed_actuals','chk_hub_booking_schedule'],
+    indexes: ['idx_hub_booking_open_unraised','idx_hub_booking_customer'],
+  },
+  {
     canonical: 'read/projections/rd_equipment_custody.sql',
   table: 'rd_equipment_custody',
   constraints: ['chk_rd_equipment_custody_status', 'chk_rd_equipment_custody_qty'],
@@ -3970,5 +3994,25 @@ describe('Story 10.2 event-type registry', () => {
       initDb.includes('ALTER TABLE rd_project ADD COLUMN IF NOT EXISTS capitalization_effective_date TIMESTAMPTZ;'),
       'init-db.sql missing the capitalization_effective_date ALTER',
     );
+  });
+});
+
+// Story 10.4 (FR-RD-13/14): hub events ride the research stream (no maker_hub stream type exists;
+// maker_hub is a business-stream tag and a location type from Story 10.1).
+describe('Story 10.4 event-type registry', () => {
+  it('registers the hub events on the research stream without a business stream', () => {
+    for (const type of [
+      'hub.customer_registered',
+      'hub.machine_registered',
+      'hub.machine_meter_linked',
+      'hub.booking_opened',
+      'hub.booking_closed',
+      'hub.booking_exception_raised',
+    ] as const) {
+      assert.deepStrictEqual(SUPPORTED_EVENT_TYPES[type], {
+        streamType: 'research',
+        requiresBusinessStream: false,
+      });
+    }
   });
 });

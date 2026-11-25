@@ -70,6 +70,7 @@ import {
 import { listRecentClosuresForAsset } from '../../read/projections/maintenance_work_order_closure.js';
 import { listSpareReservations } from '../../read/projections/maintenance_spare_reservation.js';
 import { listMeters } from '../../read/projections/asset_meter.js';
+import { HUB_MODULE, assertHubEventWriteAccess } from './hub-common.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const PLANNING_EVENT_TYPES = new Set([
@@ -383,6 +384,9 @@ function assertEdgeGateRoleAllowed(
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string | string[] {
   if (typeof body === 'object' && body !== null) {
+    // Story 10.4 (X1): hub.* events ride the research stream but belong to the engineering module.
+    const eventType = (body as Record<string, unknown>)['event_type'];
+    if (typeof eventType === 'string' && eventType.startsWith('hub.')) return HUB_MODULE;
     const streamType = (body as Record<string, unknown>)['stream_type'];
     // Story 1.15: the base-role events accept an employee assignment; the stream module stays
     // second, so a caller holding both keeps the employee stamp exactly as the online route does.
@@ -691,6 +695,8 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   if (!authContext || !assignment)
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   assertPlanningPayloadWriteLocation(authContext, body);
+  // Story 10.4 (X1): a hub.* event on this door meets the hub routes' location rule.
+  await assertHubEventWriteAccess(authContext.roles, body);
 
   // Story 13.1 (Task 7.3): the 'migration' stream never travels the edge. Staging loads,
   // variance explanations and promotion are central migration-project acts produced only by the

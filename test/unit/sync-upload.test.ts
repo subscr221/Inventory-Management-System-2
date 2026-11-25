@@ -97,6 +97,25 @@ describe('Story 1.8 sync upload classification', () => {
     }
   });
 
+  it('keeps the Story 10.4 hub NOT_FOUND codes retryable while its structural codes stay permanent', () => {
+    for (const code of ['HUB_CUSTOMER_NOT_FOUND', 'HUB_MACHINE_NOT_FOUND', 'HUB_BOOKING_NOT_FOUND']) {
+      assertClassification(classifyUploadFailure(new AppError(404, code, 'Parent not synced yet')), {
+        action: 'retry',
+        localStatus: 'pending_sync',
+        retryable: true,
+        serverErrorCode: code,
+      });
+    }
+    for (const code of ['HUB_MACHINE_BUSY', 'HUB_MACHINE_NOT_METERED', 'MEMBER_REFERENCE_REQUIRED']) {
+      assertClassification(classifyUploadFailure(new AppError(409, code, 'Structural')), {
+        action: 'complete',
+        localStatus: 'needs_attention',
+        retryable: false,
+        serverErrorCode: code,
+      });
+    }
+  });
+
   it('keeps transient network and server failures retryable', () => {
     assertClassification(
       classifyUploadFailure(new AppError(503, 'INTERNAL_ERROR', 'Unavailable')),

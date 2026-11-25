@@ -368,6 +368,10 @@ const MIGRATIONS = [
   '../../read/projections/rd_disposition_line.sql',
   '../../read/projections/rd_scrap_pending.sql',
   '../../read/projections/rd_build_record_project_code.sql',
+  // Story 10.4: hub customers, machines (meter link) and machine-time bookings.
+  '../../read/projections/hub_customer.sql',
+  '../../read/projections/hub_machine.sql',
+  '../../read/projections/hub_booking.sql',
 ];
 
 async function migrate(): Promise<void> {

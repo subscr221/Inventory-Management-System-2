@@ -399,6 +399,15 @@ export const config = {
     // requisition for the same SKU by the same requester counts as a potential duplicate.
     duplicateWindowDays: parsePositiveIntEnv('INDENT_DUPLICATE_WINDOW_DAYS', 7),
   },
+  hub: {
+    // Story 10.4 (AC 4): how often the unclosed machine-time booking sweep runs (default hourly).
+    bookingExceptionSweepIntervalMs: parsePositiveIntEnv(
+      'HUB_BOOKING_EXCEPTION_SWEEP_INTERVAL_MS',
+      3_600_000,
+      MAX_INTERVAL_MS,
+      true,
+    ),
+  },
   standingGrant: {
     // Story 4.8 (D13): the daily standing-grant sweep that expires grants past their end date and
     // sends each assigner their pruning list when it falls due (cadence is per assigner, default

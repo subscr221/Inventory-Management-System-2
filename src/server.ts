@@ -275,6 +275,18 @@ import { getRdProjectWipHandler, getRdProjectBuildsHandler } from './api/v1/rd-w
 import { completeRdBuildHandler, listRdPrototypesHandler, getRdPrototypeHandler } from './api/v1/rd-prototypes.js';
 import { requestRdDispositionHandler, getRdDispositionHandler, approveRdDispositionHandler, rejectRdDispositionHandler, executeRdDispositionHandler } from './api/v1/rd-dispositions.js';
 import { returnRdMaterialHandler } from './api/v1/rd-returns.js';
+import { createHubCustomerHandler, listHubCustomersHandler } from './api/v1/hub-customers.js';
+import {
+  createHubMachineHandler,
+  linkHubMachineMeterHandler,
+  listHubMachinesHandler,
+} from './api/v1/hub-machines.js';
+import {
+  openHubBookingHandler,
+  closeHubBookingHandler,
+  listOpenHubBookingsHandler,
+} from './api/v1/hub-bookings.js';
+import { runHubBookingExceptionJob } from './hub/booking-jobs.js';
 import {
   defineAlternateHandler,
   listBomAlternatesHandler,
@@ -1004,6 +1016,15 @@ export function createAppRouter(): Router {
   router.post('/api/v1/rd-dispositions/:dispositionId/reject', rejectRdDispositionHandler);
   router.post('/api/v1/rd-dispositions/:dispositionId/execute', executeRdDispositionHandler);
   router.post('/api/v1/rd-projects/:projectCode/returns', returnRdMaterialHandler);
+  // Story 10.4: hub customers, machines and machine-time bookings.
+  router.post('/api/v1/hub-customers', createHubCustomerHandler);
+  router.get('/api/v1/hub-customers', listHubCustomersHandler);
+  router.post('/api/v1/hub-machines', createHubMachineHandler);
+  router.get('/api/v1/hub-machines', listHubMachinesHandler);
+  router.post('/api/v1/hub-machines/:machineId/meter', linkHubMachineMeterHandler);
+  router.post('/api/v1/hub-bookings', openHubBookingHandler);
+  router.get('/api/v1/hub-bookings', listOpenHubBookingsHandler);
+  router.post('/api/v1/hub-bookings/:bookingId/close', closeHubBookingHandler);
 
   // Story 5.5: Approved Alternates and BOM Explosion. Every second segment is a literal distinct
   // from the :bomId-only routes above, so there is no route-order trap here.
@@ -1677,6 +1698,12 @@ export function backgroundCycles(): BackgroundCycle[] {
       name: 'standing grant pruning',
       intervalMs: config.standingGrant.sweepIntervalMs,
       cycle: () => runStandingGrantSweepCycle(),
+    },
+    // Story 10.4 (AC 4): raise one exception per machine-time booking unclosed for 24 hours.
+    {
+      name: 'hub booking exception',
+      intervalMs: config.hub.bookingExceptionSweepIntervalMs,
+      cycle: () => runHubBookingExceptionJob(),
     },
   ];
 }

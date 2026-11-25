@@ -152,6 +152,8 @@ import {
   assertRdBuildCompletedShape,
   applyRdBuildCompletedProjection,
 } from '../compliance/rd-prototype.js';
+import { assertHubCustomerShape, applyHubCustomerProjection } from '../compliance/hub-customer.js';
+import { assertHubBookingShape, applyHubBookingProjection } from '../compliance/hub-booking.js';
 import {
   assertBomExecutionShape,
   applyBomExecutionProjection,
@@ -830,6 +832,9 @@ export async function persistEvent(
   assertRdReturnShape(envelope);
   assertRdDispositionShape(envelope);
   assertRdBuildCompletedShape(envelope);
+  // Story 10.4: hub customer / machine / booking shape validation (pre-transaction, no DB).
+  assertHubCustomerShape(envelope);
+  assertHubBookingShape(envelope);
   // Story 5.5: alternate / substitution / explosion shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed execution event never consumes an idempotency key.
   assertBomExecutionShape(envelope);
@@ -1254,6 +1259,9 @@ export async function persistEvent(
     await applyRdReturnProjection(envelope, client, eventId);
     await applyRdDispositionProjection(envelope, client, eventId);
     await applyRdBuildCompletedProjection(envelope, client, eventId);
+    // Story 10.4: hub customers, machines and bookings; a booking close feeds the meter register here.
+    await applyHubCustomerProjection(envelope, client, eventId);
+    await applyHubBookingProjection(envelope, client, eventId);
     // Story 5.5: alternates, ad-hoc substitutions and explosion runs commit inside this same
     // transaction as the domain_events insert, so a requirement set can never outlive its event.
     await applyBomExecutionProjection(envelope, client, eventId);

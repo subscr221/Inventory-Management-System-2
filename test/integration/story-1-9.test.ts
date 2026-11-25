@@ -480,6 +480,15 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
 'POST /api/v1/rd-dispositions/:dispositionId/execute',
 'POST /api/v1/rd-dispositions/:dispositionId/reject',
 'POST /api/v1/rd-projects/:projectCode/returns',
+// Story 10.4: hub customers, machines and machine-time bookings.
+'GET /api/v1/hub-bookings',
+'GET /api/v1/hub-customers',
+'GET /api/v1/hub-machines',
+'POST /api/v1/hub-bookings',
+'POST /api/v1/hub-bookings/:bookingId/close',
+'POST /api/v1/hub-customers',
+'POST /api/v1/hub-machines',
+'POST /api/v1/hub-machines/:machineId/meter',
 'POST /api/v1/rd-prototypes/:prototypeId/dispositions',
 // Story 5.5: Approved Alternates and BOM Explosion
       'POST /api/v1/boms/:bomId/alternates',

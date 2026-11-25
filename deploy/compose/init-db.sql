@@ -16524,3 +16524,142 @@ BEGIN
 END $$;
 
 ALTER TABLE rd_build_record ADD COLUMN IF NOT EXISTS project_code TEXT;
+
+-- Story 10.4 (FR-RD-13): hub member and walk-in customer records.
+CREATE TABLE IF NOT EXISTS hub_customer (
+  customer_id UUID PRIMARY KEY,
+  customer_kind TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  membership_no TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  location_id UUID,
+  source_event_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_hub_customer_kind CHECK (customer_kind IN ('member','walk_in')),
+  CONSTRAINT chk_hub_customer_status CHECK (status IN ('active','inactive')),
+  CONSTRAINT chk_hub_customer_membership_no CHECK ((customer_kind = 'member' AND membership_no IS NOT NULL) OR (customer_kind = 'walk_in' AND membership_no IS NULL))
+);
+
+-- Second review X5: no phone data in Phase 1 (capture is deferred until a privacy decision).
+ALTER TABLE hub_customer DROP COLUMN IF EXISTS contact_phone_hash;
+
+-- Second review P-K: membership_no is unique case-insensitively (unique INDEX, not a constraint).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_hub_customer_membership_no' AND conrelid = 'hub_customer'::regclass) THEN
+    ALTER TABLE hub_customer DROP CONSTRAINT uq_hub_customer_membership_no;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hub_customer_membership_no ON hub_customer (lower(btrim(membership_no)));
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_hub_customer_kind' AND conrelid = 'hub_customer'::regclass) THEN
+    ALTER TABLE hub_customer ADD CONSTRAINT chk_hub_customer_kind CHECK (customer_kind IN ('member','walk_in'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_hub_customer_status' AND conrelid = 'hub_customer'::regclass) THEN
+    ALTER TABLE hub_customer ADD CONSTRAINT chk_hub_customer_status CHECK (status IN ('active','inactive'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_hub_customer_membership_no' AND conrelid = 'hub_customer'::regclass) THEN
+    ALTER TABLE hub_customer ADD CONSTRAINT chk_hub_customer_membership_no CHECK ((customer_kind = 'member' AND membership_no IS NOT NULL) OR (customer_kind = 'walk_in' AND membership_no IS NULL));
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON hub_customer TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON hub_customer TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 10.4 (FR-RD-14): link table from a hub machine to its Epic 7 asset and usage meter.
+-- operator_role is DATA (the exception recipient), never a role literal in workflow code.
+CREATE TABLE IF NOT EXISTS hub_machine (
+  machine_id UUID PRIMARY KEY,
+  machine_code TEXT NOT NULL,
+  location_id UUID NOT NULL,
+  asset_id UUID NOT NULL,
+  meter_id UUID,
+  operator_role TEXT NOT NULL,
+  source_event_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Second review P-K: machine_code is unique case-insensitively (unique INDEX, not a constraint).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_hub_machine_code' AND conrelid = 'hub_machine'::regclass) THEN
+    ALTER TABLE hub_machine DROP CONSTRAINT uq_hub_machine_code;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hub_machine_code ON hub_machine (lower(btrim(machine_code)));
+
+-- Review P3: one machine per asset, one machine per meter (meter optional).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hub_machine_asset ON hub_machine (asset_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hub_machine_meter ON hub_machine (meter_id) WHERE meter_id IS NOT NULL;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON hub_machine TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON hub_machine TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 10.4 (FR-RD-13/14): machine-time booking. customer_id is ONE NOT NULL column so a booking
+-- can never reference more than one customer record.
+CREATE TABLE IF NOT EXISTS hub_booking (
+  booking_id UUID PRIMARY KEY,
+  customer_id UUID NOT NULL REFERENCES hub_customer (customer_id),
+  machine_id UUID NOT NULL REFERENCES hub_machine (machine_id),
+  scheduled_start TIMESTAMPTZ,
+  scheduled_end TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'open',
+  opened_at TIMESTAMPTZ NOT NULL,
+  closed_at TIMESTAMPTZ,
+  actual_minutes INTEGER,
+  meter_reading_value NUMERIC(18,4),
+  reading_id UUID,
+  exception_raised_at TIMESTAMPTZ,
+  backdate_reason TEXT,
+  source_event_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_hub_booking_status CHECK (status IN ('open','closed')),
+  CONSTRAINT chk_hub_booking_actual_minutes CHECK (actual_minutes IS NULL OR actual_minutes >= 0),
+  CONSTRAINT chk_hub_booking_closed_actuals CHECK (status = 'open' OR (actual_minutes IS NOT NULL AND closed_at IS NOT NULL AND meter_reading_value IS NOT NULL)),
+  CONSTRAINT chk_hub_booking_schedule CHECK (scheduled_end IS NULL OR scheduled_start IS NULL OR scheduled_end >= scheduled_start)
+);
+
+-- Second review X4: a late-logged (backdated) open carries its reason.
+ALTER TABLE hub_booking ADD COLUMN IF NOT EXISTS backdate_reason TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_hub_booking_open_unraised ON hub_booking (opened_at) WHERE status = 'open' AND exception_raised_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_hub_booking_customer ON hub_booking (customer_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_hub_booking_status' AND conrelid = 'hub_booking'::regclass) THEN
+    ALTER TABLE hub_booking ADD CONSTRAINT chk_hub_booking_status CHECK (status IN ('open','closed'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_hub_booking_actual_minutes' AND conrelid = 'hub_booking'::regclass) THEN
+    ALTER TABLE hub_booking ADD CONSTRAINT chk_hub_booking_actual_minutes CHECK (actual_minutes IS NULL OR actual_minutes >= 0);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_hub_booking_closed_actuals' AND conrelid = 'hub_booking'::regclass) THEN
+    ALTER TABLE hub_booking ADD CONSTRAINT chk_hub_booking_closed_actuals CHECK (status = 'open' OR (actual_minutes IS NOT NULL AND closed_at IS NOT NULL AND meter_reading_value IS NOT NULL));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_hub_booking_schedule' AND conrelid = 'hub_booking'::regclass) THEN
+    ALTER TABLE hub_booking ADD CONSTRAINT chk_hub_booking_schedule CHECK (scheduled_end IS NULL OR scheduled_start IS NULL OR scheduled_end >= scheduled_start);
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON hub_booking TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON hub_booking TO readonly_user;
+  END IF;
+END $$;

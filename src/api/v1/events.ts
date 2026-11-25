@@ -23,6 +23,7 @@ import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/i
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 import { BIN_MOVE_ROLES } from '../../compliance/bin-move.js';
 import type { RoleAssignment } from '../../read/projections/users.js';
+import { HUB_MODULE, assertHubEventWriteAccess } from './hub-common.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const PLANNING_EVENT_TYPES = new Set([
@@ -411,6 +412,10 @@ function assertPlanningPayloadWriteLocation(
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
   if (typeof body === 'object' && body !== null) {
+    // Story 10.4 (X1): hub.* events ride the research stream but belong to the engineering module,
+    // exactly as on the hub routes; a research-only grant must not reach them.
+    const eventType = (body as Record<string, unknown>)['event_type'];
+    if (typeof eventType === 'string' && eventType.startsWith('hub.')) return HUB_MODULE;
     const streamType = (body as Record<string, unknown>)['stream_type'];
     if (typeof streamType === 'string') return streamType;
   }
@@ -493,6 +498,8 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     assertBranchTransferGstFunctionAccess(authContext, body);
     const binMoveAssignment = assertBinMoveFunctionAccess(authContext, body);
     assertPayloadSiteWriteAccess(authContext, body);
+    // Story 10.4 (X1): the hub routes' location rule, for a hub.* event posted straight to this door.
+    await assertHubEventWriteAccess(authContext.roles, body);
     body.metadata.actor.user_id = authContext.userId;
     const authorizedRole = binMoveAssignment?.role ?? getAuthorizedRole(req);
     if (authorizedRole) {

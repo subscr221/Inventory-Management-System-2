@@ -62,6 +62,11 @@ describe('in-process background cycle registry', () => {
       intervalMs: () => config.standingGrant.sweepIntervalMs,
       why: 'standing grants past their end date never expire and assigners never receive their pruning list (Story 4.8 AC 6)',
     },
+    {
+      name: 'hub booking exception',
+      intervalMs: () => config.hub.bookingExceptionSweepIntervalMs,
+      why: 'machine-time bookings left open for 24 hours never raise an exception to the hub operator (Story 10.4 AC 4)',
+    },
   ];
 
   it('registers exactly the expected cycles, in order', () => {
@@ -122,6 +127,7 @@ describe('in-process background cycle registry', () => {
       JOBWORK_CLOCK_SWEEP_INTERVAL_MS: '16000',
       JOBWORK_BILLING_SWEEP_INTERVAL_MS: '17000',
       STANDING_GRANT_SWEEP_INTERVAL_MS: '18000',
+      HUB_BOOKING_EXCEPTION_SWEEP_INTERVAL_MS: '19000',
     };
     const result = spawnSync(
       process.execPath,
@@ -156,6 +162,7 @@ describe('in-process background cycle registry', () => {
       ['jobwork clock breach', 16000],
       ['jobwork billing feed retry', 17000],
       ['standing grant pruning', 18000],
+      ['hub booking exception', 19000],
     ]);
   });
 });

@@ -76,6 +76,20 @@ describe('edge upload failure classification', () => {
     );
   });
 
+  it('keeps the Story 10.4 hub NOT_FOUND codes retryable while its structural codes stay permanent', () => {
+    for (const code of ['HUB_CUSTOMER_NOT_FOUND', 'HUB_MACHINE_NOT_FOUND', 'HUB_BOOKING_NOT_FOUND']) {
+      assert.deepEqual(classifyServerUploadFailure(404, { error_code: code }), {
+        action: 'retry',
+        localStatus: 'pending_sync',
+        retryable: true,
+        serverErrorCode: code,
+      });
+    }
+    for (const code of ['HUB_MACHINE_BUSY', 'HUB_MACHINE_NOT_METERED', 'MEMBER_REFERENCE_REQUIRED']) {
+      assert.equal(classifyServerUploadFailure(409, { error_code: code }).localStatus, 'needs_attention');
+    }
+  });
+
   it('separates permanent, auth, and retryable failures', () => {
     // An authorization denial is not a sign-in problem: only a bare 401/403 halts as auth_required.
     for (const code of ['FUNCTION_ACCESS_DENIED', 'LOCATION_ACCESS_DENIED', 'MODULE_ACCESS_DENIED']) {

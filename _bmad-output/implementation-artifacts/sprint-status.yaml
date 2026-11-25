@@ -1184,7 +1184,7 @@ development_status:
   10-1-randd-and-maker-hub-location-types-and-project-master: done
   10-2-randd-requisition-budget-check-and-issue-types: done
   10-3-project-wip-ledger-and-prototype-build-records: done # code review 2026-11-24: clean review, done
-  10-4-hub-member-records-and-machine-time-booking: backlog
+  10-4-hub-member-records-and-machine-time-booking: review
   10-5-randd-physical-verification-and-cost-reporting: backlog
   10-6-offline-point-of-use-sale-and-payment-capture: backlog
   10-7-member-job-cards-and-statements: backlog

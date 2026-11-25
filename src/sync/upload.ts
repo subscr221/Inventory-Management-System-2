@@ -58,6 +58,16 @@ const PERMANENT_ERROR_CODES = new Set([
 'RD_DISPOSITION_LINE_REQUIRED',
 'RD_RETURN_EXCEEDS_OPEN',
 'RD_BUILD_NOT_COMPLETED',
+// Story 10.4 hub rejections are structural bars, except the *_NOT_FOUND codes (HUB_CUSTOMER/MACHINE/BOOKING).
+// Those are kept OUT of this set and listed in RETRYABLE_ERROR_CODES instead: a code that is merely
+// absent here would fall to the generic 4xx branch (needs_attention), but the parent record may
+// still be syncing ahead of this one, so they must retry.
+'MEMBER_REFERENCE_REQUIRED',
+'HUB_BOOKING_ALREADY_CLOSED',
+'HUB_MACHINE_BUSY',
+'HUB_MACHINE_NOT_METERED',
+'HUB_DUPLICATE_RECORD',
+'HUB_BOOKING_NOT_OVERDUE',
 'RD_REQUISITION_NOT_FOUND',
 'RD_REQUISITION_ALREADY_DECIDED',
 'RD_REQUISITION_LINE_REQUIRED',
@@ -579,6 +589,13 @@ function existingEventIdFrom(error: AppError): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+// Story 10.4: 404s that clear once the parent hub record has synced. Twin of the edge connector's set.
+const RETRYABLE_ERROR_CODES = new Set([
+  'HUB_CUSTOMER_NOT_FOUND',
+  'HUB_MACHINE_NOT_FOUND',
+  'HUB_BOOKING_NOT_FOUND',
+]);
+
 export function classifyUploadFailure(error: unknown): UploadFailureClassification {
   if (!isAppError(error)) {
     return { action: 'retry', localStatus: 'pending_sync', retryable: true };
@@ -615,6 +632,16 @@ export function classifyUploadFailure(error: unknown): UploadFailureClassificati
       action: 'halt',
       localStatus: 'auth_required',
       retryable: false,
+      serverErrorCode: error.errorCode,
+    };
+  }
+
+  // Checked before the generic 4xx branch below, which would settle these as needs_attention.
+  if (RETRYABLE_ERROR_CODES.has(error.errorCode)) {
+    return {
+      action: 'retry',
+      localStatus: 'pending_sync',
+      retryable: true,
       serverErrorCode: error.errorCode,
     };
   }
