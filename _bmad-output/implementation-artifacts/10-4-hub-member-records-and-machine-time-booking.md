@@ -66,7 +66,7 @@ So that every booking and sale is attributable to exactly one customer and machi
   - [x] Route handlers carry idempotency keys and delegate guards to the compliance seams (a direct `POST /api/v1/events` must not bypass them)
 
 - [x] **Task 7: Error codes registered in three places (AC: 2, 3, 4)**
-  - [x] `MEMBER_REFERENCE_REQUIRED` plus new `HUB_CUSTOMER_NOT_FOUND`, `HUB_MACHINE_NOT_FOUND`, `HUB_BOOKING_NOT_FOUND`, `HUB_BOOKING_ALREADY_CLOSED`, `HUB_MACHINE_NOT_METERED` in `PERMANENT_ERROR_CODES` (`src/sync/upload.ts`), `edge/src/sync/connector.ts`, `edge/src/messages/en.json`. There is no separate server error registry: the seams throw these as `AppError` codes, so the three client-facing places are the whole registration surface. Review 2026-11-25: `HUB_MACHINE_BUSY`, `HUB_DUPLICATE_RECORD` and `HUB_BOOKING_NOT_OVERDUE` were added to all three places. Second review P-A: the three `*_NOT_FOUND` codes are NOT in the permanent sets and are listed in an explicit `RETRYABLE_ERROR_CODES` set in both classifiers, checked before the generic 4xx branch (absence from the permanent set alone would have settled them as `needs_attention`), so they retry offline
+  - [x] `MEMBER_REFERENCE_REQUIRED` plus new `HUB_CUSTOMER_NOT_FOUND`, `HUB_MACHINE_NOT_FOUND`, `HUB_BOOKING_NOT_FOUND`, `HUB_BOOKING_ALREADY_CLOSED`, `HUB_MACHINE_NOT_METERED` in `PERMANENT_ERROR_CODES` (`src/sync/upload.ts`), `edge/src/sync/connector.ts`, `edge/src/messages/en.json`. There is no separate server error registry: the seams throw these as `AppError` codes, so the three client-facing places are the whole registration surface. Review 2026-11-25: `HUB_MACHINE_BUSY`, `HUB_DUPLICATE_RECORD` and `HUB_BOOKING_NOT_OVERDUE` were added to all three places. Second review P-A moved the three `*_NOT_FOUND` codes into a `RETRYABLE_ERROR_CODES` set; third review DN1 reverted that: all three are back in both `PERMANENT_ERROR_CODES` sets and settle as `needs_attention`, and no retry set exists.
 
 - [x] **Task 8: Integration test `test/integration/story-10-4.test.ts` (AC: 1-4)**
   - [x] AC1 member and walk-in created; membership_no rules. AC2 booking with no ref, with two refs, with unknown ref all `MEMBER_REFERENCE_REQUIRED` / not found; exactly one succeeds. AC3 close records actuals and the meter reading appears in `asset_meter_reading` with `source='hub_booking'` and advances the meter; regression reading rolls back the close. AC4 job with a booking opened 25h ago raises exactly one exception and a second run is a no-op; a booking opened 23h ago and a closed booking raise none
@@ -124,8 +124,8 @@ Threshold is 24 hours from `opened_at` (not from `scheduled_end`). Make the 24h 
 
 Reuse nothing already minted. New codes and their offline classification (both classifiers, `src/sync/upload.ts` and `edge/src/sync/connector.ts`, plus `edge/src/messages/en.json`; there is no server-side registry):
 
-- Permanent (`PERMANENT_ERROR_CODES`, settle as `needs_attention`): `MEMBER_REFERENCE_REQUIRED`, `HUB_BOOKING_ALREADY_CLOSED`, `HUB_MACHINE_BUSY`, `HUB_MACHINE_NOT_METERED`, `HUB_DUPLICATE_RECORD`, `HUB_BOOKING_NOT_OVERDUE`.
-- Retryable (`RETRYABLE_ERROR_CODES`, stay `pending_sync`, because the parent record may still be syncing): `HUB_CUSTOMER_NOT_FOUND`, `HUB_MACHINE_NOT_FOUND`, `HUB_BOOKING_NOT_FOUND`.
+- Permanent (`PERMANENT_ERROR_CODES`, settle as `needs_attention`): `MEMBER_REFERENCE_REQUIRED`, `HUB_CUSTOMER_NOT_FOUND`, `HUB_MACHINE_NOT_FOUND`, `HUB_BOOKING_NOT_FOUND`, `HUB_BOOKING_ALREADY_CLOSED`, `HUB_MACHINE_BUSY`, `HUB_MACHINE_NOT_METERED`, `HUB_DUPLICATE_RECORD`, `HUB_BOOKING_NOT_OVERDUE`.
+- No retryable hub codes (third review DN1): the `*_NOT_FOUND` codes are permanent like `ASSET_NOT_FOUND` and `METER_NOT_FOUND`, so one unresolvable parent cannot stall the outbox. Ordered-dependency sync (hold a child event until its parent has synced) is a backlog item for when an edge client queues hub writes.
 - Reused existing codes: `INVALID_PARAMS`, `LOCATION_NOT_FOUND`, `ASSET_NOT_FOUND`, `METER_NOT_FOUND`, `METER_READING_REGRESSION`, `LOCATION_ACCESS_DENIED`, `DUPLICATE_EVENT`.
 
 ### Inherited defects and corrections - do not copy (from Stories 10.2/10.3)
@@ -133,15 +133,15 @@ Reuse nothing already minted. New codes and their offline classification (both c
 - `alreadyPersisted` uses a plain SELECT, never `FOR UPDATE` on `domain_events`.
 - Guarded DROP/ADD pairs must escape `_` in `indexdef NOT LIKE` patterns or match on the constraint name.
 - Timestamps in payloads need an explicit UTC offset (the `ISO8601_TIMESTAMP_REGEX` rule in `asset-meter.ts`); a naive timestamp shifts the 24h clock.
-- NUMERIC(18,4) bound for meter values: reuse the meter seam's validation, do not re-derive.
+- NUMERIC(18,4) bound for meter values: the close shape check applies the P-J regex (`METER_VALUE`) so a rounded double is refused with a close-field error; the meter seam's own validation still runs in the same transaction.
 
 ### Open questions (not blockers; proceed with the defaults stated)
 
 - Q1: Walk-in records: persisted per visit or reusable? Default: reusable record, `membership_no` NULL.
-- Q2: Which role is the "hub operator" recipient for exceptions? Default: resolve from site role assignments for the booking's location; confirm the role name with the owner and seed it as registry data.
+- Q2: Which role is the "hub operator" recipient for exceptions? Resolved as built: the role is data on each machine (`hub_machine.operator_role`, validated at registration), and the exception notification targets that role only, with no location (the `pm-jobs.ts` precedent), so every holder of the role is notified. Owner confirmation of the role names is still open.
 - Q3: Can a booking be opened by someone other than the closing operator? Default: yes, any hub staff with the site role.
 - Q4 (second review): phone capture. Deferred; no contact field exists in Phase 1 until a privacy decision is made.
-- Known limit (second review X2): `opened_at` and `closed_at` are checked against server time when the event is first applied (5 minutes either way; `opened_at` up to 12 hours back with a `backdate_reason`). An offline-queued hub event is therefore accepted only while its timestamps are inside those bounds; a replay of an event the server already holds always returns the original event. Revisit when the edge queues hub writes.
+- Known limit (second review X2): `opened_at` and `closed_at` are checked against server time when the event is first applied (5 minutes either way; `opened_at` up to 12 hours back with a `backdate_reason`). An offline-queued hub event is therefore accepted only while its timestamps are inside those bounds; a replay of an event the server already holds always returns the original event. Revisit when the edge queues hub writes. Third review DN2: until then the edge upload door refuses every `hub.*` event with 400 `INVALID_EVENT_STREAM`, so no hub event can be queued and fail permanently on a late sync.
 
 ### Verification commands
 
@@ -196,7 +196,7 @@ Decisions (owner accepted the recommendations):
 Patches:
 
 - P1 done. Create, open, close, machine register and meter link return the original record on an idempotent replay (id taken from the persisted event); a key reused for a different event type, or (close, meter link) a different stream, is 409 `DUPLICATE_EVENT`. Blank idempotency keys are treated as absent.
-- P2 done. `runHubBookingExceptionJob` catches and logs per booking, continues, and returns `failures`; only `HUB_BOOKING_NOT_OVERDUE` is silent. No test forces a failing booking.
+- P2 done. `runHubBookingExceptionJob` catches and logs per booking, continues, and returns `failures`; only `HUB_BOOKING_NOT_OVERDUE` is silent. Second review P-M later added the test that forces a failing booking.
 - P3 done. `uq_hub_machine_asset` on hub_machine(asset_id) and the partial `uq_hub_machine_meter` on hub_machine(meter_id) WHERE meter_id IS NOT NULL, created with IF NOT EXISTS in `hub_machine.sql` and mirrored in `init-db.sql`; schema-drift EXPECTED updated. A duplicate is 409 `HUB_DUPLICATE_RECORD`.
 - P4 done. `HUB_CUSTOMER_NOT_FOUND`, `HUB_MACHINE_NOT_FOUND` and `HUB_BOOKING_NOT_FOUND` are out of both `PERMANENT_ERROR_CODES` sets, so the sync layer was meant to retry them. That was wrong: a code absent from the set falls to the generic 4xx branch and settles as `needs_attention`. Corrected by second review P-A with an explicit retry list. The en.json messages stay.
 - P5 done. `actual_minutes` is an integer from 0 to 100000 and may not exceed the minutes between opened_at and closed_at (rounded up to the next minute); both are `INVALID_PARAMS` 400.
@@ -211,8 +211,8 @@ Patches:
 
 Decisions (owner accepted the recommendations):
 
-- X1 done. Direct `hub.*` events on the generic doors now need the `engineering` module and the hub location rule. Finding: the edge upload door (`POST /api/v1/edge/events`) is NOT closed to the research stream, so it carried hub events exactly like `POST /api/v1/events`, authorised only by a `research` grant. Both doors now resolve the module to `engineering` for any `hub.*` event type and call `assertHubEventWriteAccess` (`src/api/v1/hub-common.ts`): a global engineering writer passes; a location-scoped writer needs the machine's or booking's location (from the row), or the payload `location_id` for customer and machine registration, to be covered. No edge client queues hub events yet (`edge/src` has only the error-code classifiers), so no existing edge flow changed; a scoped engineering user still uploads through the edge door (tested).
-- X2 done. The 5-minute window moved from the pre-transaction shape check into the applier, which runs only for a new event; `persistEvent` returns the original event for a replayed idempotency key before any applier, so a replay is never refused for its age. Server time is the default when the timestamp is omitted. Offline-queued events are accepted only inside the window (see Open questions).
+- X1 done. Direct `hub.*` events on the generic doors now need the `engineering` module and the hub location rule. Finding: the edge upload door (`POST /api/v1/edge/events`) is NOT closed to the research stream, so it carried hub events exactly like `POST /api/v1/events`, authorised only by a `research` grant. Both doors now resolve the module to `engineering` for any `hub.*` event type and call `assertHubEventWriteAccess` (`src/api/v1/hub-common.ts`): a global engineering writer passes; a location-scoped writer needs the machine's or booking's location (from the row), or the payload `location_id` for customer and machine registration, to be covered. No edge client queues hub events yet (`edge/src` has only the error-code classifiers), so no existing edge flow changed; a scoped engineering user still uploads through the edge door (tested). Third review DN2 supersedes this for the edge door: it now refuses every `hub.*` event, and only the generic events door keeps `assertHubEventWriteAccess`.
+- X2 done. The 5-minute window moved from the pre-transaction shape check into the applier, which runs only for a new event; `persistEvent` returns the original event for a replayed idempotency key before any applier, so a replay is never refused for its age. Server time is the default when the timestamp is omitted on the hub routes only; a direct event must carry its own timestamps. Offline-queued events are accepted only inside the window (see Open questions).
 - X3 done. `HUB_MACHINE_BUSY` only when the new booking's scheduled window overlaps an open booking's window on the same machine (half-open, so adjacent windows are fine). A booking with no complete window conflicts with any open booking, and an open booking with no window blocks any new one. Still checked under the machine row lock.
 - X4 done. A client `opened_at` more than 5 minutes in the past needs a non-blank `backdate_reason` (at most 500 characters) and may be at most 12 hours back; the 5-minute future skew limit stays. The reason is stored on `hub_booking.backdate_reason`. The `actual_minutes` cap stays relative to the stored `opened_at` and `closed_at`.
 - X5 done. `contact_phone_hash`, its salt and the route hashing are gone from the projection SQL, `init-db.sql`, the payload, the seam, the route, the read accessor and the tests. The seam refuses any payload carrying `contact_phone` or `contact_phone_hash`; the route ignores an unknown `contact_phone` field. No contact field is returned in any hub customer response. The migration drops an existing `contact_phone_hash` column (unreleased table).
@@ -234,6 +234,26 @@ Patches:
 - P-L done. Task 1, Task 7, Dev Notes (Close and meter feed, Error codes, scope boundary), Open questions, the D5, D6 and P4 notes, and this Change Log are corrected.
 - P-M done. Sweep test: one due booking whose machine holds an invalid `operator_role` fails, the other due booking still gets its exception, `failures` is 1.
 - P-N done. Tests added for the uppercase URL close, open on an unmetered machine, disjoint and overlapping windows, backdating within 12 hours with a reason and refusal beyond 12 hours or without a reason, replay beyond the window, and direct `hub.*` events under a non-engineering role on both doors.
+
+### Third Review Decisions and Patches (2026-11-28)
+
+Decisions (owner accepted the recommendations):
+
+- DN1 done. `HUB_CUSTOMER_NOT_FOUND`, `HUB_MACHINE_NOT_FOUND` and `HUB_BOOKING_NOT_FOUND` are permanent again: back in both `PERMANENT_ERROR_CODES` sets (`src/sync/upload.ts`, `edge/src/sync/connector.ts`), and `RETRYABLE_ERROR_CODES` with its branch is deleted from both classifiers (it had no other members). The classifier unit tests in `test/unit/sync-upload.test.ts` and `edge/test/unit/connector.test.ts` now assert `needs_attention`; the edge and server parity test stays green. Ordered-dependency sync (hold a child event until its parent has synced) is recorded as a backlog item for when an edge client queues hub writes.
+- DN2 done. `POST /api/v1/edge/events` refuses any `hub.*` event with 400 `INVALID_EVENT_STREAM` (the code the generic door uses for its barred streams) and a message that hub events are online-only until an edge client exists. The X1 location gate and its import are gone from the edge door; the engineering module mapping stays so a non-engineering caller still meets the module check first. `assertHubEventWriteAccess` stays on `POST /api/v1/events`. The X1/P-N integration test now asserts the refusal on the edge door (nothing stored) and keeps the module and location assertions on the events door.
+- DN3 done. `POST /api/v1/events` refuses `event_type: hub.booking_exception_raised` with 400 `INVALID_EVENT_STREAM`; only the 24h job's direct `persistEvent` writes it. The edge door already refuses every `hub.*` event (DN2). Test: the forged event is refused, `exception_raised_at` stays null, and the sweep still raises it.
+- DN4 done. The exception clock is measured from `GREATEST(opened_at, scheduled_start)` (a null `scheduled_start` means `opened_at`). One shared expression, `HUB_EXCEPTION_DUE_SQL` in `src/read/projections/hub.ts`, feeds both `listBookingsDueForException` and the due re-check under the lock in `applyException`; `HUB_BOOKING_EXCEPTION_HOURS` stays 24. AC 4 wording is unchanged: a booking with no later schedule is overdue 24 hours after it opened. Tests: scheduled 5 days ahead and opened 25h ago is not overdue (the applier also refuses it with `HUB_BOOKING_NOT_OVERDUE`); opened 25h ago with a past schedule is overdue; the existing exactly-24h and 23h59 boundary tests pass unchanged.
+
+Patches:
+
+- R1 done. `idx_hub_booking_machine_open` ON `hub_booking (machine_id)` WHERE `status = 'open'`, created with IF NOT EXISTS in `hub_booking.sql` and mirrored in `init-db.sql`; added to the schema-drift EXPECTED indexes.
+- R2 done. `isTs` bounds the year to 1970 through 2100, so year 0000, 1969 and 2101 are `INVALID_PARAMS` and never reach Postgres. Test: added to the P-G bad-date list for `scheduled_start`, `scheduled_end` and `opened_at`.
+- R3 done. `assertHubEventWriteAccess` throws 400 `INVALID_EVENT_ENVELOPE` (the `validateEnvelope` code) for a non-string `event_type` or a non-object, null or array `payload`, never a TypeError. Test calls it directly with four malformed bodies (the door itself cannot reach it because `validateEnvelope` and the module gate run first).
+- R4 done. `persistHubEvent` stamps the actor location with `auditLocationFor` (the generic door's helper, from `src/middleware/rbac.ts`) using the location acted on: routes pass `actedLocation` (the machine's location for open, close and meter link; the payload `location_id` for machine and customer registration), defaulting to the location `requireRole` resolved. A site-level grant acting at a bin stamps the bin; a global writer keeps `'*'`. Test checks the stored actor location and the audit rows for a site-level writer, and `'*'` for a global writer.
+- R5 verified-no-change. `permittedLocationsForModuleScope` already returns each assignment's covered descendants (`addCoveredLocations` adds the `locationCoverage` set), so `hubReadScope` and the list filters match the same coverage the writes use through `assignmentCoversLocation`. No code change. Test added: a reader and a writer granted at the site see and act on the hub bin beneath it.
+- R6 done. Tests: two parallel opens on one machine give exactly one 201 and one 409 `HUB_MACHINE_BUSY`, with one open row; forged `hub.booking_exception_raised` refused (DN3); the classifier tests stay (DN1 changed their expectation). The classifier-level edge-door retry gap closes with DN1 and DN2: no retry path and no hub traffic on that door remain.
+- R7 done. Open Question Q2, the Dev Notes line on meter validation, the P2 note, the X2 wording and the File List are corrected; the Senior Developer Review boxes are ticked. Acceptance criteria untouched; status stays review.
+- R8 done. `HubBookingRow`, `HubCustomerRow` and `HubMachineRow` type their timestamps as `Date` (pg returns `Date`); `tsc` is clean with no new casts.
 
 ### Review Findings
 
@@ -261,9 +281,43 @@ Deferred, not fixed in this review:
 - src/api/v1/events.ts, src/api/v1/edge.ts (second review X1: hub.* module and location gate)
 - deploy/compose/init-db.sql, edge/src/sync/connector.ts, edge/src/messages/en.json (edited)
 - test/unit/schema-drift.test.ts, test/unit/background-cycles.test.ts, test/unit/sync-upload.test.ts, edge/test/unit/connector.test.ts, test/integration/story-1-9.test.ts (edited)
+- _bmad-output/implementation-artifacts/sprint-status.yaml, this story file (edited)
+- Third review (2026-11-28): src/api/v1/edge.ts, events.ts, hub-common.ts, hub-bookings.ts, hub-machines.ts, hub-customers.ts, src/compliance/hub-booking.ts, src/read/projections/hub.ts, src/sync/upload.ts, edge/src/sync/connector.ts, read/projections/hub_booking.sql, deploy/compose/init-db.sql, test/unit/schema-drift.test.ts, test/unit/sync-upload.test.ts, edge/test/unit/connector.test.ts, test/integration/story-10-4.test.ts (edited)
 
 ## Change Log
 
 - 2026-11-24: Story 10.4 implemented; status review.
 - 2026-11-25: Code review decisions D1-D6 and patches P1-P11 applied (see Review Decisions and Patches); status stays review.
 - 2026-11-25: Second review decisions X1-X6 and patches P-A to P-N applied (see Second Review Decisions and Patches); status stays review.
+- 2026-11-28: Third review decisions DN1-DN4 and patches R1-R8 applied (see Third Review Decisions and Patches); status stays review.
+
+## Senior Developer Review (AI)
+
+Review date: 2026-11-28. Range reviewed: `83bcb61..558aa7e` (committed post-fix state). Layers: Blind Hunter, Edge Case Hunter, Acceptance Auditor; none failed. Outcome: Changes Requested (AC1-AC4 satisfied; four decisions and several patches open). Triage: 4 decision-needed, 8 patch, 12 defer, 9 dismissed.
+
+### Decisions needed
+
+- [x] [Decision] DN1: the three `HUB_*_NOT_FOUND` codes retry forever. A retry throws and aborts the edge batch, so one unresolvable parent (typo, inactive customer, parent that settled needs_attention) stalls the whole outbox. `ASSET_NOT_FOUND`, `METER_NOT_FOUND`, `LOCATION_NOT_FOUND` stay permanent for the same ordering race. [edge/src/sync/connector.ts, src/sync/upload.ts]
+- [x] [Decision] DN2: the edge door accepts `hub.*` events with only a location check, while the applier enforces the 5-minute and 12-hour windows. A close synced late is refused for good and the 24h exception then fires for a booking closed on site. No edge client queues hub writes yet. [src/api/v1/edge.ts, src/compliance/hub-booking.ts]
+- [x] [Decision] DN3: any engineering writer can post `hub.booking_exception_raised` (a system-only event) through `/api/v1/events` or the edge door, with an unbounded `raised_at`. [src/compliance/hub-booking.ts, src/api/v1/events.ts]
+- [x] [Decision] DN4: the 24h exception clock runs from `opened_at`, so a booking made for next week raises an exception a day after creation. [src/read/projections/hub.ts, src/compliance/hub-booking.ts]
+
+### Review Follow-ups (AI)
+
+- [x] [AI-Review] [Med] Add `hub_booking (machine_id) WHERE status = 'open'` index (busy check and open list scan the table). [read/projections/hub_booking.sql, deploy/compose/init-db.sql]
+- [x] [AI-Review] [Med] Year 0000 or out-of-range years pass `isTs` and fail in Postgres with a 500; bound the year. [src/compliance/hub-booking.ts]
+- [x] [AI-Review] [Med] `assertHubEventWriteAccess` throws TypeError on a non-string `event_type` or non-object `payload`; guard it. [src/api/v1/hub-common.ts]
+- [x] [AI-Review] [Med] Hub routes stamp the audit location as the covering assignment's own location or `*`; use the generic door's audit-location helper. [src/api/v1/hub-common.ts]
+- [x] [AI-Review] [Med] List reads match exact permitted locations while writes cover descendants; a parent-location reader sees nothing. Verify against `permittedLocationsForModuleScope`, then align. [src/api/v1/hub-common.ts, src/read/projections/hub.ts]
+- [x] [AI-Review] [Low] Test gaps: concurrent double open on one machine, forged `hub.booking_exception_raised` refused (after DN3), classifier-level edge-door retry. [test/integration/story-10-4.test.ts]
+- [x] [AI-Review] [Low] Story docs: Open Question Q2 is stale (code uses per-machine `operator_role`, role-only target); Dev Notes line on reusing meter validation conflicts with the P-J regex; P2 note says no failing-booking test (P-M added one); X2 server-time default applies on routes only; File List omits `sprint-status.yaml` and the story file.
+- [x] [AI-Review] [Low] `HubBookingRow` / `HubCustomerRow` type timestamps as `string` while pg returns `Date`. [src/read/projections/hub.ts]
+
+### Deferred (not caused by this story or accepted limits)
+
+- Exception notification reaches nobody if `operator_role` has no holders, and is never re-raised; no machine update path to fix a role. Role-only target notifies every location.
+- Customer and machine location not cross-checked at booking open; customers without a location visible to every reader; `inactive` status unreachable.
+- Meter register can be poisoned by a mistyped cumulative reading; correction belongs to Story 7.2.
+- Backdated open (up to 12h) can overlap already-closed bookings; a scheduled open booking blocks no-window bookings (as decided in X3).
+- Migration on databases that already hold hub rows: unique indexes and CHECKs can abort on colliding rows, `DROP COLUMN contact_phone_hash` destroys data (hub tables not yet on staging).
+- Unbounded list endpoints; synthetic meter envelope has no `domain_events` row; duplicate `reading_id` returns 500; `raised_at` unvalidated on direct events; replay status 201 and strict compare; unpaged sweep.

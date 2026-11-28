@@ -2469,7 +2469,7 @@ const EXPECTED = [
     canonical: 'read/projections/hub_booking.sql',
     table: 'hub_booking',
     constraints: ['chk_hub_booking_status','chk_hub_booking_actual_minutes','chk_hub_booking_closed_actuals','chk_hub_booking_schedule'],
-    indexes: ['idx_hub_booking_open_unraised','idx_hub_booking_customer'],
+    indexes: ['idx_hub_booking_open_unraised','idx_hub_booking_customer','idx_hub_booking_machine_open'],
   },
   {
     canonical: 'read/projections/rd_equipment_custody.sql',

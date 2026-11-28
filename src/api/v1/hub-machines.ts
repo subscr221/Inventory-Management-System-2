@@ -19,6 +19,7 @@ const create: RouteHandler = async (req, res) => {
   const machineId = randomUUID();
   const saved = await persistHubEvent(req, res, {
     streamId: machineId,
+    actedLocation: typeof b['location_id'] === 'string' ? b['location_id'] : undefined,
     eventType: 'hub.machine_registered',
     idField: 'machine_id',
     compare: ['machine_code', 'location_id', 'asset_id', 'meter_id', 'operator_role'],
@@ -42,6 +43,7 @@ const linkMeter: RouteHandler = async (req, res, params) => {
   if (existing) assertHubLocationAccess(req, existing.location_id, 'write');
   const saved = await persistHubEvent(req, res, {
     streamId: machineId,
+    actedLocation: existing?.location_id,
     eventType: 'hub.machine_meter_linked',
     idField: 'machine_id',
     streamFromUrl: true,

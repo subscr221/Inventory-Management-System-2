@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createAppRouter, createAppServer } from '../../src/server.js';
 import { getAdminPool, getPool, closeAdminPool, closePool } from '../../src/config/db.js';
 import { persistEvent } from '../../src/events/store.js';
+import { assertHubEventWriteAccess } from '../../src/api/v1/hub-common.js';
 import { assertSingleHubCustomerRef } from '../../src/compliance/hub-customer.js';
 import { runHubBookingExceptionJob } from '../../src/hub/booking-jobs.js';
 
@@ -76,6 +77,8 @@ describe('Story 10.4 hub customers, machine-time booking, meter feed and 24h exc
   let readOnlyHeaders: Headers;
   let scopedHeaders: Headers;
   let researchHeaders: Headers;
+  let siteWriterHeaders: Headers;
+  let siteReaderHeaders: Headers;
   const site = randomUUID();
   const hubBin = randomUUID();
   const otherBin = randomUUID();
@@ -234,6 +237,13 @@ describe('Story 10.4 hub customers, machine-time booking, meter feed and 24h exc
     ]);
     scopedHeaders = await provision('scoped', [
       { role: `hub_scoped_${run}`, module: 'engineering', functionScope: 'write', locationId: otherBin },
+    ]);
+    // R4/R5: grants at the SITE (parent of the hub bins) cover the bins beneath it.
+    siteWriterHeaders = await provision('sitew', [
+      { role: `hub_sitew_${run}`, module: 'engineering', functionScope: 'write', locationId: site },
+    ]);
+    siteReaderHeaders = await provision('siter', [
+      { role: `hub_siter_${run}`, module: 'engineering', functionScope: 'read', locationId: site },
     ]);
     researchHeaders = await provision('research', [
       { role: `hub_research_${run}`, module: 'research', functionScope: 'write', locationId: '*' },
@@ -717,7 +727,7 @@ describe('Story 10.4 hub customers, machine-time booking, meter feed and 24h exc
   it('P-G: impossible calendar dates are INVALID_PARAMS, never a 500', async () => {
     const customer = await seedCustomer();
     const m = await seedMachine();
-    for (const bad of ['2026-02-30T10:00:00Z', '2026-13-01T10:00:00Z', '2026-04-31T10:00:00Z', '2027-02-29T10:00:00Z', '2026-01-01T24:00:00Z', '2026-01-01T10:60:00Z', '2026-01-01T10:00:00+25:00']) {
+    for (const bad of ['2026-02-30T10:00:00Z', '2026-13-01T10:00:00Z', '2026-04-31T10:00:00Z', '2027-02-29T10:00:00Z', '2026-01-01T24:00:00Z', '2026-01-01T10:60:00Z', '2026-01-01T10:00:00+25:00', '0000-01-01T10:00:00Z', '1969-12-31T23:59:59Z', '2101-01-01T00:00:00Z']) {
       for (const field of ['scheduled_start', 'scheduled_end', 'opened_at']) {
         const r = await openOn(m.machineId, customer, { [field]: bad });
         assert.equal(r.status, 400, JSON.stringify([field, bad, r.body]));
@@ -1045,7 +1055,7 @@ describe('Story 10.4 hub customers, machine-time booking, meter feed and 24h exc
     assert.equal(c2.body['error_code'], 'DUPLICATE_EVENT');
   });
 
-  it('X1/P-N: a direct hub.* event needs the engineering module and the hub location rule, on both doors', async () => {
+  it('X1/P-N/DN2: a direct hub.* event needs the engineering module and the hub location rule on the events door; the edge door refuses it', async () => {
     const atHub = await seedMachine({ location: hubBin });
     const customer = await seedCustomer();
     const event = (eventType: string, payload: Body, actorLocation: string): Body => ({
@@ -1074,10 +1084,17 @@ describe('Story 10.4 hub customers, machine-time booking, meter feed and 24h exc
       metadata: { ...(body['metadata'] as Body), device_id: 'EDGE-TAB-104', capture_method: 'MANUAL' },
     });
 
-    for (const [door, wrap] of [
-      ['/api/v1/events', (b: Body): Body => b],
-      ['/api/v1/edge/events', edge],
-    ] as const) {
+    // DN2: the edge door refuses every hub.* event (online-only until an edge client exists), even
+    // for a global engineering writer and for a valid body.
+    for (const body of [customerEvent(), openEvent(atHub.machineId, hubBin)]) {
+      const refused = await post('/api/v1/edge/events', edge(body));
+      assert.equal(refused.status, 400, JSON.stringify(refused.body));
+      assert.equal(refused.body['error_code'], 'INVALID_EVENT_STREAM');
+      const stored = await getPool().query('SELECT count(*)::int AS n FROM domain_events WHERE stream_id = $1', [body['stream_id']]);
+      assert.equal(stored.rows[0]!['n'], 0);
+    }
+
+    for (const [door, wrap] of [['/api/v1/events', (b: Body): Body => b]] as const) {
       // A research-only role (the stream's own module) is refused: hub.* needs engineering.
       const research = await post(door, wrap(customerEvent()), researchHeaders);
       assert.equal(research.status, 403, `${door}: ${JSON.stringify(research.body)}`);
@@ -1114,5 +1131,97 @@ describe('Story 10.4 hub customers, machine-time booking, meter feed and 24h exc
     // A global engineering writer still posts a hub event directly (the generic door stays usable).
     const ok = await post('/api/v1/events', customerEvent());
     assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  });
+
+  it('DN3: hub.booking_exception_raised is refused on the events door; only the job writes it', async () => {
+    const booking = await seedOpenBooking(25);
+    const forged: Body = {
+      stream_type: 'research',
+      stream_id: booking.bookingId,
+      event_type: 'hub.booking_exception_raised',
+      payload: { booking_id: booking.bookingId, raised_at: '2099-01-01T00:00:00Z' },
+      metadata: { correlation_id: randomUUID(), occurred_at: new Date().toISOString(), actor: { user_id: randomUUID(), role: 'x', location_id: hubBin } },
+      idempotency_key: randomUUID(),
+    };
+    const r = await post('/api/v1/events', forged);
+    assert.equal(r.status, 400, JSON.stringify(r.body));
+    assert.equal(r.body['error_code'], 'INVALID_EVENT_STREAM', JSON.stringify(r.body));
+    const row = await getPool().query('SELECT exception_raised_at FROM hub_booking WHERE booking_id = $1', [booking.bookingId]);
+    assert.equal(row.rows[0]!['exception_raised_at'], null);
+    // The job's own direct persistEvent still raises it.
+    const sweep = await runHubBookingExceptionJob();
+    assert.ok(sweep.booking_ids.includes(booking.bookingId));
+  });
+
+  it('DN4: the 24h clock runs from the later of opened_at and scheduled_start', async () => {
+    const hours = (h: number): string => new Date(Date.now() + h * 3600_000).toISOString();
+    const future = await seedMachine();
+    const fOpen = await openOn(future.machineId, await seedCustomer(), { scheduled_start: hours(120), scheduled_end: hours(121) });
+    assert.equal(fOpen.status, 201, JSON.stringify(fOpen.body));
+    const futureId = pick(fOpen, 'booking', 'booking_id');
+    await backdate(futureId, 25 * 3600);
+    const past = await seedMachine();
+    const pOpen = await openOn(past.machineId, await seedCustomer(), { scheduled_start: hours(-30), scheduled_end: hours(-29) });
+    assert.equal(pOpen.status, 201, JSON.stringify(pOpen.body));
+    const pastId = pick(pOpen, 'booking', 'booking_id');
+    await backdate(pastId, 25 * 3600);
+    const sweep = await runHubBookingExceptionJob();
+    assert.ok(!sweep.booking_ids.includes(futureId), 'scheduled 5 days ahead is not overdue after 25h');
+    assert.ok(sweep.booking_ids.includes(pastId), 'opened 25h ago with a past schedule is overdue');
+    // The applier's own re-check agrees: a direct event for the not-due booking is refused.
+    await assert.rejects(
+      persistEvent({
+        stream_type: 'research',
+        stream_id: futureId,
+        event_type: 'hub.booking_exception_raised',
+        payload: { booking_id: futureId, raised_at: new Date().toISOString() },
+        metadata: { correlation_id: randomUUID(), occurred_at: new Date().toISOString(), actor: { user_id: randomUUID(), role: 'system', location_id: '*' } },
+        idempotency_key: randomUUID(),
+      } as never),
+      { errorCode: 'HUB_BOOKING_NOT_OVERDUE' },
+    );
+  });
+
+  it('R3: a malformed event body is a 400, never a TypeError', async () => {
+    for (const bad of [
+      { event_type: 42, payload: {} },
+      { event_type: 'hub.booking_opened', payload: null },
+      { event_type: 'hub.booking_opened', payload: [] },
+      { event_type: 'hub.booking_opened', payload: 'x' },
+    ])
+      await assert.rejects(assertHubEventWriteAccess([], bad as never), { statusCode: 400, errorCode: 'INVALID_EVENT_ENVELOPE' });
+  });
+
+  it('R4/R5: a site-level grant covers the hub bins beneath it for reads and writes, and the audit stamps the location acted on', async () => {
+    const m = await seedMachine({ location: hubBin });
+    const customer = await seedCustomer('walk_in', { location_id: hubBin });
+    // R5: a parent-location reader sees descendants (permittedLocationsForModuleScope includes them).
+    const machines = await get('/api/v1/hub-machines', siteReaderHeaders);
+    assert.ok((machines.body['rows'] as Body[]).some((r) => r['machine_id'] === m.machineId), 'site reader lists the bin machine');
+    const customers = await get('/api/v1/hub-customers', siteReaderHeaders);
+    assert.ok((customers.body['rows'] as Body[]).some((r) => r['customer_id'] === customer));
+    // R4: the site writer acts at the bin; the stamped actor and audit location are the bin, not the site.
+    const asSite = await post('/api/v1/hub-bookings', { customer_id: customer, machine_id: m.machineId }, siteWriterHeaders);
+    assert.equal(asSite.status, 201, JSON.stringify(asSite.body));
+    const ev = await getPool().query("SELECT metadata->'actor'->>'location_id' AS loc FROM domain_events WHERE event_id = $1", [asSite.body['event_id']]);
+    assert.equal(ev.rows[0]!['loc'], hubBin);
+    const audit = await getPool().query('SELECT location_id FROM audit_log WHERE event_id = $1', [asSite.body['event_id']]);
+    assert.ok(audit.rows.length > 0 && audit.rows.every((r) => r['location_id'] === hubBin), JSON.stringify(audit.rows));
+    // A global writer keeps '*', as on the generic door.
+    const m2 = await seedMachine();
+    const g = await openOn(m2.machineId, await seedCustomer());
+    const gev = await getPool().query("SELECT metadata->'actor'->>'location_id' AS loc FROM domain_events WHERE event_id = $1", [g.body['event_id']]);
+    assert.equal(gev.rows[0]!['loc'], '*');
+  });
+
+  it('R6: two concurrent opens on one machine: exactly one succeeds, the other is HUB_MACHINE_BUSY', async () => {
+    const m = await seedMachine();
+    const [c1, c2] = [await seedCustomer(), await seedCustomer('walk_in')];
+    const [a, b] = await Promise.all([openOn(m.machineId, c1), openOn(m.machineId, c2)]);
+    assert.deepEqual([a.status, b.status].sort(), [201, 409], JSON.stringify([a.body, b.body]));
+    const loser = a.status === 409 ? a : b;
+    assert.equal(loser.body['error_code'], 'HUB_MACHINE_BUSY');
+    const open = await getPool().query("SELECT count(*)::int AS n FROM hub_booking WHERE machine_id = $1 AND status = 'open'", [m.machineId]);
+    assert.equal(open.rows[0]!['n'], 1);
   });
 });

@@ -22,6 +22,7 @@ const create: RouteHandler = async (req, res) => {
   const customerId = randomUUID();
   const saved = await persistHubEvent(req, res, {
     streamId: customerId,
+    actedLocation: typeof b['location_id'] === 'string' ? b['location_id'] : undefined,
     eventType: 'hub.customer_registered',
     idField: 'customer_id',
     // X5: no phone or other contact field is captured, stored or returned in Phase 1.

@@ -70,7 +70,7 @@ import {
 import { listRecentClosuresForAsset } from '../../read/projections/maintenance_work_order_closure.js';
 import { listSpareReservations } from '../../read/projections/maintenance_spare_reservation.js';
 import { listMeters } from '../../read/projections/asset_meter.js';
-import { HUB_MODULE, assertHubEventWriteAccess } from './hub-common.js';
+import { HUB_MODULE } from './hub-common.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const PLANNING_EVENT_TYPES = new Set([
@@ -384,7 +384,8 @@ function assertEdgeGateRoleAllowed(
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string | string[] {
   if (typeof body === 'object' && body !== null) {
-    // Story 10.4 (X1): hub.* events ride the research stream but belong to the engineering module.
+    // Story 10.4: hub.* events ride the research stream but belong to the engineering module; the
+    // handler then refuses them (DN2), so a research-only caller is not told "module research".
     const eventType = (body as Record<string, unknown>)['event_type'];
     if (typeof eventType === 'string' && eventType.startsWith('hub.')) return HUB_MODULE;
     const streamType = (body as Record<string, unknown>)['stream_type'];
@@ -695,8 +696,18 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   if (!authContext || !assignment)
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   assertPlanningPayloadWriteLocation(authContext, body);
-  // Story 10.4 (X1): a hub.* event on this door meets the hub routes' location rule.
-  await assertHubEventWriteAccess(authContext.roles, body);
+  // Story 10.4 (third review DN2): hub writes are online-only until an edge client queues them. The
+  // appliers enforce 5-minute and 12-hour windows that a late sync would fail for good, so the door
+  // refuses every hub.* event rather than let one settle as needs_attention. Code precedent: the
+  // generic events door's INVALID_EVENT_STREAM bar.
+  if (body.event_type.startsWith('hub.')) {
+    throw new AppError(
+      400,
+      'INVALID_EVENT_STREAM',
+      'Hub events are online-only until an edge client exists; use the hub routes or the events API',
+      { event_type: body.event_type },
+    );
+  }
 
   // Story 13.1 (Task 7.3): the 'migration' stream never travels the edge. Staging loads,
   // variance explanations and promotion are central migration-project acts produced only by the

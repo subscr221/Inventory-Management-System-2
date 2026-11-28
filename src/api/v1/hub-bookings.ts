@@ -31,6 +31,7 @@ const open: RouteHandler = async (req, res) => {
   // either way, or up to 12 hours back with a backdate_reason).
   const saved = await persistHubEvent(req, res, {
     streamId: bookingId,
+    actedLocation: machine?.location_id,
     eventType: 'hub.booking_opened',
     idField: 'booking_id',
     compare: [
@@ -71,6 +72,7 @@ const close: RouteHandler = async (req, res, params) => {
   if (machine) assertHubLocationAccess(req, machine.location_id, 'write');
   const saved = await persistHubEvent(req, res, {
     streamId: bookingId,
+    actedLocation: machine?.location_id,
     eventType: 'hub.booking_closed',
     idField: 'booking_id',
     streamFromUrl: true,

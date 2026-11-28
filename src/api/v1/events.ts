@@ -481,6 +481,19 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     return;
   }
 
+  // Story 10.4 (third review DN3): hub.booking_exception_raised is system-only; the 24h job calls
+  // persistEvent directly, so no one posts it through this door.
+  if (body.event_type === 'hub.booking_exception_raised') {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_EVENT_STREAM',
+      'hub.booking_exception_raised is raised by the server job and cannot be written via the events API',
+    );
+    return;
+  }
+
   assertBranchTransferGstIdempotencyKey(body);
 
   const authContext = getAuthContext(req);

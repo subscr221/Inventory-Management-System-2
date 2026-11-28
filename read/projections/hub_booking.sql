@@ -28,6 +28,8 @@ ALTER TABLE hub_booking ADD COLUMN IF NOT EXISTS backdate_reason TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_hub_booking_open_unraised ON hub_booking (opened_at) WHERE status = 'open' AND exception_raised_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hub_booking_customer ON hub_booking (customer_id);
+-- R1 (third review): the machine-busy check and the open list scan open bookings per machine.
+CREATE INDEX IF NOT EXISTS idx_hub_booking_machine_open ON hub_booking (machine_id) WHERE status = 'open';
 
 DO $$
 BEGIN

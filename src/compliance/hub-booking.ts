@@ -4,7 +4,7 @@ import { alreadyPersisted } from './indent.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import { getAssetById } from '../read/projections/asset.js';
 import { getMeterById } from '../read/projections/asset_meter.js';
-import { getHubBookingById, getHubMachineById } from '../read/projections/hub.js';
+import { HUB_EXCEPTION_DUE_SQL, getHubBookingById, getHubMachineById } from '../read/projections/hub.js';
 import { applyAssetMeterProjection } from './asset-meter.js';
 import {
   assertSingleHubCustomerRef,
@@ -60,7 +60,8 @@ function isTs(v: unknown): v is string {
   const m = typeof v === 'string' ? ISO_TS.exec(v) : null;
   if (!m) return false;
   const [y, mo, d, h, mi, s] = m.slice(1, 7).map(Number) as [number, number, number, number, number, number];
-  if (mo < 1 || mo > 12 || h > 23 || mi > 59 || s > 59) return false;
+  // R2: Postgres timestamptz rejects year 0000 and the like; keep to a sane calendar range.
+  if (y < 1970 || y > 2100 || mo < 1 || mo > 12 || h > 23 || mi > 59 || s > 59) return false;
   const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]!;
   if (d < 1 || d > days) return false;
@@ -298,8 +299,8 @@ async function applyException(envelope: EventEnvelope, client: PoolClient): Prom
   const booking = await getHubBookingById(p['booking_id'] as string, client, true);
   if (!booking) hubReject('HUB_BOOKING_NOT_FOUND', 'Hub booking not found', { booking_id: p['booking_id'] }, 404);
   const due = await client.query(
-    `SELECT (opened_at <= now() - make_interval(hours => $2::int)) AS due FROM hub_booking WHERE booking_id = $1`,
-    [booking.booking_id, HUB_BOOKING_EXCEPTION_HOURS],
+    `SELECT (${HUB_EXCEPTION_DUE_SQL}) AS due FROM hub_booking WHERE booking_id = $2`,
+    [HUB_BOOKING_EXCEPTION_HOURS, booking.booking_id],
   );
   // Re-checked under the lock so an overlapping run or a late close never raises a second/false one.
   if (booking.status !== 'open' || booking.exception_raised_at !== null || !due.rows[0]?.['due'])

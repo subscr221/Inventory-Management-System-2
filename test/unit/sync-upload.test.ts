@@ -97,12 +97,12 @@ describe('Story 1.8 sync upload classification', () => {
     }
   });
 
-  it('keeps the Story 10.4 hub NOT_FOUND codes retryable while its structural codes stay permanent', () => {
+  it('settles the Story 10.4 hub NOT_FOUND and structural codes as needs_attention (DN1)', () => {
     for (const code of ['HUB_CUSTOMER_NOT_FOUND', 'HUB_MACHINE_NOT_FOUND', 'HUB_BOOKING_NOT_FOUND']) {
-      assertClassification(classifyUploadFailure(new AppError(404, code, 'Parent not synced yet')), {
-        action: 'retry',
-        localStatus: 'pending_sync',
-        retryable: true,
+      assertClassification(classifyUploadFailure(new AppError(404, code, 'Parent not found')), {
+        action: 'complete',
+        localStatus: 'needs_attention',
+        retryable: false,
         serverErrorCode: code,
       });
     }

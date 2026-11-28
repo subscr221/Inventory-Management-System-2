@@ -67,10 +67,11 @@ const PERMANENT_ERROR_CODES = new Set([
 'RD_DISPOSITION_LINE_REQUIRED',
 'RD_RETURN_EXCEEDS_OPEN',
 'RD_BUILD_NOT_COMPLETED',
-// Story 10.4 hub rejections are structural bars, except the *_NOT_FOUND codes (HUB_CUSTOMER/MACHINE/BOOKING).
-// Those are kept OUT of this set and listed in RETRYABLE_ERROR_CODES instead: a code that is merely
-// absent here would fall to the generic 4xx branch (needs_attention), but the parent record may
-// still be syncing ahead of this one, so they must retry.
+// Story 10.4 hub rejections. The *_NOT_FOUND codes are permanent like ASSET_NOT_FOUND and
+// METER_NOT_FOUND: one unresolvable parent must not stall the outbox (third review DN1).
+'HUB_CUSTOMER_NOT_FOUND',
+'HUB_MACHINE_NOT_FOUND',
+'HUB_BOOKING_NOT_FOUND',
 'MEMBER_REFERENCE_REQUIRED',
 'HUB_BOOKING_ALREADY_CLOSED',
 'HUB_MACHINE_BUSY',
@@ -370,13 +371,6 @@ function withErrorCode(
   return errorCode ? { ...classification, serverErrorCode: errorCode } : classification;
 }
 
-// Story 10.4: 404s that clear once the parent hub record has synced. Twin of src/sync/upload.ts.
-const RETRYABLE_ERROR_CODES = new Set([
-  'HUB_CUSTOMER_NOT_FOUND',
-  'HUB_MACHINE_NOT_FOUND',
-  'HUB_BOOKING_NOT_FOUND',
-]);
-
 export function classifyServerUploadFailure(
   status: number,
   body: ErrorEnvelope,
@@ -417,14 +411,6 @@ export function classifyServerUploadFailure(
   }
 
   if (TRANSIENT_STATUS_CODES.has(status)) {
-    return withErrorCode(
-      { action: 'retry', localStatus: 'pending_sync', retryable: true },
-      errorCode,
-    );
-  }
-
-  // Checked before the generic 4xx branch below, which would settle these as needs_attention.
-  if (errorCode && RETRYABLE_ERROR_CODES.has(errorCode)) {
     return withErrorCode(
       { action: 'retry', localStatus: 'pending_sync', retryable: true },
       errorCode,

@@ -4,10 +4,11 @@ import { AppError, sendRequestError } from '../../middleware/error.js';
 import {
   getAuthContext,
   getAuthorizedAssignment,
+  getAuthorizedLocation,
   getParsedBody,
   getTraceId,
 } from '../../middleware/context.js';
-import { assignmentCoversLocation, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import { assignmentCoversLocation, auditLocationFor, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { PersistedEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -80,7 +81,13 @@ export async function assertHubEventWriteAccess(
   roles: Roles,
   body: { event_type: string; payload: Record<string, unknown> },
 ): Promise<void> {
+  // R3: defence in depth; validateEnvelope normally runs first, but a malformed body must be a 400,
+  // never a TypeError.
+  if (typeof body?.event_type !== 'string')
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'event_type is required and must be a non-empty string');
   if (!body.event_type.startsWith('hub.')) return;
+  if (typeof body.payload !== 'object' || body.payload === null || Array.isArray(body.payload))
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'payload is required and must be a JSON object');
   const p = body.payload;
   if (body.event_type === 'hub.customer_registered') assertHubCustomerLocationGiven(roles, p['location_id']);
   if (permittedLocationsForModuleScope(roles, HUB_MODULE, 'write').wildcard) return;
@@ -141,6 +148,8 @@ export interface HubWrite {
   streamFromUrl?: boolean;
   /** Payload fields the client supplied; a replay whose stored value differs is a 409 (P-C). */
   compare?: string[];
+  /** R4: the location acted on (the machine's or the customer's), for the audit stamp; default is the one requireRole resolved. */
+  actedLocation?: string | undefined;
   status?: number;
 }
 
@@ -161,7 +170,8 @@ export async function persistHubEvent(
   const actor = {
     user_id: getAuthContext(req)?.userId ?? NONE,
     role: a?.role ?? '',
-    location_id: a?.locationId ?? '*',
+    // R4: same helper as the generic events door: an ancestor grant stamps the location acted on.
+    location_id: a ? auditLocationFor(a, w.actedLocation ?? getAuthorizedLocation(req)) : '*',
   };
   const auditCtx: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> = {
     trace_id: getTraceId(req) ?? '',

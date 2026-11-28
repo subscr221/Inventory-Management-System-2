@@ -76,12 +76,12 @@ describe('edge upload failure classification', () => {
     );
   });
 
-  it('keeps the Story 10.4 hub NOT_FOUND codes retryable while its structural codes stay permanent', () => {
+  it('settles the Story 10.4 hub NOT_FOUND and structural codes as needs_attention (DN1)', () => {
     for (const code of ['HUB_CUSTOMER_NOT_FOUND', 'HUB_MACHINE_NOT_FOUND', 'HUB_BOOKING_NOT_FOUND']) {
       assert.deepEqual(classifyServerUploadFailure(404, { error_code: code }), {
-        action: 'retry',
-        localStatus: 'pending_sync',
-        retryable: true,
+        action: 'complete',
+        localStatus: 'needs_attention',
+        retryable: false,
         serverErrorCode: code,
       });
     }

@@ -10,8 +10,8 @@ export interface HubCustomerRow {
   status: 'active' | 'inactive';
   location_id: string | null;
   source_event_id: string;
-  created_at: string;
-  updated_at: string;
+  created_at: Date;
+  updated_at: Date;
 }
 export interface HubMachineRow {
   machine_id: string;
@@ -21,27 +21,34 @@ export interface HubMachineRow {
   meter_id: string | null;
   operator_role: string;
   source_event_id: string;
-  created_at: string;
-  updated_at: string;
+  created_at: Date;
+  updated_at: Date;
 }
 export interface HubBookingRow {
   booking_id: string;
   customer_id: string;
   machine_id: string;
-  scheduled_start: string | null;
-  scheduled_end: string | null;
+  scheduled_start: Date | null;
+  scheduled_end: Date | null;
   status: 'open' | 'closed';
-  opened_at: string;
-  closed_at: string | null;
+  opened_at: Date;
+  closed_at: Date | null;
   actual_minutes: number | null;
   meter_reading_value: string | null;
   reading_id: string | null;
-  exception_raised_at: string | null;
+  exception_raised_at: Date | null;
   backdate_reason: string | null;
   source_event_id: string;
-  created_at: string;
-  updated_at: string;
+  created_at: Date;
+  updated_at: Date;
 }
+
+/**
+ * DN4: the 24h exception clock runs from the later of opened_at and scheduled_start (GREATEST skips a
+ * NULL scheduled_start), so a booking made for next week is not overdue a day after creation.
+ * $1 = threshold hours. Shared by the selector and the applier's re-check under the lock.
+ */
+export const HUB_EXCEPTION_DUE_SQL = 'GREATEST(opened_at, scheduled_start) <= now() - make_interval(hours => $1::int)';
 
 type Queryable = Pick<PoolClient, 'query'>;
 function runner(client?: PoolClient): Queryable {
@@ -130,7 +137,7 @@ export async function listBookingsDueForException(
   const r = await runner(client).query(
     `SELECT * FROM hub_booking
       WHERE status = 'open' AND exception_raised_at IS NULL
-        AND opened_at <= now() - make_interval(hours => $1::int)
+        AND ${HUB_EXCEPTION_DUE_SQL}
       ORDER BY opened_at, booking_id`,
     [thresholdHours],
   );
